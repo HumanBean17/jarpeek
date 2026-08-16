@@ -47,7 +47,9 @@ interface CraftedZip {
  * Assemble a minimal single-entry stored zip by hand. `zip64` hides the
  * real sizes and local-header offset behind sentinel values plus a zip64
  * EOCD/locator pair; `omitLocator` keeps the sentinels but drops the
- * locator, and `comment` exercises the EOCD backwards scan.
+ * locator, and `comment` exercises the EOCD backwards scan. Corruption
+ * knobs: `zip64ExtraBytes` truncates the extra field mid-payload and
+ * `declaredCompressedSize` makes it advertise a size the file cannot back.
  */
 function craftStoredZip(opts: {
   name: string;
@@ -55,6 +57,8 @@ function craftStoredZip(opts: {
   zip64?: boolean;
   omitLocator?: boolean;
   comment?: string;
+  zip64ExtraBytes?: number;
+  declaredCompressedSize?: number;
 }): CraftedZip {
   const name = Buffer.from(opts.name, "utf8");
   const size = opts.payload.length;
@@ -77,8 +81,15 @@ function craftStoredZip(opts: {
 
   // the single entry's local header is the very first structure in the archive
   const localHeaderOffset = 0;
+  const fullZip64Extra = Buffer.concat([
+    u16(0x0001),
+    u16(24),
+    u64(size),
+    u64(opts.declaredCompressedSize ?? size),
+    u64(localHeaderOffset),
+  ]);
   const zip64Extra = opts.zip64
-    ? Buffer.concat([u16(0x0001), u16(24), u64(size), u64(size), u64(localHeaderOffset)])
+    ? fullZip64Extra.subarray(0, opts.zip64ExtraBytes ?? fullZip64Extra.length)
     : Buffer.alloc(0);
   const cdh = Buffer.concat([
     u32(CDH_SIG),
@@ -248,6 +259,24 @@ describe("listZipEntries", () => {
       rmSync(dirname(path), { recursive: true, force: true });
     }
   });
+
+  it("throws ZipError for a zip64 extra field truncated mid-payload (not a raw RangeError)", async () => {
+    // extra field carries the 0x0001 header plus only 4 of the 24 payload
+    // bytes, so the first sentinel read runs past the central directory
+    const { bytes } = craftStoredZip({
+      name: "broken/extra.bin",
+      payload: Buffer.from([0x00, 0x01]),
+      zip64: true,
+      zip64ExtraBytes: 8,
+    });
+    const path = await writeTmpFile(bytes);
+    try {
+      await expect(listZipEntries(path)).rejects.toBeInstanceOf(ZipError);
+      await expect(listZipEntries(path)).rejects.toMatchObject({ name: "ZipError" });
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+  });
 });
 
 describe("readZipEntry", () => {
@@ -257,6 +286,26 @@ describe("readZipEntry", () => {
     const bytes = await readZipEntry(DEMO_JAR, entry);
     expect(bytes).toHaveLength(8);
     expect(bytes.includes(0)).toBe(true);
+  });
+
+  it("throws ZipError when the entry declares a compressed size past EOF (no huge allocation)", async () => {
+    // 32 GiB declared in the zip64 extra field for a 3-byte payload: the
+    // listing tolerates the lie, the read must refuse it before allocating
+    const { bytes } = craftStoredZip({
+      name: "liar/big.bin",
+      payload: Buffer.from([0x00, 0x01, 0x02]),
+      zip64: true,
+      declaredCompressedSize: 0x800000000,
+    });
+    const path = await writeTmpFile(bytes);
+    try {
+      const entries = await listZipEntries(path);
+      expect(entries[0].compressedSize).toBe(0x800000000);
+      await expect(readZipEntry(path, entries[0])).rejects.toBeInstanceOf(ZipError);
+      await expect(readZipEntry(path, entries[0])).rejects.toMatchObject({ name: "ZipError" });
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
   });
 });
 

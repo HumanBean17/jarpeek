@@ -76,7 +76,15 @@ async function readFull(fh: FileHandle, length: number, position: number): Promi
   return buffer;
 }
 
-function readSafeUint64(buffer: Buffer, offset: number, what: string): number {
+/**
+ * Read a little-endian u64 clamped to `end` (usually the enclosing record's
+ * last byte). Corrupt records — reads that would cross `end` — are ZipErrors,
+ * never a raw RangeError from Buffer, and values beyond 2^53 are refused.
+ */
+function readUint64(buffer: Buffer, offset: number, end: number, what: string): number {
+  if (offset + 8 > end) {
+    throw new ZipError(`${what} at byte ${offset} would read past byte ${end} (truncated record)`);
+  }
   const value = Number(buffer.readBigUInt64LE(offset));
   if (!Number.isSafeInteger(value)) {
     throw new ZipError(`${what} exceeds the supported 2^53-byte range`);
@@ -117,15 +125,15 @@ async function resolveZip64(
   if (locator.readUInt32LE(0) !== ZIP64_LOCATOR_SIG) {
     throw new Zip64UnsupportedError("zip64 sentinels present but zip64 locator signature is missing");
   }
-  const zip64EocdOffset = readSafeUint64(locator, 8, "zip64 EOCD offset");
+  const zip64EocdOffset = readUint64(locator, 8, locator.length, "zip64 EOCD offset");
   const record = await readFull(fh, ZIP64_EOCD_SIZE, zip64EocdOffset);
   if (record.readUInt32LE(0) !== ZIP64_EOCD_SIG) {
     throw new Zip64UnsupportedError(`zip64 EOCD signature mismatch at offset ${zip64EocdOffset}`);
   }
   return {
-    totalEntries: readSafeUint64(record, 32, "zip64 entry count"),
-    cdSize: readSafeUint64(record, 40, "zip64 central-directory size"),
-    cdOffset: readSafeUint64(record, 48, "zip64 central-directory offset"),
+    totalEntries: readUint64(record, 32, record.length, "zip64 entry count"),
+    cdSize: readUint64(record, 40, record.length, "zip64 central-directory size"),
+    cdOffset: readUint64(record, 48, record.length, "zip64 central-directory offset"),
   };
 }
 
@@ -169,17 +177,19 @@ function parseCentralDirectory(cd: Buffer, expectedEntries: number): ZipEntry[] 
         const fieldId = cd.readUInt16LE(p);
         const fieldSize = cd.readUInt16LE(p + 2);
         if (fieldId === ZIP64_EXTRA_ID) {
+          // each u64 is bounds-checked against extraEnd: a field truncated
+          // mid-payload must degrade to ZipError, not a Buffer RangeError
           let q = p + 4;
           if (uncompressedSize === SENTINEL32) {
-            uncompressedSize = readSafeUint64(cd, q, "zip64 uncompressed size");
+            uncompressedSize = readUint64(cd, q, extraEnd, "zip64 uncompressed size");
             q += 8;
           }
           if (compressedSize === SENTINEL32) {
-            compressedSize = readSafeUint64(cd, q, "zip64 compressed size");
+            compressedSize = readUint64(cd, q, extraEnd, "zip64 compressed size");
             q += 8;
           }
           if (localHeaderOffset === SENTINEL32) {
-            localHeaderOffset = readSafeUint64(cd, q, "zip64 local-header offset");
+            localHeaderOffset = readUint64(cd, q, extraEnd, "zip64 local-header offset");
           }
           break;
         }
@@ -231,6 +241,7 @@ export async function listZipEntries(zipPath: string): Promise<ZipEntry[]> {
 export async function readZipEntry(zipPath: string, entry: ZipEntry): Promise<Buffer> {
   const fh = await open(zipPath, "r");
   try {
+    const { size } = await fh.stat();
     const header = await readFull(fh, LOCAL_HEADER_SIZE, entry.localHeaderOffset);
     if (header.readUInt32LE(0) !== LOCAL_SIG) {
       throw new ZipError(`bad local-header signature for entry ${entry.name}`);
@@ -240,6 +251,14 @@ export async function readZipEntry(zipPath: string, entry: ZipEntry): Promise<Bu
     const nameLength = header.readUInt16LE(26);
     const extraLength = header.readUInt16LE(28);
     const dataOffset = entry.localHeaderOffset + LOCAL_HEADER_SIZE + nameLength + extraLength;
+    // a lying central directory must not drive the allocation: reject any
+    // entry whose data range does not fit the real file before allocating
+    if (dataOffset > size || entry.compressedSize > size - dataOffset) {
+      throw new ZipError(
+        `entry ${entry.name} declares ${entry.compressedSize} bytes at offset ${dataOffset}, ` +
+          `past the end of the ${size}-byte file`,
+      );
+    }
     const raw = await readFull(fh, entry.compressedSize, dataOffset);
     if (entry.method === 0) return raw;
     if (entry.method === 8) {
