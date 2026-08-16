@@ -7,3 +7,7 @@
 
 # jarpeek project-local dir (manifest, caches)
 .jarpeek/
+
+# jarpeek build artifacts
+jarpeek/node_modules/
+jarpeek/dist/
