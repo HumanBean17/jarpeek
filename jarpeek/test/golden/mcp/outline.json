@@ -1,0 +1,110 @@
+{
+  "fqn": "com.example.Demo",
+  "coordinates": "com.example:demo-lib:1.0.0",
+  "provenance": "source",
+  "rows": [
+    {
+      "fqn": "com.example.Demo",
+      "file": "com/example/Demo.java",
+      "selector": "Demo",
+      "kind": "class",
+      "visibility": "public",
+      "static": false,
+      "deprecated": false,
+      "signature": "public class Demo",
+      "lineStart": 7,
+      "lineEnd": 51,
+      "javadocStart": 3
+    },
+    {
+      "fqn": "com.example.Demo",
+      "file": "com/example/Demo.java",
+      "selector": "NAME",
+      "kind": "field",
+      "visibility": "private",
+      "static": true,
+      "deprecated": false,
+      "signature": "private static final String NAME",
+      "lineStart": 9,
+      "lineEnd": 9,
+      "modifiers": [
+        "private",
+        "static",
+        "final"
+      ]
+    },
+    {
+      "fqn": "com.example.Demo",
+      "file": "com/example/Demo.java",
+      "selector": "run",
+      "kind": "method",
+      "visibility": "public",
+      "static": false,
+      "deprecated": false,
+      "signature": "public Object run(String,int)",
+      "lineStart": 19,
+      "lineEnd": 21,
+      "javadocStart": 11,
+      "modifiers": [
+        "public"
+      ]
+    },
+    {
+      "fqn": "com.example.Demo",
+      "file": "com/example/Demo.java",
+      "selector": "run",
+      "kind": "method",
+      "visibility": "package",
+      "static": false,
+      "deprecated": false,
+      "signature": "void run()",
+      "lineStart": 24,
+      "lineEnd": 31,
+      "javadocStart": 23
+    },
+    {
+      "fqn": "com.example.Demo",
+      "file": "com/example/Demo.java",
+      "selector": "old",
+      "kind": "method",
+      "visibility": "package",
+      "static": false,
+      "deprecated": true,
+      "signature": "void old()",
+      "lineStart": 38,
+      "lineEnd": 41,
+      "javadocStart": 33
+    },
+    {
+      "fqn": "com.example.Demo",
+      "file": "com/example/Demo.java",
+      "selector": "Worker",
+      "kind": "class",
+      "visibility": "public",
+      "static": true,
+      "deprecated": false,
+      "signature": "public static class Worker",
+      "lineStart": 44,
+      "lineEnd": 51,
+      "javadocStart": 43,
+      "modifiers": [
+        "public",
+        "static"
+      ]
+    },
+    {
+      "fqn": "com.example.Demo.Worker",
+      "file": "com/example/Demo.java",
+      "selector": "Worker",
+      "kind": "class",
+      "visibility": "public",
+      "static": true,
+      "deprecated": false,
+      "signature": "public static class Worker",
+      "lineStart": 44,
+      "lineEnd": 50,
+      "javadocStart": 43
+    }
+  ],
+  "degraded": []
+}

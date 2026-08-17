@@ -28,6 +28,7 @@ import { status, type StatusResult } from "../core/query/status.js";
 import { where, type WhereResult } from "../core/query/where.js";
 import { SelectorError } from "../core/selector.js";
 import type { Declaration, DeclKind, Visibility } from "../core/types.js";
+import { registerMcpCommand } from "./mcp-command.js";
 
 /** Fatal exit code: bad args, malformed selectors, IO failures. */
 const EXIT_FATAL = 1;
@@ -416,8 +417,10 @@ command("where", "on-disk sources for one artifact")
     });
   });
 
-// wired by Tasks 20 (mcp), 21 (prime), and 22 (init)
-for (const name of ["init", "prime", "mcp"] as const) {
+registerMcpCommand(program);
+
+// wired by Tasks 21 (prime) and 22 (init)
+for (const name of ["init", "prime"] as const) {
   command(name, "not implemented yet")
     .argument("[args...]")
     .allowExcessArguments()

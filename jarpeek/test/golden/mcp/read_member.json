@@ -1,0 +1,37 @@
+{
+  "fqn": "com.example.Demo",
+  "coordinates": "com.example:demo-lib:1.0.0",
+  "provenance": "source",
+  "members": [
+    {
+      "selector": "run(String,int)",
+      "signature": "public Object run(String,int)",
+      "lines": [
+        "    /**",
+        "     * Runs the demo transformation over the given input.",
+        "     *",
+        "     * @param input the raw input text",
+        "     * @param count how many passes to apply",
+        "     * @return the transformed result",
+        "     * @throws Exception if the transformation fails",
+        "     */",
+        "    public Object run(String input, int count) throws Exception {",
+        "        return NAME + \":\" + input + \":\" + count;",
+        "    }"
+      ],
+      "startLine": 11,
+      "endLine": 21,
+      "javadoc": [
+        "    /**",
+        "     * Runs the demo transformation over the given input.",
+        "     *",
+        "     * @param input the raw input text",
+        "     * @param count how many passes to apply",
+        "     * @return the transformed result",
+        "     * @throws Exception if the transformation fails",
+        "     */"
+      ]
+    }
+  ],
+  "misses": []
+}

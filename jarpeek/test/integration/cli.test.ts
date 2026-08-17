@@ -432,8 +432,8 @@ describe("where", () => {
 });
 
 describe("stubs kept for later tasks", () => {
-  it("init, prime, mcp still exit 1 with not implemented", () => {
-    for (const cmd of ["init", "prime", "mcp"]) {
+  it("init and prime still exit 1 with not implemented", () => {
+    for (const cmd of ["init", "prime"]) {
       const run = cli(c, [cmd]);
       expect(run.code, cmd).toBe(1);
       expect(run.stderr, cmd).toContain("not implemented");

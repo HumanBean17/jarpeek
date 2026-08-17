@@ -1,0 +1,16 @@
+{
+  "mode": "lines",
+  "fqn": "com.example.Demo",
+  "coordinates": "com.example:demo-lib:1.0.0",
+  "file": "com/example/Demo.java",
+  "provenance": "source",
+  "degraded": [],
+  "lines": [
+    "",
+    "/**"
+  ],
+  "startLine": 2,
+  "endLine": 3,
+  "lineCount": 51,
+  "clamped": false
+}
