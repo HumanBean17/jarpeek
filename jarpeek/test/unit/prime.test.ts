@@ -151,6 +151,39 @@ describe("prime() selection", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it("reads primeMode from .jarpeek/config.json and outranks the env var", () => {
+    const root = tmpProject();
+    mkdirSync(join(root, ".jarpeek"), { recursive: true });
+    writeFileSync(join(root, ".jarpeek", "config.json"), JSON.stringify({ primeMode: "mcp" }));
+    try {
+      vi.stubEnv("JARPEEK_PRIME_MODE", undefined); // config alone
+      expect(prime(root).text).toBe(defaultPrimeContent("mcp"));
+      vi.stubEnv("JARPEEK_PRIME_MODE", "mcp");
+      expect(prime(root).text).toBe(defaultPrimeContent("mcp"));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("flags outrank config.json; a corrupt config falls through to env", () => {
+    const root = tmpProject();
+    mkdirSync(join(root, ".jarpeek"), { recursive: true });
+    writeFileSync(join(root, ".jarpeek", "config.json"), JSON.stringify({ primeMode: "mcp" }));
+    expect(prime(root, { full: true }).text).toBe(defaultPrimeContent("cli"));
+
+    const corrupt = tmpProject();
+    mkdirSync(join(corrupt, ".jarpeek"), { recursive: true });
+    writeFileSync(join(corrupt, ".jarpeek", "config.json"), "{not json");
+    try {
+      vi.stubEnv("JARPEEK_PRIME_MODE", "mcp");
+      expect(prime(corrupt).text).toBe(defaultPrimeContent("mcp"));
+      vi.stubEnv("JARPEEK_PRIME_MODE", undefined);
+      expect(prime(corrupt).text).toBe(defaultPrimeContent("cli"));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 describe("hook-json envelope", () => {

@@ -28,6 +28,7 @@ import { status, type StatusResult } from "../core/query/status.js";
 import { where, type WhereResult } from "../core/query/where.js";
 import { SelectorError } from "../core/selector.js";
 import type { Declaration, DeclKind, Visibility } from "../core/types.js";
+import { runInit, type InitResult } from "../harness/init.js";
 import { registerMcpCommand } from "./mcp-command.js";
 import { prime, type PrimeOptions } from "../prime/command.js";
 
@@ -252,8 +253,16 @@ function parseLinesFlag(value: string): { from: number; to: number } {
   return { from: Number(match[1]), to: Number(match[2]) };
 }
 
-function notImplemented(): never {
-  throw new InvalidArgumentError("not implemented");
+function renderInit(result: InitResult): string {
+  return [
+    `build systems: ${result.detected.buildSystems.join(", ") || "(none)"}`,
+    `jdk: ${result.detected.jdk ?? "(not detected)"}`,
+    ...result.wired.map(
+      (entry) => `wired ${entry.harness} (${entry.mode}): ${entry.targets.join(", ")}`,
+    ),
+    `indexed: ${result.indexed ? "yes" : "no"}`,
+    ...result.notes.map((note) => `note: ${note}`),
+  ].join("\n");
 }
 
 // -- command surface -------------------------------------------------------------
@@ -444,11 +453,16 @@ command("prime", "the jarpeek cheatsheet for agents (this file)")
     );
   });
 
-// wired by Task 22 (init)
-command("init", "not implemented yet")
-  .argument("[args...]")
-  .allowExcessArguments()
-  .action(notImplemented);
+command("init", "wire AI harnesses (MCP server or CLI hints) for this project")
+  .option("--yes", "non-interactive: claude + mcp defaults, skip the first index")
+  .action(async (cmd: { yes?: boolean }) => {
+    const inv = invocation();
+    const result = await runInit(inv.project, {
+      yes: cmd.yes === true,
+      onProgress: (msg) => process.stderr.write(`[jarpeek] ${msg}\n`),
+    });
+    emit(result, inv, () => renderInit(result));
+  });
 
 program.action(() => {
   program.help();

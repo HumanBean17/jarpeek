@@ -11,7 +11,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -431,11 +431,33 @@ describe("where", () => {
   });
 });
 
-describe("stubs kept for later tasks", () => {
-  it("init still exits 1 with not implemented (until Task 22)", () => {
-    const run = cli(c, ["init"]);
-    expect(run.code).toBe(1);
-    expect(run.stderr).toContain("not implemented");
+describe("init", () => {
+  it("--yes wires the claude mcp defaults non-interactively and exits 0", () => {
+    const root = mkdtempSync(join(tmpdir(), "jarpeek-cli-init-"));
+    try {
+      const run = spawnSync(
+        "npx",
+        ["tsx", "src/cli/index.ts", "--project", root, "init", "--yes"],
+        {
+          cwd: PKG_ROOT,
+          encoding: "utf8",
+          timeout: 60_000,
+          // empty JAVA_HOME keeps the JDK probe a clean no-op in any environment
+          env: { ...process.env, JAVA_HOME: "" },
+        },
+      );
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain("non-interactive: defaults applied");
+      expect(run.stdout).toContain("wired claude (mcp)");
+      expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8")).mcpServers.jarpeek).toEqual({
+        command: "jarpeek",
+        args: ["mcp"],
+      });
+      expect(readFileSync(join(root, ".gitignore"), "utf8")).toContain(".jarpeek/");
+      expect(existsSync(join(root, ".jarpeek", "manifest.json"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

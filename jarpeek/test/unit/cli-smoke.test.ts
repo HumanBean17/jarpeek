@@ -44,9 +44,10 @@ describe("CLI smoke", () => {
     expect(stdout).toContain("mcp");
   });
 
-  it("stubbed subcommands (init until Task 22) exit 1 with not implemented on stderr", async () => {
-    const { stderr, code } = await runCli(["init"]);
-    expect(code).toBe(1);
-    expect(stderr).toContain("not implemented");
+  it("init --help exits 0 with its description and --yes (no side effects)", async () => {
+    const { stdout, code } = await runCli(["init", "--help"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("wire AI harnesses");
+    expect(stdout).toContain("--yes");
   });
 });

@@ -1,0 +1,211 @@
+/**
+ * init flow integration tests: runInit with injected prompts and resolvers
+ * over tmp projects (a build.gradle marker makes the real cascade inside
+ * resolveDependencies take the injected gradle resolver; the index runs
+ * against the fixture jars with the cache pinned to tmp). Every scenario
+ * ends in the idempotency check the init contract promises: same answers,
+ * zero byte changes.
+ */
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { runInit, type InitResolvers, type PromptIo } from "../../src/harness/init.js";
+import { defaultPrimeContent } from "../../src/prime/content.js";
+import { prime } from "../../src/prime/command.js";
+import type { DependencyArtifact } from "../../src/core/types.js";
+
+const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const JARS = join(PKG_ROOT, "test", "fixtures", "jars");
+
+const roots: string[] = [];
+let cacheDir: string;
+let previousCacheEnv: string | undefined;
+
+/** A tmp project root carrying a gradle marker so detection and the cascade agree. */
+function tmpProject(): string {
+  const dir = mkdtempSync(join(tmpdir(), "jarpeek-init-"));
+  roots.push(dir);
+  writeFileSync(join(dir, "build.gradle"), "plugins { id 'java' }\n");
+  return dir;
+}
+
+function fixtureArtifacts(): DependencyArtifact[] {
+  return [
+    {
+      coordinates: "com.example:demo-lib:1.0.0",
+      kind: "external",
+      binaryJar: join(JARS, "demo-lib-1.0.0.jar"),
+      sourcesJar: join(JARS, "demo-lib-1.0.0-sources.jar"),
+      provenance: "source",
+      warnings: [],
+    },
+    {
+      coordinates: "com.example:nosources-lib:1.0.0",
+      kind: "external",
+      binaryJar: join(JARS, "nosources-lib-1.0.0.jar"),
+      provenance: "signature",
+      warnings: [],
+    },
+  ];
+}
+
+/** Resolvers that answer instantly: gradle serves the fixtures, no JDK side effects. */
+function fakeResolvers(): InitResolvers {
+  return {
+    gradle: async () => ({ ok: true, artifacts: fixtureArtifacts() }),
+    includeJdk: false,
+    jdk: async () => ({ artifact: null, warnings: [] }),
+  };
+}
+
+/** PromptIo replaying fixed answers. */
+function fakePrompts(answers: { harnesses?: string[]; mode?: "mcp" | "cli"; index?: boolean }): PromptIo {
+  return {
+    multiselect: async () => answers.harnesses ?? ["claude"],
+    select: async () => answers.mode ?? "mcp",
+    confirm: async () => answers.index ?? false,
+  };
+}
+
+/** SHA-256 of every existing path in the list, for before/after comparison. */
+function hashAll(root: string, rels: string[]): string {
+  const parts: string[] = [];
+  for (const rel of rels) {
+    const path = join(root, rel);
+    parts.push(existsSync(path) ? createHash("sha256").update(readFileSync(path)).digest("hex") : "-");
+  }
+  return parts.join("|");
+}
+
+beforeAll(() => {
+  cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-init-cache-"));
+  roots.push(cacheDir);
+  previousCacheEnv = process.env.JARPEEK_CACHE_DIR;
+  process.env.JARPEEK_CACHE_DIR = cacheDir;
+});
+
+afterAll(() => {
+  if (previousCacheEnv === undefined) delete process.env.JARPEEK_CACHE_DIR;
+  else process.env.JARPEEK_CACHE_DIR = previousCacheEnv;
+  for (const dir of roots) rmSync(dir, { recursive: true, force: true });
+});
+
+describe("interactive mcp wiring", () => {
+  it("wires claude and gemini, writes primeMode, indexes on confirm", async () => {
+    const root = tmpProject();
+    const result = await runInit(root, {
+      prompts: fakePrompts({ harnesses: ["claude", "gemini"], mode: "mcp", index: true }),
+      resolvers: fakeResolvers(),
+    });
+
+    expect(result.detected.buildSystems).toEqual(["gradle"]);
+    expect(result.detected.jdk).toBeNull();
+    expect(result.wired.map((w) => w.harness)).toEqual(["claude", "gemini"]);
+    expect(result.wired.every((w) => w.mode === "mcp")).toBe(true);
+
+    const mcp = JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"));
+    expect(mcp.mcpServers.jarpeek).toEqual({ command: "jarpeek", args: ["mcp"] });
+    const gemini = JSON.parse(readFileSync(join(root, ".gemini", "settings.json"), "utf8"));
+    expect(gemini.mcpServers.jarpeek).toEqual({ command: "jarpeek", args: ["mcp"] });
+
+    expect(JSON.parse(readFileSync(join(root, ".jarpeek", "config.json"), "utf8"))).toEqual({
+      primeMode: "mcp",
+    });
+    expect(readFileSync(join(root, ".gitignore"), "utf8")).toContain(".jarpeek/");
+    expect(existsSync(join(root, ".jarpeek", "manifest.json"))).toBe(true);
+    expect(existsSync(join(root, ".jarpeek", "gradle-init.gradle"))).toBe(true);
+    expect(result.indexed).toBe(true);
+  });
+
+  it("prime() serves the short mcp card after init (config.json source)", async () => {
+    const root = tmpProject();
+    await runInit(root, {
+      prompts: fakePrompts({ harnesses: ["claude"], mode: "mcp", index: false }),
+      resolvers: fakeResolvers(),
+    });
+    try {
+      vi.stubEnv("JARPEEK_PRIME_MODE", undefined); // config.json must carry the mode alone
+      expect(prime(root)).toEqual({ text: defaultPrimeContent("mcp"), source: "default" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("cli wiring", () => {
+  it("wires the instructions pointer and hook, no mcp entry", async () => {
+    const root = tmpProject();
+    const result = await runInit(root, {
+      prompts: fakePrompts({ harnesses: ["claude"], mode: "cli", index: false }),
+      resolvers: fakeResolvers(),
+    });
+
+    expect(result.indexed).toBe(false);
+    expect(existsSync(join(root, ".mcp.json"))).toBe(false);
+    expect(existsSync(join(root, ".jarpeek", "config.json"))).toBe(false);
+    expect(readFileSync(join(root, "CLAUDE.md"), "utf8")).toContain("<!-- jarpeek -->");
+    const settings = JSON.parse(readFileSync(join(root, ".claude", "settings.json"), "utf8"));
+    expect(settings.hooks.SessionStart[0].hooks[0].command).toBe("jarpeek prime --hook-json");
+  });
+});
+
+describe("idempotency", () => {
+  it("a second run with the same answers changes no target bytes", async () => {
+    const root = tmpProject();
+    const opts = {
+      prompts: fakePrompts({ harnesses: ["claude", "gemini"], mode: "mcp", index: true }),
+      resolvers: fakeResolvers(),
+    };
+    const first = await runInit(root, opts);
+
+    const targets = [
+      ".mcp.json",
+      join(".gemini", "settings.json"),
+      join(".jarpeek", "config.json"),
+      ".gitignore",
+      join(".jarpeek", "gradle-init.gradle"),
+    ];
+    const before = hashAll(root, targets);
+    const second = await runInit(root, opts);
+
+    expect(hashAll(root, targets)).toBe(before);
+    expect(second.wired.map((w) => w.harness)).toEqual(["claude", "gemini"]);
+    expect(second.indexed).toBe(true); // re-index allowed; files still identical
+
+    const settings = JSON.parse(readFileSync(join(root, ".gemini", "settings.json"), "utf8"));
+    expect(Object.keys(settings.mcpServers)).toEqual(["jarpeek"]);
+    expect(readFileSync(join(root, ".gitignore"), "utf8").match(/\.jarpeek\//g)).toHaveLength(1);
+    expect(first.wired).toHaveLength(2);
+  });
+});
+
+describe("non-interactive", () => {
+  it("applies defaults (claude + mcp), skips the index, and says so", async () => {
+    const root = tmpProject();
+    const result = await runInit(root, { resolvers: fakeResolvers() });
+
+    expect(result.notes).toContain("non-interactive: defaults applied");
+    expect(result.wired).toEqual([
+      { harness: "claude", mode: "mcp", targets: [join(root, ".mcp.json")] },
+    ]);
+    expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8")).mcpServers.jarpeek.command).toBe(
+      "jarpeek",
+    );
+    expect(existsSync(join(root, ".jarpeek", "manifest.json"))).toBe(false);
+    expect(result.indexed).toBe(false);
+  });
+
+  it("skipIndex forces the skip even when prompts would confirm", async () => {
+    const root = tmpProject();
+    const result = await runInit(root, {
+      prompts: fakePrompts({ harnesses: ["claude"], mode: "mcp", index: true }),
+      resolvers: fakeResolvers(),
+      skipIndex: true,
+    });
+    expect(result.indexed).toBe(false);
+    expect(existsSync(join(root, ".jarpeek", "manifest.json"))).toBe(false);
+  });
+});
