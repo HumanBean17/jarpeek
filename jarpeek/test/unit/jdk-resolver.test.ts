@@ -92,10 +92,30 @@ describe("resolveJdk", () => {
     expect(second.artifact?.provenance).toBe("signature");
   });
 
-  it("returns null with a warning when jimage fails", async () => {
+  it("returns null with a warning when jimage exits non-zero", async () => {
     const { javaHome, cacheDir } = scratch();
     writeRelease(javaHome, "21.0.1");
     const runJimage = async () => ({ stdout: "", stderr: "boom", code: 1 });
+
+    const { artifact, warnings } = await resolveJdk({ javaHome, cacheDir, runJimage });
+    expect(artifact).toBeNull();
+    expect(warnings).toEqual(["jimage extract failed"]);
+  });
+
+  it("returns null with a warning when jimage throws (spawn failure)", async () => {
+    const { javaHome, cacheDir } = scratch();
+    writeRelease(javaHome, "21.0.1");
+    const runJimage = () => Promise.reject(new Error("spawn jimage ENOENT"));
+
+    const { artifact, warnings } = await resolveJdk({ javaHome, cacheDir, runJimage });
+    expect(artifact).toBeNull();
+    expect(warnings).toEqual(["jimage extract failed"]);
+  });
+
+  it("returns null with a warning when jimage exits 0 but produces no extract dir", async () => {
+    const { javaHome, cacheDir } = scratch();
+    writeRelease(javaHome, "21.0.1");
+    const runJimage = async () => ({ stdout: "", stderr: "", code: 0 }); // silent no-op
 
     const { artifact, warnings } = await resolveJdk({ javaHome, cacheDir, runJimage });
     expect(artifact).toBeNull();
