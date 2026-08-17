@@ -432,11 +432,25 @@ describe("where", () => {
 });
 
 describe("stubs kept for later tasks", () => {
-  it("init and prime still exit 1 with not implemented", () => {
-    for (const cmd of ["init", "prime"]) {
-      const run = cli(c, [cmd]);
-      expect(run.code, cmd).toBe(1);
-      expect(run.stderr, cmd).toContain("not implemented");
-    }
+  it("init still exits 1 with not implemented (until Task 22)", () => {
+    const run = cli(c, ["init"]);
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain("not implemented");
+  });
+});
+
+describe("prime over the CLI transport", () => {
+  it("serves the cli cheatsheet, exit 0, stdout only", () => {
+    const run = cli(c, ["prime"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("find-class");
+    expect(run.stderr).toBe("");
+  });
+
+  it("an override in the project root wins", () => {
+    const run = cli(c, ["prime"]);
+    expect(run.code).toBe(0);
+    // suite project has no override; the override path itself is unit-tested
+    expect(run.stdout).toContain("full content: jarpeek prime --export");
   });
 });

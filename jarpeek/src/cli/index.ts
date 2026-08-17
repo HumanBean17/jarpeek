@@ -29,6 +29,12 @@ import { where, type WhereResult } from "../core/query/where.js";
 import { SelectorError } from "../core/selector.js";
 import type { Declaration, DeclKind, Visibility } from "../core/types.js";
 import { registerMcpCommand } from "./mcp-command.js";
+import { prime, type PrimeOptions } from "../prime/command.js";
+
+/** Per-invocation flags of the prime subcommand. */
+interface PrimeFlags extends PrimeOptions {
+  export?: boolean;
+}
 
 /** Fatal exit code: bad args, malformed selectors, IO failures. */
 const EXIT_FATAL = 1;
@@ -419,13 +425,27 @@ command("where", "on-disk sources for one artifact")
 
 registerMcpCommand(program);
 
-// wired by Tasks 21 (prime) and 22 (init)
-for (const name of ["init", "prime"] as const) {
-  command(name, "not implemented yet")
-    .argument("[args...]")
-    .allowExcessArguments()
-    .action(notImplemented);
-}
+command("prime", "the jarpeek cheatsheet for agents (this file)")
+  .option("--full", "the full cli cheatsheet (default without MCP wiring)")
+  .option("--mcp", "the short mcp card")
+  .option("--export", "the default content even when .jarpeek/PRIME.md exists")
+  .option("--hook-json", "wrap the text as a SessionStart hook additionalContext payload")
+  .action(async (cmd: PrimeFlags) => {
+    const inv = invocation();
+    const result = prime(inv.project, {
+      full: cmd.full === true,
+      mcp: cmd.mcp === true,
+      exportContent: cmd.export === true,
+      hookJson: cmd.hookJson === true,
+    });
+    process.stdout.write(inv.json ? `${renderJson(result)}\n` : `${result.text}\n`);
+  });
+
+// wired by Task 22 (init)
+command("init", "not implemented yet")
+  .argument("[args...]")
+  .allowExcessArguments()
+  .action(notImplemented);
 
 program.action(() => {
   program.help();
