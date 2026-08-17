@@ -292,6 +292,82 @@ describe("signature normalization (synthetic source)", () => {
   });
 });
 
+describe("C-style postfix array declarators (synthetic)", () => {
+  const source = [
+    "package p;",
+    "public class Arrays {",
+    "    int a[];",
+    "    int grid[][];",
+    "    public static void main(String args[]) { }",
+    "    void mixed(String[] prefix, int n[]) { }",
+    "}",
+  ].join("\n");
+  const parsed = parseJavaSource(source, "p/Arrays.java");
+  const arrays = classByFqn(parsed, "p.Arrays");
+
+  it("records the field's own terminator line with no spurious diagnostics", () => {
+    expect(parsed.diagnostics).toEqual([]);
+    const a = member(arrays, "a");
+    expect(a.kind).toBe("field");
+    expect(a.signature).toBe("int a[]");
+    expect(a.lineStart).toBe(3);
+    expect(a.lineEnd).toBe(3);
+    expect(member(arrays, "grid").signature).toBe("int grid[][]");
+    expect(member(arrays, "grid").lineEnd).toBe(4);
+  });
+
+  it("drops the leaked parameter name and keeps the array type", () => {
+    expect(member(arrays, "main").signature).toBe("public static void main(String[])");
+    expect(member(arrays, "mixed").signature).toBe("void mixed(String[],int[])");
+  });
+});
+
+describe("modifier recording (synthetic)", () => {
+  const source = [
+    "package p;",
+    "public class Holder {",
+    "    public sealed interface Shape permits Round {}",
+    "    public non-sealed class Round implements Shape {}",
+    "    public interface Named {",
+    '        default String name() { return "n"; }',
+    "    }",
+    "}",
+  ].join("\n");
+  const parsed = parseJavaSource(source, "p/Holder.java");
+  const holder = classByFqn(parsed, "p.Holder");
+
+  it("records sealed, non-sealed, and default in modifiers[]", () => {
+    expect(parsed.diagnostics).toEqual([]);
+    expect(member(holder, "Shape").modifiers).toContain("sealed");
+    expect(member(holder, "Shape").signature).toBe("public sealed interface Shape");
+    expect(member(holder, "Round").modifiers).toContain("non-sealed");
+    expect(member(holder, "Round").signature).toBe("public non-sealed class Round");
+    const named = classByFqn(parsed, "p.Holder.Named");
+    expect(member(named, "name").modifiers).toContain("default");
+  });
+});
+
+describe("javadoc-only deprecation (synthetic)", () => {
+  it("sets deprecated from the @deprecated tag without any annotation", () => {
+    const source = [
+      "package p;",
+      "public class Legacy {",
+      "    /**",
+      "     * Old way.",
+      "     *",
+      "     * @deprecated use {@link #newWay()} instead",
+      "     */",
+      "    void oldWay() {}",
+      "    void newWay() {}",
+      "}",
+    ].join("\n");
+    const parsed = parseJavaSource(source, "p/Legacy.java");
+    const legacy = classByFqn(parsed, "p.Legacy");
+    expect(member(legacy, "oldWay").deprecated).toBe(true);
+    expect(member(legacy, "newWay").deprecated).toBe(false);
+  });
+});
+
 describe("graceful degradation", () => {
   it("never throws on unterminated, malformed, or empty input", () => {
     const junk = [

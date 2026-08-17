@@ -788,6 +788,19 @@ class Parser {
     });
   }
 
+  /**
+   * Consume C-style postfix array declarators (`name[]`, `name[][]`) that
+   * follow a declarator name. Returns the bracket tokens in source order.
+   */
+  private consumePostfixBrackets(): Token[] {
+    const out: Token[] = [];
+    while (isPunct(this.peek(), "[") && isPunct(this.peek(1), "]")) {
+      out.push(this.peek()!, this.peek(1)!);
+      this.pos += 2;
+    }
+    return out;
+  }
+
   /** One declarator per Declaration: `int a = 1, b = 2;` yields two fields. */
   private parseField(
     cls: ParsedClass,
@@ -797,6 +810,7 @@ class Parser {
   ): void {
     let name = firstName;
     for (;;) {
+      const postfix = this.consumePostfixBrackets();
       let lineEnd = this.lastLine();
       if (isPunct(this.peek(), "=")) {
         this.pos++;
@@ -814,7 +828,11 @@ class Parser {
         visibility: this.visibilityOf(header.modifiers),
         static: header.modifiers.includes("static"),
         deprecated: this.deprecatedOf(header),
-        signature: [...header.modifiers, joinTokens(typeTokens), name.text].join(" "),
+        signature: [
+          ...header.modifiers,
+          joinTokens(typeTokens),
+          name.text + postfix.map((t) => t.text).join(""),
+        ].join(" "),
         lineStart: name === firstName ? header.start.line : name.line,
         lineEnd,
         ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
@@ -894,12 +912,24 @@ class Parser {
       kept.push(t);
       i++;
     }
+    // C-style declarators `Type name[]` — strip the trailing bracket pairs,
+    // drop the parameter name, then re-attach the brackets to the type
+    const postfix: Token[] = [];
+    while (
+      kept.length >= 2 &&
+      isPunct(kept[kept.length - 2], "[") &&
+      isPunct(kept[kept.length - 1], "]")
+    ) {
+      postfix.unshift(kept.pop()!);
+      postfix.unshift(kept.pop()!);
+    }
     // `Type name` — the trailing ident is the parameter name when a type root
     // remains in front of it (covers `String s`, `String[] a`, `int... n`,
     // `Map<K,V> m`, `java.util.Date d`)
     if (isIdent(kept[kept.length - 1]) && kept.slice(0, -1).some((t) => isIdent(t))) {
       kept.pop();
     }
+    kept.push(...postfix);
     return joinTokens(kept);
   }
 
