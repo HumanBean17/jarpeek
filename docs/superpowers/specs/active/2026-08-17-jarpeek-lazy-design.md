@@ -1,6 +1,6 @@
 # jarpeek lazy redesign — no index, read jars on demand
 
-**Status:** draft
+**Status:** in_progress
 
 ## Problem
 
