@@ -13,7 +13,7 @@
     "fqnCount": 9
   },
   "jvm": {
-    "available": true,
+    "available": "<jvmAvailable>",
     "version": "<jvmVersion>"
   },
   "degraded": []

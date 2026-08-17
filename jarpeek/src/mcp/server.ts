@@ -28,7 +28,7 @@ import type { DeclKind, Visibility } from "../core/types.js";
 import { VERSION } from "../version.js";
 
 /** Every declaration kind, as a runtime-validated enum (mirrors DeclKind). */
-const KIND_ENUM = z.enum([
+const KIND_VALUES = [
   "class",
   "interface",
   "enum",
@@ -40,10 +40,26 @@ const KIND_ENUM = z.enum([
   "field",
   "property",
   "enum-constant",
-] as const satisfies readonly DeclKind[]);
+] as const satisfies readonly DeclKind[];
+
+/** Compile-time: every DeclKind appears in KIND_VALUES, or this fails to build. */
+type _KindExhaustive = Exclude<DeclKind, (typeof KIND_VALUES)[number]> extends never ? true : never;
 
 /** Visibility names, as a runtime-validated enum (mirrors Visibility). */
-const VISIBILITY_ENUM = z.enum(["public", "protected", "package", "private"] as const satisfies readonly Visibility[]);
+const VISIBILITY_VALUES = [
+  "public",
+  "protected",
+  "package",
+  "private",
+] as const satisfies readonly Visibility[];
+
+/** Compile-time: every Visibility appears in VISIBILITY_VALUES. */
+type _VisibilityExhaustive = Exclude<Visibility, (typeof VISIBILITY_VALUES)[number]> extends never
+  ? true
+  : never;
+
+const KIND_ENUM = z.enum(KIND_VALUES);
+const VISIBILITY_ENUM = z.enum(VISIBILITY_VALUES);
 
 /** What one tool call answers with: the core result as a text block. */
 type ToolPayload = CallToolResult;

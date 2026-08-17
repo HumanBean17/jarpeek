@@ -164,9 +164,10 @@ function expectGolden(name: string, actual: unknown): void {
 
 /**
  * Replace run- and machine-varying status fields with sentinels before the
- * golden compare: tmpdir paths, timestamps, hashes, and the JVM probe (the
- * installed JDK differs per machine). Tolerates a manifest-less report —
- * every volatile field is optional, so absent stays absent.
+ * golden compare: tmpdir paths, timestamps, hashes, and the whole JVM probe
+ * (both its boolean and its version differ per machine — a no-JVM machine
+ * answers `available: false` with no version key). Tolerates a manifest-less
+ * report: every keyed-off field is optional, so absent stays absent.
  */
 function normalizeStatus(result: any): any {
   const optional = (value: unknown, sentinel: string): unknown =>
@@ -188,7 +189,9 @@ function normalizeStatus(result: any): any {
       ? {
           jvm: {
             ...result.jvm,
-            available: result.jvm.available,
+            // unconditional: no-JVM answers false, and whether a parseable
+            // version exists at all is itself machine-dependent
+            available: "<jvmAvailable>",
             version: optional(result.jvm.version, "<jvmVersion>"),
           },
         }
