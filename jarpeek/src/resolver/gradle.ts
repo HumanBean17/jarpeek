@@ -3,14 +3,15 @@
  *
  * `resolveGradle` asks the project's own build where its dependencies
  * resolved to: it injects a Groovy init script (`gradle-init.ts`) and runs
- * `gradlew -I ... --console=plain -q jarpeekDump`, which prints one JSON
- * document between sentinel lines. Everything here degrades, never throws:
- * a missing wrapper plus missing Gradle, a timeout, a failed build, silent
- * output, or malformed JSON each become `{ ok: false, reason }` so the
- * resolver facade can fall back to the cache scan.
+ * `gradlew -I ... --console=plain -q --no-configuration-cache jarpeekDump`,
+ * which prints one JSON document between sentinel lines. Everything here
+ * degrades rather than fails: a missing wrapper plus no Gradle on PATH, a
+ * timeout, a failed build, silent output, or malformed JSON each become
+ * `{ ok: false, reason }` so the resolver facade can fall back to the cache
+ * scan.
  */
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { accessSync, constants, existsSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import type { DependencyArtifact } from "../core/types.js";
 import { ensureGradleInitScript } from "./gradle-init.js";
 import { runWithTimeout, SpawnError, TimeoutError, type RunResult } from "../util/exec.js";
@@ -33,6 +34,8 @@ export interface ResolveGradleOptions {
   exec?: typeof runWithTimeout;
   /** Explicit gradle/wrapper command override; skips platform detection. */
   wrapper?: string;
+  /** Injectable PATH probe consulted before the bare-gradle fallback. */
+  gradleOnPath?: () => boolean;
 }
 
 /** One dependency entry as printed by the init script. */
@@ -135,8 +138,8 @@ interface SelectedCommand {
  * Wrapper selection: the platform wrapper when present (`cmd /c gradlew.bat`
  * on win32 — .bat files cannot be spawned directly), bare `gradle`
  * otherwise. On win32 the bare fallback also goes through `cmd` so a
- * gradle.bat on PATH is reachable; a missing system Gradle then surfaces as
- * a non-zero exit rather than a spawn error.
+ * gradle.bat on PATH is reachable; its absence is caught by the PATH probe
+ * in `resolveGradle` before anything is spawned.
  */
 function selectCommand(projectRoot: string): SelectedCommand {
   if (process.platform === "win32") {
@@ -150,8 +153,35 @@ function selectCommand(projectRoot: string): SelectedCommand {
 }
 
 /**
+ * PATH probe for a system Gradle, consulted only when no wrapper exists:
+ * on win32 any PATHEXT match (gradle.bat/.cmd/.exe) counts, elsewhere the
+ * `gradle` binary must exist and be executable somewhere on PATH.
+ */
+export function gradleOnPathDefault(): boolean {
+  const dirs = (process.env.PATH ?? "").split(delimiter).filter((dir) => dir.length > 0);
+  if (process.platform === "win32") {
+    const exts = (process.env.PATHEXT ?? ".com;.exe;.bat;.cmd")
+      .split(";")
+      .map((ext) => ext.trim().toLowerCase())
+      .filter((ext) => ext.length > 0);
+    return dirs.some((dir) => exts.some((ext) => existsSync(join(dir, `gradle${ext}`))));
+  }
+  return dirs.some((dir) => {
+    try {
+      accessSync(join(dir, "gradle"), constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
  * Resolve a Gradle project's dependencies via the injected init script.
- * Never throws: every failure mode is a `{ ok: false, reason }` resolution.
+ * Every recognized failure mode — no wrapper and no Gradle on PATH, timeout,
+ * spawn failure, non-zero exit, missing sentinels, malformed JSON — becomes
+ * a `{ ok: false, reason }` resolution; an unexpected error thrown by `exec`
+ * itself (neither `TimeoutError` nor `SpawnError`) propagates to the caller.
  */
 export async function resolveGradle(
   projectRoot: string,
@@ -163,7 +193,18 @@ export async function resolveGradle(
 
   const selected: SelectedCommand =
     opts.wrapper !== undefined ? { command: opts.wrapper, preArgs: [], bare: false } : selectCommand(projectRoot);
-  const args = [...selected.preArgs, "-I", initScriptPath, "--console=plain", "-q", "jarpeekDump"];
+  if (selected.bare && !(opts.gradleOnPath ?? gradleOnPathDefault)()) {
+    return { ok: false, artifacts: [], reason: "no-wrapper-no-gradle" };
+  }
+  const args = [
+    ...selected.preArgs,
+    "-I",
+    initScriptPath,
+    "--console=plain",
+    "-q",
+    "--no-configuration-cache",
+    "jarpeekDump",
+  ];
 
   let result: RunResult;
   try {
@@ -173,8 +214,8 @@ export async function resolveGradle(
       return { ok: false, artifacts: [], reason: "timeout" };
     }
     if (error instanceof SpawnError) {
-      // bare gradle that cannot spawn = no wrapper and no Gradle on PATH;
-      // an existing wrapper that fails to exec is a build failure, not absence
+      // bare gradle that cannot spawn despite a passing probe = treat as
+      // absence; an existing wrapper that fails to exec is a build failure
       if (selected.bare) {
         return { ok: false, artifacts: [], reason: "no-wrapper-no-gradle" };
       }
@@ -184,7 +225,9 @@ export async function resolveGradle(
   }
 
   if (result.code !== 0) {
-    return { ok: false, artifacts: [], reason: `gradle-failed:${stderrTail(result.stderr)}` };
+    let tail = stderrTail(result.stderr);
+    if (tail.length === 0 && result.code === null) tail = "(killed)"; // signal-killed, no diagnosis
+    return { ok: false, artifacts: [], reason: `gradle-failed:${tail}` };
   }
 
   const payload = extractBetweenSentinels(result.stdout);

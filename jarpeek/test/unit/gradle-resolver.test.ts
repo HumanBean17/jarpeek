@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -12,7 +12,10 @@ import {
   type RunResult,
 } from "../../src/util/exec.js";
 import { GRADLE_INIT_SCRIPT, ensureGradleInitScript } from "../../src/resolver/gradle-init.js";
-import { resolveGradle } from "../../src/resolver/gradle.js";
+import { gradleOnPathDefault, resolveGradle } from "../../src/resolver/gradle.js";
+
+/** Always-true PATH probe; installed by tests that reach the bare-gradle path. */
+const PROBE_FOUND = () => true;
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
 const SAMPLE_OUTPUT = readFileSync(join(FIXTURES, "gradle", "sample-output.txt"), "utf8");
@@ -30,6 +33,16 @@ const JUNIT = "org.junit.jupiter:junit-jupiter:5.10.2";
 const JUNIT_JAR =
   "/home/dev/.gradle/caches/modules-2/files-2.1/org.junit.jupiter/junit-jupiter/5.10.2/3a4b5c6d/junit-jupiter-5.10.2.jar";
 const APP_DIR = "/home/dev/work/demo/app";
+
+/** The pinned gradle arguments after the command itself (init script, console, cc-off, task). */
+const INIT_ARGS = (projectRoot: string) => [
+  "-I",
+  join(projectRoot, ".jarpeek", "gradle-init.gradle"),
+  "--console=plain",
+  "-q",
+  "--no-configuration-cache",
+  "jarpeekDump",
+];
 
 const realPlatform = process.platform;
 let root: string | undefined;
@@ -68,12 +81,13 @@ function stubExec(
   return { exec, calls };
 }
 
-/** exec stub resolving a fixed stdout (plus optional stderr/code). */
+/** exec stub resolving a fixed stdout (plus optional stderr/code; null code preserved). */
 function outputExec(
   stdout: string,
   result: Pick<RunResult, "stderr" | "code"> = {},
 ): { exec: typeof runWithTimeout; calls: ExecCall[] } {
-  return stubExec(async () => ({ stdout, stderr: result.stderr ?? "", code: result.code ?? 0 }));
+  const code = result.code === undefined ? 0 : result.code;
+  return stubExec(async () => ({ stdout, stderr: result.stderr ?? "", code }));
 }
 
 /** coordinates → artifact lookup that fails loudly on a missing entry. */
@@ -91,7 +105,7 @@ describe("resolveGradle: parsing the sentinel-wrapped dump", () => {
     const projectRoot = scratch();
     const { exec, calls } = outputExec(SAMPLE_OUTPUT);
 
-    const resolution = await resolveGradle(projectRoot, { exec });
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
 
     expect(resolution.ok).toBe(true);
     expect(resolution.reason).toBeUndefined();
@@ -126,17 +140,11 @@ describe("resolveGradle: parsing the sentinel-wrapped dump", () => {
     expect(app.provenance).toBe("source");
     expect(app.warnings).toEqual([]);
 
-    // invocation shape: bare gradle (no wrapper in scratch), init script flag,
-    // quiet plain console, dump task, cwd, default timeout
+    // invocation shape: bare gradle (no wrapper in scratch, probe passed),
+    // pinned args, cwd, default timeout
     expect(calls).toHaveLength(1);
     expect(calls[0].cmd).toBe("gradle");
-    expect(calls[0].args).toEqual([
-      "-I",
-      join(projectRoot, ".jarpeek", "gradle-init.gradle"),
-      "--console=plain",
-      "-q",
-      "jarpeekDump",
-    ]);
+    expect(calls[0].args).toEqual(INIT_ARGS(projectRoot));
     expect(calls[0].opts.cwd).toBe(projectRoot);
     expect(calls[0].opts.timeoutMs).toBe(180_000);
   });
@@ -165,7 +173,7 @@ describe("resolveGradle: parsing the sentinel-wrapped dump", () => {
     const stdout = `###JARPEEK-BEGIN###\n${JSON.stringify(doc)}\n###JARPEEK-END###\n`;
     const { exec } = outputExec(stdout);
 
-    const resolution = await resolveGradle(projectRoot, { exec });
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
 
     expect(resolution.ok).toBe(true);
     expect(resolution.artifacts).toHaveLength(2);
@@ -181,7 +189,7 @@ describe("resolveGradle: failure and degradation reasons", () => {
     const projectRoot = scratch();
     const { exec } = stubExec(() => Promise.reject(new TimeoutError("gradle", 180_000)));
 
-    const resolution = await resolveGradle(projectRoot, { exec });
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
 
     expect(resolution).toEqual({ ok: false, artifacts: [], reason: "timeout" });
   });
@@ -191,20 +199,39 @@ describe("resolveGradle: failure and degradation reasons", () => {
 
     const boom = await resolveGradle(projectRoot, {
       exec: outputExec(SAMPLE_OUTPUT, { code: 1, stderr: "boom" }).exec,
+      gradleOnPath: PROBE_FOUND,
     });
     expect(boom.ok).toBe(false);
     expect(boom.reason).toBe("gradle-failed:boom");
 
     const longStderr = await resolveGradle(projectRoot, {
       exec: outputExec("", { code: 1, stderr: "x".repeat(600) + "boom" }).exec,
+      gradleOnPath: PROBE_FOUND,
     });
     expect(longStderr.reason).toBe(`gradle-failed:${"x".repeat(496)}boom`);
+  });
+
+  it("marks a killed process (code null) when stderr is empty", async () => {
+    const projectRoot = scratch();
+
+    const killed = await resolveGradle(projectRoot, {
+      exec: outputExec("", { code: null }).exec,
+      gradleOnPath: PROBE_FOUND,
+    });
+    expect(killed.reason).toBe("gradle-failed:(killed)");
+
+    const killedWithStderr = await resolveGradle(projectRoot, {
+      exec: outputExec("", { code: null, stderr: "SIGSEGV" }).exec,
+      gradleOnPath: PROBE_FOUND,
+    });
+    expect(killedWithStderr.reason).toBe("gradle-failed:SIGSEGV");
   });
 
   it("reports no-output when stdout carries no sentinels", async () => {
     const projectRoot = scratch();
     const resolution = await resolveGradle(projectRoot, {
       exec: outputExec("BUILD SUCCESSFUL in 2s\n").exec,
+      gradleOnPath: PROBE_FOUND,
     });
     expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-output" });
   });
@@ -213,6 +240,7 @@ describe("resolveGradle: failure and degradation reasons", () => {
     const projectRoot = scratch();
     const resolution = await resolveGradle(projectRoot, {
       exec: outputExec("###JARPEEK-BEGIN###\nnot json {{\n###JARPEEK-END###\n").exec,
+      gradleOnPath: PROBE_FOUND,
     });
     expect(resolution).toEqual({ ok: false, artifacts: [], reason: "bad-json" });
   });
@@ -229,13 +257,7 @@ describe("resolveGradle: wrapper selection", () => {
 
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe(join(projectRoot, "gradlew"));
-    expect(calls[0].args).toEqual([
-      "-I",
-      join(projectRoot, ".jarpeek", "gradle-init.gradle"),
-      "--console=plain",
-      "-q",
-      "jarpeekDump",
-    ]);
+    expect(calls[0].args).toEqual(INIT_ARGS(projectRoot));
     expect(calls[0].opts.cwd).toBe(projectRoot);
   });
 
@@ -250,13 +272,7 @@ describe("resolveGradle: wrapper selection", () => {
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe("cmd");
     expect(calls[0].args.slice(0, 2)).toEqual(["/c", join(projectRoot, "gradlew.bat")]);
-    expect(calls[0].args.slice(2)).toEqual([
-      "-I",
-      join(projectRoot, ".jarpeek", "gradle-init.gradle"),
-      "--console=plain",
-      "-q",
-      "jarpeekDump",
-    ]);
+    expect(calls[0].args.slice(2)).toEqual(INIT_ARGS(projectRoot));
   });
 
   it("falls back to bare gradle when no wrapper exists", async () => {
@@ -264,10 +280,11 @@ describe("resolveGradle: wrapper selection", () => {
     stubPlatform("darwin");
     const { exec, calls } = outputExec(SAMPLE_OUTPUT);
 
-    const resolution = await resolveGradle(projectRoot, { exec });
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
 
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe("gradle");
+    expect(calls[0].args).toEqual(INIT_ARGS(projectRoot));
   });
 
   it("reports no-wrapper-no-gradle when bare gradle fails to spawn", async () => {
@@ -276,7 +293,8 @@ describe("resolveGradle: wrapper selection", () => {
     const cause = Object.assign(new Error("spawn gradle ENOENT"), { code: "ENOENT" });
     const { exec } = stubExec(() => Promise.reject(new SpawnError("gradle", cause)));
 
-    const resolution = await resolveGradle(projectRoot, { exec });
+    // probe passed, so the spawn itself is the first failure seen
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
 
     expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-wrapper-no-gradle" });
   });
@@ -304,13 +322,88 @@ describe("resolveGradle: wrapper selection", () => {
 
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe("/opt/gradle/bin/gradle");
-    expect(calls[0].args).toEqual([
-      "-I",
-      join(projectRoot, ".jarpeek", "gradle-init.gradle"),
-      "--console=plain",
-      "-q",
-      "jarpeekDump",
-    ]);
+    expect(calls[0].args).toEqual(INIT_ARGS(projectRoot));
+  });
+});
+
+describe("resolveGradle: bare-gradle PATH probe", () => {
+  it("reports no-wrapper-no-gradle on win32 when no wrapper and no gradle is on PATH", async () => {
+    const projectRoot = scratch();
+    stubPlatform("win32");
+    const { exec, calls } = outputExec(SAMPLE_OUTPUT);
+
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: () => false });
+
+    expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-wrapper-no-gradle" });
+    expect(calls).toHaveLength(0); // probed, never spawned
+  });
+
+  it("spawns bare gradle via cmd on win32 when gradle.bat is on PATH", async () => {
+    const projectRoot = scratch();
+    stubPlatform("win32");
+    const { exec, calls } = outputExec(SAMPLE_OUTPUT);
+
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls[0].cmd).toBe("cmd");
+    expect(calls[0].args).toEqual(["/c", "gradle", ...INIT_ARGS(projectRoot)]);
+    expect(calls[0].opts.cwd).toBe(projectRoot);
+  });
+
+  it("reports no-wrapper-no-gradle on unix when the probe finds no gradle", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    const { exec, calls } = outputExec(SAMPLE_OUTPUT);
+
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: () => false });
+
+    expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-wrapper-no-gradle" });
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("gradleOnPathDefault", () => {
+  const realPath = process.env.PATH;
+  const realPathExt = process.env.PATHEXT;
+
+  afterEach(() => {
+    process.env.PATH = realPath;
+    if (realPathExt !== undefined) process.env.PATHEXT = realPathExt;
+    else delete process.env.PATHEXT;
+    stubPlatform(realPlatform);
+  });
+
+  it("finds an executable gradle on a unix PATH and misses without one", () => {
+    const projectRoot = scratch();
+    const withGradle = join(projectRoot, "with-gradle");
+    const withoutGradle = join(projectRoot, "without-gradle");
+    mkdirSync(withGradle);
+    mkdirSync(withoutGradle);
+    writeFileSync(join(withGradle, "gradle"), "#!/bin/sh\n");
+    chmodSync(join(withGradle, "gradle"), 0o755);
+    stubPlatform("darwin");
+
+    process.env.PATH = withGradle;
+    expect(gradleOnPathDefault()).toBe(true);
+
+    process.env.PATH = withoutGradle;
+    expect(gradleOnPathDefault()).toBe(false);
+  });
+
+  it("matches gradle.bat via PATHEXT on win32 and misses without one", () => {
+    const projectRoot = scratch();
+    const bin = join(projectRoot, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "gradle.bat"), "@echo off\r\n");
+    stubPlatform("win32");
+    delete process.env.PATHEXT; // default extension list covers .bat
+
+    process.env.PATH = bin;
+    expect(gradleOnPathDefault()).toBe(true);
+
+    rmSync(join(bin, "gradle.bat"));
+    expect(gradleOnPathDefault()).toBe(false);
   });
 });
 
@@ -345,5 +438,6 @@ describe("GRADLE_INIT_SCRIPT", () => {
     expect(GRADLE_INIT_SCRIPT).toContain("compileClasspath");
     expect(GRADLE_INIT_SCRIPT).toContain("testRuntimeClasspath");
     expect(GRADLE_INIT_SCRIPT).toContain("kaptTest");
+    expect(GRADLE_INIT_SCRIPT).toContain("failure.message ?:"); // null message → class name, not "null"
   });
 });

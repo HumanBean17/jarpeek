@@ -133,7 +133,9 @@ gradle.projectsLoaded {
                         }
                         configurationsOut.add([name: configName, dependencies: dependenciesOut])
                     } catch (Exception failure) {
-                        configurationsOut.add([name: configName, error: String.valueOf(failure.message)])
+                        // null or empty message would render as "null"/"" — name the class instead
+                        def failureMessage = failure.message ?: failure.getClass().getName()
+                        configurationsOut.add([name: configName, error: String.valueOf(failureMessage)])
                     }
                 }
             }
