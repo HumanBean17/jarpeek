@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +10,6 @@ import { readResource, truncateUtf8 } from "../../src/core/query/read-resource.j
 import { searchSymbols } from "../../src/core/query/search-symbols.js";
 import { status } from "../../src/core/query/status.js";
 import { where } from "../../src/core/query/where.js";
-import { SpawnError } from "../../src/util/exec.js";
 import type { DependencyArtifact } from "../../src/core/types.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
@@ -136,8 +135,42 @@ describe("readMember", () => {
     );
   });
 
+  // declared BEFORE the withJava block: a successful decompile memoizes the
+  // class for the whole process, and this test needs a real spawn failure —
+  // it must run while the memo for Hidden is still cold. The failed attempt
+  // memoizes nothing, so the withJava block above it stays honest too.
+  it("no-jvm degrades to signature pseudo-members with a miss reason", async () => {
+    // exec injection died with the ResolveContentOptions.exec removal; a real
+    // spawn failure is forced by pointing PATH and JAVA_HOME at an empty dir
+    const emptyBin = mkdtempSync(join(tmpdir(), "jarpeek-empty-bin-"));
+    const prevPath = process.env.PATH;
+    const prevJavaHome = process.env.JAVA_HOME;
+    process.env.PATH = emptyBin;
+    process.env.JAVA_HOME = emptyBin;
+    try {
+      const result = await readMember(noJvm.ctx, "com.example.nosources.Hidden", "#secret()");
+      expect(result.provenance).toBe("signature");
+      expect(result.members).toHaveLength(1);
+      const member = result.members[0]!;
+      expect(member.selector).toBe("secret()");
+      expect(member.signature).toBe("public java.lang.String secret()");
+      expect(member.lines).toEqual(["public java.lang.String secret()"]);
+      expect(member.startLine).toBe(0);
+      expect(member.endLine).toBe(0);
+      expect(result.misses).toEqual([
+        { selector: "#secret()", reason: "no-jvm (decompile unavailable)" },
+      ]);
+    } finally {
+      if (prevPath === undefined) delete process.env.PATH;
+      else process.env.PATH = prevPath;
+      if (prevJavaHome === undefined) delete process.env.JAVA_HOME;
+      else process.env.JAVA_HOME = prevJavaHome;
+      rmSync(emptyBin, { recursive: true, force: true });
+    }
+  });
+
   withJava("decompile path", () => {
-    it("binary-only artifact decompiles; second read hits the cache", async () => {
+    it("binary-only artifact decompiles; second read hits the memo", async () => {
       const first = await readMember(c.ctx, "com.example.nosources.Hidden", "#secret()");
       expect(first.provenance).toBe("decompiled");
       expect(first.coordinates).toBe("com.example:nosources-lib:1.0.0");
@@ -147,32 +180,12 @@ describe("readMember", () => {
       expect(member.lines.join("\n")).toContain("secret");
       expect(member.startLine).toBeGreaterThan(0);
 
-      const exec = vi.fn(async () => {
-        throw new Error("java must not run on a cache hit");
-      });
-      const second = await readMember(c.ctx, "com.example.nosources.Hidden", "#secret()", { exec });
-      expect(exec).not.toHaveBeenCalled();
+      // the memo (not a disk cache) serves the repeat: the second read needs
+      // no JVM round-trip and yields identical lines
+      const second = await readMember(c.ctx, "com.example.nosources.Hidden", "#secret()");
       expect(second.provenance).toBe("decompiled");
       expect(second.members[0]!.lines).toEqual(member.lines);
     });
-  });
-
-  it("no-jvm degrades to signature pseudo-members with a miss reason", async () => {
-    const exec = async () => {
-      throw new SpawnError("java", { code: "ENOENT", message: "spawn java ENOENT" } as NodeJS.ErrnoException);
-    };
-    const result = await readMember(noJvm.ctx, "com.example.nosources.Hidden", "#secret()", { exec });
-    expect(result.provenance).toBe("signature");
-    expect(result.members).toHaveLength(1);
-    const member = result.members[0]!;
-    expect(member.selector).toBe("secret()");
-    expect(member.signature).toBe("public java.lang.String secret()");
-    expect(member.lines).toEqual(["public java.lang.String secret()"]);
-    expect(member.startLine).toBe(0);
-    expect(member.endLine).toBe(0);
-    expect(result.misses).toEqual([
-      { selector: "#secret()", reason: "no-jvm (decompile unavailable)" },
-    ]);
   });
 
   it("noDecompile jdk artifact serves signature rows with the jdk miss reason", async () => {

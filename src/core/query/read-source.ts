@@ -13,9 +13,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Declaration, DependencyArtifact, Provenance } from "../types.js";
-import { decompileClass, type DecompileResult } from "../../decompile/cfr.js";
+import { createDecompiler, type DecompileResult } from "../../decompile/cfr.js";
 import { listZipEntries, readTextEntry } from "../../parse/zip.js";
-import { runWithTimeout } from "../../util/exec.js";
 import { sliceLines, splitLines } from "../../util/lines.js";
 import type { QueryContext } from "./context.js";
 import {
@@ -87,10 +86,12 @@ export interface ResolvedContent {
   signatureNote?: string;
 }
 
-export interface ResolveContentOptions {
-  /** Injectable exec (tests); threaded to the decompiler only. */
-  exec?: typeof runWithTimeout;
-}
+/**
+ * Process-wide decompile memo: successes are keyed (coordinates, class), so
+ * repeat reads of a binary-only class cost one CFR run per process. Lives
+ * here until the context owns one.
+ */
+const decompiler = createDecompiler();
 
 const JDK_NOTE = "signatures only (jdk: decompilation is out of scope)";
 
@@ -107,11 +108,7 @@ export const MODULE_SOURCE_CHANGED_WARNING =
  * The winner's best whole-file source text, with the provenance it came from.
  * Exported for readMember, which reuses the whole resolution ladder.
  */
-export async function resolveContent(
-  ctx: QueryContext,
-  fqn: string,
-  opts: ResolveContentOptions = {},
-): Promise<ResolvedContent> {
+export async function resolveContent(ctx: QueryContext, fqn: string): Promise<ResolvedContent> {
   await ctx.ensureReady();
   const { winner, alternatives, degraded: lookupDegraded }: OrderedLookup =
     await orderedLookup(ctx, fqn);
@@ -179,9 +176,7 @@ export async function resolveContent(
 
   // 3. binary jar: whole-class decompile (skipped where decompilation is out of scope)
   if (meta.binaryJar && !meta.noDecompile) {
-    const result = await decompileClass(ctx.cacheDir, meta.coordinates, meta.binaryJar, internalName, {
-      exec: opts.exec,
-    });
+    const result = await decompiler(meta.coordinates, meta.binaryJar, internalName);
     if (result.provenance === "decompiled") {
       return resolved(`${internalName}.java (decompiled)`, "decompiled", result.source);
     }

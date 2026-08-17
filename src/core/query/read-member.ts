@@ -15,17 +15,11 @@
  * does not apply.
  */
 import { parseJavaSource } from "../../parse/java-lexer.js";
-import { runWithTimeout } from "../../util/exec.js";
 import { sliceLines } from "../../util/lines.js";
 import type { Declaration, DependencyArtifact, Provenance } from "../types.js";
 import { matchDeclarations, parseSelector, splitSelectorList } from "../selector.js";
 import type { QueryContext } from "./context.js";
 import { resolveContent, type ResolvedContent } from "./read-source.js";
-
-export interface ReadMemberOptions {
-  /** Injectable exec (tests) threaded to the decompiler. */
-  exec?: typeof runWithTimeout;
-}
 
 export interface MemberSlice {
   /** Disambiguated: `run(String,int)` for methods, the plain name for fields. */
@@ -173,12 +167,11 @@ export async function readMember(
   ctx: QueryContext,
   fqn: string,
   selectorsRaw: string,
-  opts: ReadMemberOptions = {},
 ): Promise<ReadMemberResult> {
   // parse the whole list up front: one malformed selector fails the call
   const selectors = splitSelectorList(selectorsRaw).map((raw) => ({ raw, sel: parseSelector(raw) }));
 
-  const source = await resolveContent(ctx, fqn, { exec: opts.exec });
+  const source = await resolveContent(ctx, fqn);
 
   let records: Declaration[];
   let degradedReason: string | undefined;

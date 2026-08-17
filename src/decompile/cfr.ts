@@ -1,7 +1,10 @@
 /**
  * CFR decompiler adapter: decompiles one class at a time from a binary jar
- * using the vendored CFR jar, caching the result per (coordinates, class,
- * CFR version).
+ * using the vendored CFR jar. `createDecompiler` returns a memoized
+ * decompile function: successful results are remembered per (coordinates,
+ * class) in-process, failures are not — a JVM appearing later in the
+ * process must still be able to change the answer. No derived state is
+ * written to disk; only transient temp files carry the class through CFR.
  *
  * The vendored jar makes the tool self-contained — no network, no separate
  * CFR install — and `java` is probed at run time so machines without a JVM
@@ -9,9 +12,8 @@
  * throws: every failure path (no JVM, unreadable jar, missing entry, CFR
  * error, empty output) is a `signature` result describing why.
  */
-import { randomUUID, createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +21,7 @@ import { parseJavaSource } from "../parse/java-lexer.js";
 import { listZipEntries, readZipEntry } from "../parse/zip.js";
 import { runWithTimeout, SpawnError, type RunResult } from "../util/exec.js";
 
-/** Version of the vendored CFR jar (vendor/cfr.jar); cache keys embed it. */
+/** Version of the vendored CFR jar (vendor/cfr.jar). */
 export const CFR_VERSION = "0.152";
 
 const CFR_TIMEOUT_MS = 60_000;
@@ -94,25 +96,6 @@ function resolveCfrJarPath(): string {
   return join(dirname(dirname(moduleDir)), "vendor", "cfr.jar");
 }
 
-function sha256Hex(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
-/**
- * `<cacheDir>/v1/decompiled/<sha256(coordinates)>/<sha256(internalName ":" CFR_VERSION)>.java`
- * — per-artifact directory, class+version-keyed file, so a CFR upgrade
- * invalidates nothing silently.
- */
-function decompileCachePath(cacheDir: string, coordinates: string, internalName: string): string {
-  return join(
-    cacheDir,
-    "v1",
-    "decompiled",
-    sha256Hex(coordinates),
-    `${sha256Hex(`${internalName}:${CFR_VERSION}`)}.java`,
-  );
-}
-
 /** Last `DETAIL_TAIL_CHARS` characters, trimmed — enough to identify a CFR failure. */
 function detailTail(text: string): string {
   const trimmed = text.trim();
@@ -125,28 +108,6 @@ function detailTail(text: string): string {
 function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   return String(e);
-}
-
-/** Read a cached decompile; undefined means "not cached, go decompile". */
-async function readCache(cacheFile: string): Promise<string | undefined> {
-  try {
-    return await readFile(cacheFile, "utf8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw e;
-  }
-}
-
-/** Best-effort cache write (tmp + rename); failures degrade to uncached success. */
-async function writeCache(cacheFile: string, source: string): Promise<void> {
-  try {
-    await mkdir(dirname(cacheFile), { recursive: true });
-    const tmp = `${cacheFile}.${randomUUID()}.tmp`;
-    await writeFile(tmp, source, "utf8");
-    await rename(tmp, cacheFile);
-  } catch {
-    // a failed cache write must never fail the decompile itself
-  }
 }
 
 /**
@@ -165,82 +126,91 @@ function selectSource(run: RunResult): string | undefined {
 }
 
 /**
- * Decompile `internalName` (e.g. `com/foo/Bar`) from `binaryJar` with the
- * vendored CFR, consulting and then populating the per-class cache under
- * `cacheDir`. Never throws — every failure is a signature-result.
+ * Decompile one class (e.g. `com/foo/Bar`) from `binaryJar` with the vendored
+ * CFR. Never throws — every failure is a signature-result.
  */
-export async function decompileClass(
-  cacheDir: string,
+export type DecompileFn = (
   coordinates: string,
   binaryJar: string,
   internalName: string,
-  opts: DecompileOptions = {},
-): Promise<DecompileResult> {
+) => Promise<DecompileResult>;
+
+/**
+ * Create a memoized decompile function: successful results are remembered in
+ * a closure Map keyed `"${coordinates}\n${internalName}"`, failures are not
+ * (a JVM appearing later in the process must be able to change the answer).
+ * There is no disk cache — the temp-dir round-trip below is the only I/O.
+ */
+export function createDecompiler(opts: DecompileOptions = {}): DecompileFn {
   const exec = opts.exec ?? runWithTimeout;
-  const cacheFile = decompileCachePath(cacheDir, coordinates, internalName);
-  try {
-    const cached = await readCache(cacheFile);
+  const memo = new Map<string, string>();
+
+  return async (coordinates, binaryJar, internalName): Promise<DecompileResult> => {
+    const key = `${coordinates}\n${internalName}`;
+    const cached = memo.get(key);
     if (cached !== undefined) {
       return { provenance: "decompiled", source: cached, cached: true };
     }
 
-    const entry = (await listZipEntries(binaryJar)).find((e) => e.name === `${internalName}.class`);
-    if (entry === undefined) {
-      return { provenance: "signature", reason: "cfr-failed", detail: "entry not found" };
-    }
-    const classBytes = await readZipEntry(binaryJar, entry);
-
-    const workDir = await mkdtemp(join(tmpdir(), "jarpeek-cfr-"));
     try {
-      const classFile = join(workDir, "subject.class");
-      await writeFile(classFile, classBytes);
+      const entry = (await listZipEntries(binaryJar)).find((e) => e.name === `${internalName}.class`);
+      if (entry === undefined) {
+        return { provenance: "signature", reason: "cfr-failed", detail: "entry not found" };
+      }
+      const classBytes = await readZipEntry(binaryJar, entry);
 
-      let run: RunResult;
+      const workDir = await mkdtemp(join(tmpdir(), "jarpeek-cfr-"));
       try {
-        run = await exec(javaCommand(), ["-jar", cfrJarPath(), classFile, "--silent", "true"], {
-          timeoutMs: CFR_TIMEOUT_MS,
-        });
-      } catch (e) {
-        if (e instanceof SpawnError) {
-          return { provenance: "signature", reason: "no-jvm" };
+        const classFile = join(workDir, "subject.class");
+        await writeFile(classFile, classBytes);
+
+        let run: RunResult;
+        try {
+          run = await exec(javaCommand(), ["-jar", cfrJarPath(), classFile, "--silent", "true"], {
+            timeoutMs: CFR_TIMEOUT_MS,
+          });
+        } catch (e) {
+          if (e instanceof SpawnError) {
+            return { provenance: "signature", reason: "no-jvm" };
+          }
+          return { provenance: "signature", reason: "cfr-failed", detail: detailTail(errorMessage(e)) };
         }
-        return { provenance: "signature", reason: "cfr-failed", detail: detailTail(errorMessage(e)) };
-      }
 
-      if (run.code !== 0) {
-        return {
-          provenance: "signature",
-          reason: "cfr-failed",
-          detail: detailTail(run.stderr || run.stdout || `cfr exited with code ${run.code}`),
-        };
-      }
-      const source = selectSource(run);
-      if (source === undefined) {
-        return {
-          provenance: "signature",
-          reason: "cfr-failed",
-          detail: detailTail(run.stderr || "cfr produced no source output"),
-        };
-      }
+        if (run.code !== 0) {
+          return {
+            provenance: "signature",
+            reason: "cfr-failed",
+            detail: detailTail(run.stderr || run.stdout || `cfr exited with code ${run.code}`),
+          };
+        }
+        const source = selectSource(run);
+        if (source === undefined) {
+          return {
+            provenance: "signature",
+            reason: "cfr-failed",
+            detail: detailTail(run.stderr || "cfr produced no source output"),
+          };
+        }
 
-      // A parse that yields zero classes means the output is not Java source
-      // (e.g. CFR failure text that slipped through shape detection). Caching
-      // it would poison the cache permanently, so refuse and degrade instead.
-      const parsed = parseJavaSource(source, `${internalName}.java`);
-      if (parsed.classes.length === 0) {
-        return {
-          provenance: "signature",
-          reason: "cfr-failed",
-          detail: detailTail(run.stderr || "cfr output parsed to zero classes"),
-        };
-      }
+        // A parse that yields zero classes means the output is not Java source
+        // (e.g. CFR failure text that slipped through shape detection). Serving
+        // it would read as real code, so refuse and degrade instead.
+        const parsed = parseJavaSource(source, `${internalName}.java`);
+        if (parsed.classes.length === 0) {
+          return {
+            provenance: "signature",
+            reason: "cfr-failed",
+            detail: detailTail(run.stderr || "cfr output parsed to zero classes"),
+          };
+        }
 
-      await writeCache(cacheFile, source);
-      return { provenance: "decompiled", source, cached: false };
-    } finally {
-      await rm(workDir, { recursive: true, force: true });
+        memo.set(key, source);
+        return { provenance: "decompiled", source, cached: false };
+      } finally {
+        await rm(workDir, { recursive: true, force: true });
+      }
+    } catch (e) {
+      return { provenance: "signature", reason: "cfr-failed", detail: detailTail(errorMessage(e)) };
     }
-  } catch (e) {
-    return { provenance: "signature", reason: "cfr-failed", detail: detailTail(errorMessage(e)) };
-  }
+  };
 }
