@@ -5,10 +5,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openContext, type QueryContext } from "../../src/core/query/context.js";
 import { findClass } from "../../src/core/query/find-class.js";
-import { outline, LookupMissError } from "../../src/core/query/outline.js";
+import { outline, LookupMissError, OUT_OF_MANIFEST_WARNING } from "../../src/core/query/outline.js";
+import { readMember } from "../../src/core/query/read-member.js";
 import { readSource } from "../../src/core/query/read-source.js";
 import { searchSymbols } from "../../src/core/query/search-symbols.js";
-import { readManifest } from "../../src/index/manifest.js";
+import { readManifest, writeManifest, computeDependencySetHash } from "../../src/index/manifest.js";
 import { splitLines } from "../../src/util/lines.js";
 import { readTextEntry, listZipEntries } from "../../src/parse/zip.js";
 import type { Declaration, DependencyArtifact } from "../../src/core/types.js";
@@ -310,6 +311,13 @@ describe("collisions and misses", () => {
     expect(result.alternatives).toContainEqual({ coordinates: "com.other:dup:1" });
   });
 
+  it("read_member surfaces the same collision alternatives as outline", async () => {
+    const result = await readMember(c.ctx, "com.example.Demo", "#run");
+    expect(result.coordinates).toBe("com.example:demo-lib:1.0.0");
+    expect(result.members.length).toBeGreaterThan(0);
+    expect(result.alternatives).toContainEqual({ coordinates: "com.other:dup:1" });
+  });
+
   it("lookup miss throws LookupMissError carrying the fqn", async () => {
     const err = await outline(c.ctx, "com.example.Missing").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LookupMissError);
@@ -384,6 +392,38 @@ describe("manifest scoping (the cache store is user-global)", () => {
     expect(rows.rows).toEqual([]);
   });
 
+  it("search_symbols rows carry provenance: sourced vs signature-only artifacts differ", async () => {
+    // run lives in demo-lib (sources jar indexed → source); secret lives in
+    // nosources-lib (class-file reader → signature)
+    const sourced = await searchSymbols(c.ctx, "run");
+    expect(sourced.rows.find((r) => r.coordinates === "com.example:demo-lib:1.0.0")!.provenance).toBe(
+      "source",
+    );
+    const signatureOnly = await searchSymbols(c.ctx, "secret");
+    expect(
+      signatureOnly.rows.find((r) => r.coordinates === "com.example:nosources-lib:1.0.0")!.provenance,
+    ).toBe("signature");
+  });
+
+  it("nested rows from out-of-manifest shards are served but flagged like the winner lookup", async () => {
+    // a stale shard declares a nested class of a manifest winner's fqn: the
+    // declarations still answer, but never silently
+    await c.ctx.store.writeArtifact(
+      {
+        coordinates: "com.gone:old-lib:1",
+        kind: "external",
+        provenance: "signature",
+        warnings: [],
+      },
+      [classRecord("com.example.Demo.Stale", "public class Stale")],
+    );
+
+    const result = await outline(c.ctx, "com.example.Demo");
+    expect(result.coordinates).toBe("com.example:demo-lib:1.0.0");
+    expect(result.rows.some((r) => r.selector === "Stale" && r.kind === "class")).toBe(true);
+    expect(result.degraded).toContain(OUT_OF_MANIFEST_WARNING);
+  });
+
   it("bounded fuzzy collection keeps ranking identical to a full sort", async () => {
     const wide = await searchSymbols(c.ctx, "e", { limit: 1000 });
     expect(wide.rows.length).toBeGreaterThan(5);
@@ -454,6 +494,95 @@ describe("module source staleness (agent edits while the server runs)", () => {
       expect(full.stale).toBe(true);
       expect(full.lineCount).toBeLessThan(10);
       expect(full.degraded.some((d) => d.includes("module source changed since index"))).toBe(true);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("stale serve on cache-scan degradation", () => {
+  it("a degraded resolution never overwrites a build-tool manifest; retries back off", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-stale-project-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-stale-cache-"));
+    try {
+      writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+      const good: DependencyArtifact[] = [
+        {
+          coordinates: "com.example:demo-lib:1.0.0",
+          kind: "external",
+          sourcesJar: DEMO_SOURCES_JAR,
+          provenance: "source",
+          warnings: [],
+        },
+      ];
+      const junk: DependencyArtifact[] = [
+        {
+          coordinates: "org.heuristic:junk:9",
+          kind: "external",
+          provenance: "signature",
+          warnings: [],
+        },
+      ];
+      let gradleOk = true;
+      let calls = 0;
+      let clock = 1_000_000;
+      const ctx = openContext(projectRoot, {
+        resolvers: {
+          gradle: async () => {
+            calls++;
+            return gradleOk
+              ? { ok: true, artifacts: good }
+              : { ok: false, artifacts: [], reason: "timeout" as const };
+          },
+          cacheScan: async () => ({ artifacts: junk, warnings: [] }),
+          includeJdk: false,
+        },
+        cacheDir,
+        onProgress: () => {},
+        now: () => clock,
+      });
+
+      // bootstrap the build-tool manifest
+      await findClass(ctx, "Demo");
+      const goodManifest = await readManifest(projectRoot);
+      expect(goodManifest!.artifacts.map((a) => a.coordinates)).toEqual([
+        "com.example:demo-lib:1.0.0",
+      ]);
+
+      // the build hangs; the re-resolve degrades all the way to cache scan
+      gradleOk = false;
+      const buildGradle = join(projectRoot, "build.gradle");
+      const future = new Date(Date.now() + 60_000);
+      utimesSync(buildGradle, future, future);
+
+      const served = await ctx.ensureReady();
+      expect(served).toEqual({ bootstrapped: false, stale: true });
+      // the heuristic set did NOT replace the build-tool manifest
+      const manifest = await readManifest(projectRoot);
+      expect(manifest!.resolvedAt).toBe(goodManifest!.resolvedAt);
+      expect(manifest!.artifacts.map((a) => a.coordinates)).toEqual([
+        "com.example:demo-lib:1.0.0",
+      ]);
+      const warnings = await ctx.bootstrapWarnings();
+      expect(warnings).toContain("gradle: timeout");
+      expect(warnings.some((w) => w.startsWith("stale index served"))).toBe(true);
+
+      // within the backoff window: no resolver re-run per query
+      clock += 10_000;
+      await ctx.ensureReady();
+      expect(calls).toBe(2);
+
+      // past it: resolution is retried (and still degrades to stale serving)
+      clock += 51_000;
+      await ctx.ensureReady();
+      expect(calls).toBe(3);
+      expect((await readManifest(projectRoot))!.artifacts).toHaveLength(1);
+
+      // queries still answer from the stale index, flagged
+      const result = await outline(ctx, "com.example.Demo");
+      expect(result.stale).toBe(true);
+      expect(result.coordinates).toBe("com.example:demo-lib:1.0.0");
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
       rmSync(cacheDir, { recursive: true, force: true });

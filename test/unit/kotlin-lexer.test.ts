@@ -431,3 +431,67 @@ describe("interface-nested declarations are implicitly static (synthetic)", () =
     expect(member(container, "Nested").static).toBe(false);
   });
 });
+
+describe("broken literals and lambda defaults (graceful degradation)", () => {
+  it("an unterminated plain string costs one declaration, not the rest of the file", () => {
+    const source = [
+      "package p",
+      "",
+      "class Before {",
+      "  val ok = 1",
+      "}",
+      "val broken = \"oops",
+      "class After {",
+      "  fun later() = 2",
+      "}",
+      "",
+    ].join("\n");
+    const parsed = parseKotlinSource(source, "Broken.kt");
+
+    const after = classByFqn(parsed, "p.After");
+    expect(member(after, "later").kind).toBe("method");
+    expect(parsed.classes.map((c) => c.fqn)).toContain("p.Before");
+    expect(parsed.classes.map((c) => c.fqn)).toContain("p.After");
+  });
+
+  it("raw strings still span lines, including a multi-line template expression", () => {
+    const source = [
+      "package p",
+      "",
+      "class Raw {",
+      "  val text = \"\"\"",
+      "    line one",
+      "    ${list.joinToString(",
+      "      separator = \",\",",
+      "    ) { it.name }",
+      "  \"\"\".trim()",
+      "  fun keep() = 1",
+      "}",
+      "",
+    ].join("\n");
+    const parsed = parseKotlinSource(source, "Raw.kt");
+    const raw = classByFqn(parsed, "p.Raw");
+    expect(member(raw, "keep").kind).toBe("method");
+  });
+
+  it("a comma inside a lambda default value does not split the parameter", () => {
+    const source = [
+      "package p",
+      "",
+      "class Ctor(val cb: (Int, Int) -> Unit = { a, b -> }, val mode: Int)",
+      "",
+      "fun f(g: (Int, Int) -> Int = { a, b: Int -> a + b }) = g(1, 2)",
+      "",
+    ].join("\n");
+    const parsed = parseKotlinSource(source, "Defaults.kt");
+
+    // the primary constructor keeps exactly its two parameters
+    const ctor = classByFqn(parsed, "p.Ctor");
+    expect(ctor.signature).toBe("class Ctor((Int, Int) -> Unit,Int)");
+    expect(ctor.members.filter((m) => m.kind === "property")).toHaveLength(2);
+
+    // the function's signature carries one parameter, not a split fragment
+    const facade = classByFqn(parsed, "p.DefaultsKt");
+    expect(member(facade, "f").signature).toBe("fun f((Int, Int) -> Int)");
+  });
+});

@@ -29,6 +29,12 @@ export interface ResolutionOutcome {
   artifacts: DependencyArtifact[];
   warnings: string[];
   degraded: DegradedEntry[];
+  /**
+   * True when no detected build system answered and the artifacts are the
+   * cache scan's heuristic set. Callers with a previously-resolved manifest
+   * serve that stale (flagged) instead of replacing it with this guesswork.
+   */
+  viaCacheScan: boolean;
 }
 
 /** Resolver functions overridable per-call; defaults are the real ones. */
@@ -76,6 +82,7 @@ export async function resolveDependencies(
   const degraded: DegradedEntry[] = [];
 
   let artifacts: DependencyArtifact[] | null = null;
+  let viaCacheScan = false;
   for (const system of detectBuildSystems(projectRoot)) {
     if (system === "gradle") {
       const resolution = await gradle(projectRoot);
@@ -99,6 +106,7 @@ export async function resolveDependencies(
     // whole truth now, and the warning marks that regardless of whether any
     // system was even attempted
     warnings.push(DEGRADED_WARNING);
+    viaCacheScan = true;
     const scan = await cacheScan();
     artifacts = scan.artifacts;
     warnings.push(...scan.warnings);
@@ -110,5 +118,5 @@ export async function resolveDependencies(
     if (jdkResult.artifact !== null) artifacts = [...artifacts, jdkResult.artifact];
   }
 
-  return { artifacts: dedup(artifacts), warnings, degraded };
+  return { artifacts: dedup(artifacts), warnings, degraded, viaCacheScan };
 }

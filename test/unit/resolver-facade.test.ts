@@ -117,6 +117,7 @@ describe("resolveDependencies", () => {
     expect(f.calls.cacheScan).toBe(0);
     expect(out.degraded).toEqual([]);
     expect(out.warnings).toEqual([]);
+    expect(out.viaCacheScan).toBe(false);
   });
 
   it("gradle failure falls through to maven; degraded records the gradle failure", async () => {
@@ -158,6 +159,7 @@ describe("resolveDependencies", () => {
     ]);
     expect(out.warnings).toContain("degraded-to-cache-scan");
     expect(out.warnings).toContain("cache-scan-truncated:42");
+    expect(out.viaCacheScan).toBe(true);
   });
 
   it("ok-but-empty resolution does not win; reason falls back to no-artifacts", async () => {

@@ -6,10 +6,11 @@
  * are collected fully; the fuzzy tier flows through a bounded keep-`limit`
  * collector (tiers dominate ranking, so the bounded top of the fuzzy bucket
  * is provably the same top a full sort would keep). Signatures are truncated
- * to keep rows cheap; the kind filter and the manifest scope run in flight,
- * before any tiering.
+ * to keep rows cheap and each row carries its artifact's provenance, so a
+ * signature-only hit is never mistaken for sourced; the kind filter and the
+ * manifest scope run in flight, before any tiering.
  */
-import type { DeclKind } from "../types.js";
+import type { DeclKind, Provenance } from "../types.js";
 import { fuzzyScore } from "../fuzzy.js";
 import type { QueryContext } from "./context.js";
 import { manifestOrder, manifestScope, mergedDegraded, servedStale } from "./outline.js";
@@ -19,6 +20,8 @@ export interface SymbolRow {
   fqn: string;
   kind: DeclKind;
   coordinates: string;
+  /** How the declaring artifact was indexed — signature rows are derived, not source. */
+  provenance: Provenance;
   signature: string;
 }
 
@@ -66,6 +69,10 @@ export async function searchSymbols(
   const order = manifestOrder(manifest);
   // a manifest scopes the user-global cache store to this project's artifacts
   const scope = manifestScope(manifest);
+  const provenanceByCoordinates = new Map<string, Provenance>();
+  for (const artifact of manifest?.artifacts ?? []) {
+    provenanceByCoordinates.set(artifact.coordinates, artifact.provenance);
+  }
 
   /** Tier 0/1: collected fully. Tier 2 lands in `fuzzy`, bounded below. */
   const collected: ScoredRow[] = [];
@@ -88,6 +95,9 @@ export async function searchSymbols(
         fqn: record.fqn,
         kind: record.kind,
         coordinates,
+        // in-scope rows always map; the "signature" default only labels rows
+        // served without a manifest at all (nothing was verifiable anyway)
+        provenance: provenanceByCoordinates.get(coordinates) ?? "signature",
         signature: truncateSignature(record.signature),
       },
       tier,
