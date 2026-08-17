@@ -239,6 +239,18 @@ describe("parseClassFile — javap -p parity", () => {
   it("Demo's member set matches golden/Demo.javap.txt", expectJavapParity("com/example/Demo.class", "Demo.javap.txt"));
 
   it("Colors' member set matches golden/Colors.javap.txt", expectJavapParity("com/example/Colors.class", "Colors.javap.txt"));
+
+  it("Outer's member set matches golden/Outer.javap.txt (lambda + InvokeDynamic pool path)", async () => {
+    // Outer is the only committed fixture with a lambda: its class file pulls
+    // InvokeDynamic and InterfaceMethodref constants through the pool walk
+    const outer = await parseDemoClass("com/example/Outer.class");
+    expect(outer.fqn).toBe("com.example.Outer");
+    expect(outer.kind).toBe("class");
+    const lambda = outer.members.find((m) => m.selector === "lambda$dispatch$0")!;
+    expect(lambda.visibility).toBe("private");
+    expect(lambda.static).toBe(true);
+    await expectJavapParity("com/example/Outer.class", "Outer.javap.txt")();
+  });
 });
 
 describe("parseClassFile — nosources jar", () => {
@@ -251,27 +263,28 @@ describe("parseClassFile — nosources jar", () => {
   });
 });
 
-describe("parseClassFile — crafted generic class", () => {
+describe("parseClassFile — crafted class files", () => {
+  const u1b = (v: number) => Buffer.from([v]);
+  const u2b = (v: number) => {
+    const b = Buffer.alloc(2);
+    b.writeUInt16BE(v);
+    return b;
+  };
+  const u4b = (v: number) => {
+    const b = Buffer.alloc(4);
+    b.writeUInt32BE(v);
+    return b;
+  };
+  const utf8 = (s: string) =>
+    Buffer.concat([u1b(1), u2b(Buffer.byteLength(s)), Buffer.from(s, "utf8")]);
+  const cls = (nameIndex: number) => Buffer.concat([u1b(7), u2b(nameIndex)]);
+
   /**
    * The committed fixtures have no generic members, so this hand-builds a
    * minimal class file to exercise the `Signature` attribute path: type
    * parameters, type variables, wildcards, and the `[I` array descriptor.
    */
   function craftGenericClass(): Buffer {
-    const u1b = (v: number) => Buffer.from([v]);
-    const u2b = (v: number) => {
-      const b = Buffer.alloc(2);
-      b.writeUInt16BE(v);
-      return b;
-    };
-    const u4b = (v: number) => {
-      const b = Buffer.alloc(4);
-      b.writeUInt32BE(v);
-      return b;
-    };
-    const utf8 = (s: string) => Buffer.concat([u1b(1), u2b(Buffer.byteLength(s)), Buffer.from(s, "utf8")]);
-    const cls = (nameIndex: number) => Buffer.concat([u1b(7), u2b(nameIndex)]);
-
     // pool layout (indexes are 1-based; count field will be 17)
     const pool: Buffer[] = [
       utf8("Gen"), // 1
@@ -291,9 +304,8 @@ describe("parseClassFile — crafted generic class", () => {
       utf8("Ljava/util/Map;"), // 15
       utf8("Ljava/util/Map<Ljava/lang/String;+Ljava/lang/Number;>;"), // 16 field Signature
     ];
-    const signatureAttr = (sigIndex: number) =>
-      Buffer.concat([u2b(13), u4b(2), u2b(sigIndex)]);
-    const field = (flags: number, nameIndex: number, descIndex: number, sigIndex?: number) =>
+    const signatureAttr = (sigIndex: number) => Buffer.concat([u2b(13), u4b(2), u2b(sigIndex)]);
+    const member = (flags: number, nameIndex: number, descIndex: number, sigIndex?: number) =>
       Buffer.concat([
         u2b(flags),
         u2b(nameIndex),
@@ -313,11 +325,11 @@ describe("parseClassFile — crafted generic class", () => {
       u2b(4), // super_class
       u2b(0), // interfaces count
       u2b(3), // fields count
-      field(0x0009, 5, 6), // public static int[] matrix — no Signature, descriptor only
-      field(0x0001, 7, 8, 9), // public List<T> names
-      field(0x0002, 14, 15, 16), // private Map<String, ? extends Number> wild
+      member(0x0009, 5, 6), // public static int[] matrix — no Signature, descriptor only
+      member(0x0001, 7, 8, 9), // public List<T> names
+      member(0x0002, 14, 15, 16), // private Map<String, ? extends Number> wild
       u2b(1), // methods count
-      field(0x0001, 10, 11, 12), // public <T> T pick(T)
+      member(0x0001, 10, 11, 12), // public <T> T pick(T)
       u2b(0), // class attribute count
     ]);
   }
@@ -339,6 +351,62 @@ describe("parseClassFile — crafted generic class", () => {
     expect(parsed.members.find((m) => m.selector === "pick")!.signature).toBe(
       "public <T> T pick(T)",
     );
+  });
+
+  /**
+   * No committed fixture carries Long/Double/Integer/Float/MethodType/Dynamic/
+   * Module/Package constants, so this pins every remaining constant-pool skip
+   * size at once: the Utf8 entries the field references sit at indexes 17 and
+   * 18, reachable only when the Long at 5 and the Double at 7 each consume
+   * two slots and every other tag advances by its exact payload size. Any
+   * wrong size misaligns the pool and fails the Utf8 dereference or the parse.
+   */
+  it("walks every constant-pool skip size with Long/Double double-slot alignment", () => {
+    const payload4 = Buffer.alloc(4, 0x5a);
+    const payload8 = Buffer.alloc(8, 0x5a);
+    const pool: Buffer[] = [
+      utf8("Slots"), // 1
+      cls(1), // 2 Class Slots
+      utf8("java/lang/Object"), // 3
+      cls(3), // 4 Class java/lang/Object
+      Buffer.concat([u1b(5), payload8]), // 5 CONSTANT_Long — occupies slots 5 and 6
+      Buffer.concat([u1b(6), payload8]), // 7 CONSTANT_Double — occupies slots 7 and 8
+      Buffer.concat([u1b(3), payload4]), // 9 CONSTANT_Integer (4 payload bytes)
+      Buffer.concat([u1b(4), payload4]), // 10 CONSTANT_Float (4)
+      Buffer.concat([u1b(16), u2b(1)]), // 11 CONSTANT_MethodType (2)
+      Buffer.concat([u1b(15), u1b(1), u2b(2)]), // 12 CONSTANT_MethodHandle (3)
+      Buffer.concat([u1b(17), u2b(0), u2b(0)]), // 13 CONSTANT_Dynamic (4)
+      Buffer.concat([u1b(18), u2b(0), u2b(0)]), // 14 CONSTANT_InvokeDynamic (4)
+      Buffer.concat([u1b(19), u2b(1)]), // 15 CONSTANT_Module (2)
+      Buffer.concat([u1b(20), u2b(1)]), // 16 CONSTANT_Package (2)
+      utf8("sum"), // 17 field name — only resolvable when the walk stayed aligned
+      utf8("J"), // 18 field descriptor (long)
+    ];
+
+    const buf = Buffer.concat([
+      u4b(0xcafebabe),
+      u2b(0), // minor
+      u2b(52), // major
+      u2b(pool.length + 3), // constant-pool count = 19: 16 entries + 2 double-slot holes
+      ...pool,
+      u2b(0x0021), // ACC_PUBLIC | ACC_SUPER
+      u2b(2), // this_class
+      u2b(4), // super_class
+      u2b(0), // interfaces count
+      u2b(1), // fields count
+      u2b(0x0002), // private
+      u2b(17), // name → "sum"
+      u2b(18), // descriptor → J
+      u2b(0), // field attribute count
+      u2b(0), // methods count
+      u2b(0), // class attribute count
+    ]);
+
+    const parsed = parseClassFile(buf);
+    expect(parsed.fqn).toBe("Slots");
+    expect(parsed.members).toHaveLength(1);
+    expect(parsed.members[0]!.selector).toBe("sum");
+    expect(parsed.members[0]!.signature).toBe("private long sum");
   });
 });
 
