@@ -211,6 +211,23 @@ describe("resolveGradle: failure and degradation reasons", () => {
     expect(longStderr.reason).toBe(`gradle-failed:${"x".repeat(496)}boom`);
   });
 
+  it("never yields an empty reason: empty stderr falls back to stdout, then an exit marker", async () => {
+    const projectRoot = scratch();
+
+    const quietStdout = await resolveGradle(projectRoot, {
+      exec: outputExec("[ERROR] compilation failed", { code: 1 }).exec,
+      gradleOnPath: PROBE_FOUND,
+    });
+    expect(quietStdout.ok).toBe(false);
+    expect(quietStdout.reason).toBe("gradle-failed:[ERROR] compilation failed");
+
+    const fullyQuiet = await resolveGradle(projectRoot, {
+      exec: outputExec("", { code: 1 }).exec,
+      gradleOnPath: PROBE_FOUND,
+    });
+    expect(fullyQuiet.reason).toBe("gradle-failed:exit 1 (no output)");
+  });
+
   it("marks a killed process (code null) when stderr is empty", async () => {
     const projectRoot = scratch();
 

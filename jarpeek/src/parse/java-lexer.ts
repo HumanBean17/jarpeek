@@ -538,7 +538,13 @@ class Parser {
       fqn,
       kind,
       visibility: this.visibilityOf(header.modifiers),
-      static: header.modifiers.includes("static"),
+      // JLS 9.1.1.4 / 8.5.1: member types of an interface (annotations
+      // included) are implicitly static even when the source spells no
+      // modifier — javac marks ACC_STATIC, and the class-file reader reports
+      // it, so both lexers must agree
+      static:
+        header.modifiers.includes("static") ||
+        (parent !== null && (parent.kind === "interface" || parent.kind === "annotation")),
       deprecated: this.deprecatedOf(header),
       signature,
       lineStart: header.start.line,
@@ -803,6 +809,10 @@ class Parser {
       if (isPunct(this.peek(), ";")) {
         lineEnd = this.peek()!.line;
         this.pos++;
+      } else if (isPunct(this.peek(), ",")) {
+        // the comma ends this declarator exactly like a `;` would: without
+        // it, `int a, b;` reports `a`'s span as running to end of file
+        lineEnd = this.peek()!.line;
       }
       cls.members.push({
         fqn: cls.fqn,

@@ -770,7 +770,12 @@ class Parser {
       fqn,
       kind,
       visibility: this.visibilityOf(header.modifiers),
-      static: parent !== null && (kindKeyword === "object" || parentStatic),
+      // nested objects are static; anything nested in an interface is too
+      // (JVM ACC_STATIC — kotlinc marks it, so the class-file reader and this
+      // lexer must agree); otherwise inherit the enclosing static context
+      static:
+        parent !== null &&
+        (kindKeyword === "object" || parentStatic || parent.kind === "interface"),
       deprecated: this.deprecatedOf(header),
       signature,
       lineStart: header.start.line,

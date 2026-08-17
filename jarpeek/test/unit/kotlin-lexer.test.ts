@@ -402,3 +402,32 @@ describe("graceful degradation", () => {
     expect(() => parseKotlinSource(bytes.toString("latin1"), "random.kt")).not.toThrow();
   });
 });
+
+describe("interface-nested declarations are implicitly static (synthetic)", () => {
+  const source = [
+    "package p",
+    "",
+    "interface Contract {",
+    "    class Impl : Contract",
+    "    fun go()",
+    "    object Registry",
+    "}",
+    "",
+    "class Container {",
+    "    class Nested",
+    "}",
+  ].join("\n");
+  const parsed = parseKotlinSource(source, "p/Contract.kt");
+  const contract = classByFqn(parsed, "p.Contract");
+
+  it("class and object nested in an interface report static (JVM ACC_STATIC parity)", () => {
+    expect(parsed.diagnostics).toEqual([]);
+    expect(member(contract, "Impl").static).toBe(true);
+    expect(member(contract, "Registry").static).toBe(true);
+  });
+
+  it("a class nested in a class stays non-static", () => {
+    const container = classByFqn(parsed, "p.Container");
+    expect(member(container, "Nested").static).toBe(false);
+  });
+});

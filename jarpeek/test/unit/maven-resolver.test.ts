@@ -186,8 +186,8 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     // the sources run follows and reuses the same command
     expect(calls).toHaveLength(2);
     expect(calls[0].cmd).toBe("mvn");
-    expect(calls[0].args.slice(0, 3)).toEqual(["-B", "-q", "dependency:build-classpath"]);
-    expect(calls[0].args).toHaveLength(4);
+    expect(calls[0].args.slice(0, 4)).toEqual(["-B", "-q", "--non-recursive", "dependency:build-classpath"]);
+    expect(calls[0].args).toHaveLength(5);
     const out = outputFileOf(calls[0]);
     expect(out.startsWith(join(tmpdir(), "jarpeek-mvn-"))).toBe(true);
     expect(out.endsWith("cp-0.txt")).toBe(true);
@@ -217,7 +217,8 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     expect(b.binaryJar).toBe("C:\\Users\\dev\\.m2\\repository\\org\\a\\b\\1.0\\b-1.0.jar");
     expect(b.sourcesJar).toBeUndefined(); // no sibling in the fixture m2
     expect(b.provenance).toBe("signature");
-    expect(calls[0].args[2]).toBe("dependency:build-classpath");
+    expect(calls[0].args).toContain("--non-recursive");
+    expect(calls[0].args[3]).toBe("dependency:build-classpath");
   });
 
   it("resolves a single windows entry with no ; separator (drive-letter pattern)", async () => {
@@ -359,6 +360,26 @@ describe("resolveMaven: failure and degradation reasons", () => {
     });
     expect(neverWritten).toEqual({ ok: false, artifacts: [], reason: "no-classpath" });
   });
+
+  it("reports classpath-not-in-m2-layout when entries exist but none match the m2 anchor", async () => {
+    const projectRoot = scratch();
+    const relocated = [
+      "/opt/custom/repo/org/a/b/1.0/b-1.0.jar",
+      "/opt/custom/repo/com/example/lib/2.0/lib-2.0.jar",
+    ].join(":");
+
+    const resolution = await resolveMaven(projectRoot, {
+      exec: cpExec(relocated).exec,
+      mvnOnPath: PROBE_FOUND,
+    });
+
+    // a relocated localRepository is a named failure, not ok-with-zero-artifacts
+    expect(resolution).toEqual({
+      ok: false,
+      artifacts: [],
+      reason: "mvn-failed:classpath-not-in-m2-layout",
+    });
+  });
 });
 
 describe("resolveMaven: wrapper selection", () => {
@@ -374,7 +395,8 @@ describe("resolveMaven: wrapper selection", () => {
 
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe(join(projectRoot, "mvnw"));
-    expect(calls[0].args[2]).toBe("dependency:build-classpath");
+    expect(calls[0].args).toContain("--non-recursive");
+    expect(calls[0].args[3]).toBe("dependency:build-classpath");
     expect(calls[0].opts.cwd).toBe(projectRoot);
   });
 
@@ -392,7 +414,7 @@ describe("resolveMaven: wrapper selection", () => {
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe("cmd");
     expect(calls[0].args.slice(0, 2)).toEqual(["/c", join(projectRoot, "mvnw.cmd")]);
-    expect(calls[0].args.slice(2)[2]).toBe("dependency:build-classpath");
+    expect(calls[0].args.slice(2)[3]).toBe("dependency:build-classpath");
   });
 
   it("falls back to bare mvn through cmd on win32 when no wrapper exists", async () => {
@@ -406,8 +428,8 @@ describe("resolveMaven: wrapper selection", () => {
 
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe("cmd");
-    expect(calls[0].args.slice(0, 5)).toEqual(["/c", "mvn", "-B", "-q", "dependency:build-classpath"]);
-    expect(calls[0].args).toHaveLength(6);
+    expect(calls[0].args.slice(0, 6)).toEqual(["/c", "mvn", "-B", "-q", "--non-recursive", "dependency:build-classpath"]);
+    expect(calls[0].args).toHaveLength(7);
     const bareOut = outputFileOf(calls[0]);
     expect(bareOut.startsWith(join(tmpdir(), "jarpeek-mvn-"))).toBe(true);
     expect(bareOut.endsWith("cp-0.txt")).toBe(true);
@@ -471,6 +493,36 @@ describe("resolveMaven: multi-module", () => {
     // spring + junit once, not three entries
     expect(resolution.artifacts).toHaveLength(2);
     expect(resolution.artifacts.filter((a) => a.coordinates === JUNIT)).toHaveLength(1);
+  });
+
+  it("discovers nested modules (root/a/a1) recursively and every run is --non-recursive", async () => {
+    const projectRoot = scratch();
+    const a1 = join(projectRoot, "a", "a1");
+    mkdirSync(a1, { recursive: true });
+    writeFileSync(join(projectRoot, "pom.xml"), "<project/>");
+    writeFileSync(join(a1, "pom.xml"), "<project/>");
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const nestedCp = m2Jar(m2, "com", "example", "nested", "3.0", "nested-3.0.jar");
+    const { exec, calls } = perModuleCpExec([
+      { cwd: projectRoot, content: rootCp },
+      { cwd: a1, content: nestedCp },
+    ]);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    const buildClasspathCalls = calls.filter((c) => c.args.includes("dependency:build-classpath"));
+    expect(buildClasspathCalls).toHaveLength(2);
+    // both runs pinned to their own module: no reactor-wide overwrite
+    expect(buildClasspathCalls.every((c) => c.args.includes("--non-recursive"))).toBe(true);
+    expect(buildClasspathCalls.map((c) => c.opts.cwd).sort()).toEqual([a1, projectRoot].sort());
+    // the nested module's unique dependency is captured AND the root's survive
+    expect(resolution.artifacts).toHaveLength(3);
+    const lookup = indexBy(resolution.artifacts);
+    expect(lookup(SPRING_TX)).toBeDefined();
+    expect(lookup(JUNIT)).toBeDefined();
+    expect(lookup("com.example:nested:3.0")).toBeDefined();
   });
 
   it("ignores a submodule whose build-classpath output is empty", async () => {

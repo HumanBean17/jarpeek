@@ -88,6 +88,20 @@ function stderrTail(stderr: string): string {
 }
 
 /**
+ * Diagnosis text for a failed gradle run, never empty: the stderr tail, else
+ * the stdout tail (a quiet `-q` run may print its only error there), else a
+ * marker naming the exit code — a signal kill says `(killed)` since it has
+ * none. Mirrors `failureDetail` in the Maven resolver.
+ */
+function failureDetail(result: RunResult): string {
+  const tail = stderrTail(result.stderr);
+  if (tail.length > 0) return tail;
+  const out = stderrTail(result.stdout);
+  if (out.length > 0) return out;
+  return result.code === null ? "(killed)" : `exit ${result.code} (no output)`;
+}
+
+/**
  * Dump document → artifacts, deduplicated by coordinates with the first
  * configuration in document order winning (compileClasspath precedes
  * runtimeClasspath in the init script's iteration, so main-compile labels
@@ -225,9 +239,7 @@ export async function resolveGradle(
   }
 
   if (result.code !== 0) {
-    let tail = stderrTail(result.stderr);
-    if (tail.length === 0 && result.code === null) tail = "(killed)"; // signal-killed, no diagnosis
-    return { ok: false, artifacts: [], reason: `gradle-failed:${tail}` };
+    return { ok: false, artifacts: [], reason: `gradle-failed:${failureDetail(result)}` };
   }
 
   const payload = extractBetweenSentinels(result.stdout);

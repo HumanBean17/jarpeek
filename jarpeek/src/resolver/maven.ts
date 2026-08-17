@@ -174,21 +174,30 @@ function sourcesSibling(raw: string, artifact: string, version: string): string 
 }
 
 /**
- * Depth-1 submodule directories (immediate children holding a pom.xml),
+ * Module directories under the root: every directory holding its own
+ * pom.xml, discovered recursively to depth ≤ 3 so nested reactors
+ * (`root/a/a1`) resolve too. Dot-directories are skipped; the list is
  * lexically sorted for deterministic invocation order.
  */
-function submodules(projectRoot: string): string[] {
-  let entries;
-  try {
-    entries = readdirSync(projectRoot, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return entries
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .map((entry) => join(projectRoot, entry.name))
-    .filter((dir) => existsSync(join(dir, "pom.xml")))
-    .sort();
+function moduleDirs(projectRoot: string): string[] {
+  const found: string[] = [];
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 3) return;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+      const child = join(dir, entry.name);
+      if (existsSync(join(child, "pom.xml"))) found.push(child);
+      walk(child, depth + 1);
+    }
+  };
+  walk(projectRoot, 1);
+  return found.sort();
 }
 
 /**
@@ -196,7 +205,10 @@ function submodules(projectRoot: string): string[] {
  * coordinates with the first module in run order winning. An output that is
  * missing or empty contributes nothing; only when every output was empty is
  * the resolution a `no-classpath` failure (the root POM may legitimately be
- * a dep-less aggregator whose submodules carry everything).
+ * a dep-less aggregator whose submodules carry everything). Outputs that
+ * carried entries but not one m2-layout path mean the local repository was
+ * relocated out of `~/.m2/repository` — reported as a named failure rather
+ * than a misleading empty success.
  */
 function parseOutputs(outputs: string[], m2Dir: string): MavenResolution {
   const byCoordinates = new Map<string, DependencyArtifact>();
@@ -228,17 +240,21 @@ function parseOutputs(outputs: string[], m2Dir: string): MavenResolution {
     }
   }
   if (!sawContent) return { ok: false, artifacts: [], reason: "no-classpath" };
+  if (byCoordinates.size === 0) {
+    return { ok: false, artifacts: [], reason: "mvn-failed:classpath-not-in-m2-layout" };
+  }
   return { ok: true, artifacts: [...byCoordinates.values()] };
 }
 
 /**
  * Resolve a Maven project's dependencies. The build-classpath goal runs once
- * at the project root plus once per depth-1 submodule (per-module output
- * files, merged by coordinates); `dependency:sources` then runs once at the
- * root — enough for a reactor — with its exit code ignored. Every recognized
- * failure mode — no mvn anywhere, timeout, spawn failure, non-zero exit,
- * empty classpath — becomes `{ ok: false, reason }`; an unexpected error
- * thrown by `exec` itself propagates to the caller.
+ * at the project root plus once per module directory (recursive to depth 3),
+ * each `--non-recursive` with its own output file and merged by coordinates;
+ * `dependency:sources` then runs once at the root — enough for a reactor —
+ * with its exit code ignored. Every recognized failure mode — no mvn
+ * anywhere, timeout, spawn failure, non-zero exit, empty classpath, or a
+ * classpath outside the m2 layout — becomes `{ ok: false, reason }`; an
+ * unexpected error thrown by `exec` itself propagates to the caller.
  */
 export async function resolveMaven(
   projectRoot: string,
@@ -256,13 +272,17 @@ export async function resolveMaven(
   const scratch = mkdtempSync(join(tmpdir(), "jarpeek-mvn-"));
   const outputs: string[] = [];
   try {
-    for (const [index, moduleDir] of [projectRoot, ...submodules(projectRoot)].entries()) {
+    // every invocation is --non-recursive with its own output file: a root
+    // reactor run would overwrite the absolute outputFile per module, so the
+    // surviving file would hold only the LAST module's classpath
+    for (const [index, moduleDir] of [projectRoot, ...moduleDirs(projectRoot)].entries()) {
       const output = join(scratch, `cp-${index}.txt`);
       outputs.push(output);
       const args = [
         ...selected.preArgs,
         "-B",
         "-q",
+        "--non-recursive",
         "dependency:build-classpath",
         `-Dmdep.outputFile=${output}`,
       ];

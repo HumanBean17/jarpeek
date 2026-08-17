@@ -51,6 +51,21 @@ export interface DecompileOptions {
 let resolvedJarPath: string | undefined;
 
 /**
+ * The `java` to run: `$JAVA_HOME/bin/java` when JAVA_HOME points at a real
+ * install (a JDK may not be on PATH at all), else the PATH `java`. Env-only
+ * — when neither resolves the spawn itself fails and the caller degrades to
+ * `no-jvm`, which is the honest answer.
+ */
+export function javaCommand(): string {
+  const home = process.env.JAVA_HOME;
+  if (home !== undefined && home !== "") {
+    const exe = join(home, "bin", process.platform === "win32" ? "java.exe" : "java");
+    if (existsSync(exe)) return exe;
+  }
+  return "java";
+}
+
+/**
  * Absolute path to the vendored CFR jar. The package root is found by walking
  * up from this module until a directory containing `vendor/` appears, so the
  * same code resolves from both `src/decompile` (tsx/vitest) and
@@ -182,7 +197,7 @@ export async function decompileClass(
 
       let run: RunResult;
       try {
-        run = await exec("java", ["-jar", cfrJarPath(), classFile, "--silent", "true"], {
+        run = await exec(javaCommand(), ["-jar", cfrJarPath(), classFile, "--silent", "true"], {
           timeoutMs: CFR_TIMEOUT_MS,
         });
       } catch (e) {

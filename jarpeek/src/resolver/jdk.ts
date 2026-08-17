@@ -31,7 +31,21 @@ const VERSION_UNKNOWN = "jdk-version-unknown";
 const SRC_ZIP_MISSING = "src.zip missing; using jimage-extracted class files (signatures only)";
 const JIMAGE_FAILED = "jimage extract failed";
 
-const defaultRunJimage = (args: string[], o: object = {}): Promise<RunResult> => runWithTimeout("jimage", args, o);
+const defaultRunJimage =
+  (command: string) =>
+  (args: string[], o: object = {}): Promise<RunResult> =>
+    runWithTimeout(command, args, o);
+
+/**
+ * The jimage to run: `<javaHome>/bin/jimage` when the install carries it
+ * (a JDK on JAVA_HOME need not be on PATH), else the PATH `jimage`.
+ */
+function jimageCommand(javaHome: string): string {
+  const exe = join(javaHome, "bin", process.platform === "win32" ? "jimage.exe" : "jimage");
+  if (existsSync(exe)) return exe;
+  const bare = join(javaHome, "bin", "jimage");
+  return existsSync(bare) ? bare : "jimage";
+}
 
 /** `JAVA_VERSION="25.0.2"` → `25.0.2`; null when the file or line is absent. */
 function versionFromRelease(javaHome: string): string | null {
@@ -82,7 +96,7 @@ export async function resolveJdk(opts: ResolveJdkOptions = {}): Promise<ResolveJ
   const warnings = [...baseWarnings, SRC_ZIP_MISSING];
   const extractDir = join(opts.cacheDir ?? ensureCacheDir(), "v1", "jdk-modules", version);
   if (!existsSync(extractDir)) {
-    const runJimage = opts.runJimage ?? defaultRunJimage;
+    const runJimage = opts.runJimage ?? defaultRunJimage(jimageCommand(javaHome));
     try {
       const result = await runJimage(["extract", "--dir", extractDir, join(javaHome, "lib", "modules")]);
       if (result.code !== 0 || !existsSync(extractDir)) {

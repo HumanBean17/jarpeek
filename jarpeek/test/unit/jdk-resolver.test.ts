@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { resolveJdk } from "../../src/resolver/jdk.js";
@@ -90,6 +90,25 @@ describe("resolveJdk", () => {
     expect(seenArgs).toHaveLength(1);
     expect(second.artifact?.classesDir).toBe(extractDir);
     expect(second.artifact?.provenance).toBe("signature");
+  });
+
+  it("prefers <javaHome>/bin/jimage when the install carries it", async () => {
+    const { javaHome, cacheDir } = scratch();
+    writeRelease(javaHome, "25");
+    const bin = join(javaHome, "bin");
+    mkdirSync(bin, { recursive: true });
+    const extractDir = join(cacheDir, "v1", "jdk-modules", "25");
+    // an executable stand-in: its side effect proves the javaHome-relative
+    // binary was the one spawned (the PATH jimage would extract elsewhere)
+    writeFileSync(
+      join(bin, "jimage"),
+      `#!/bin/sh\nmkdir -p "${extractDir}"\n`,
+    );
+    chmodSync(join(bin, "jimage"), 0o755);
+
+    const { artifact } = await resolveJdk({ javaHome, cacheDir });
+    expect(artifact?.classesDir).toBe(extractDir);
+    expect(artifact?.provenance).toBe("signature");
   });
 
   it("returns null with a warning when jimage exits non-zero", async () => {

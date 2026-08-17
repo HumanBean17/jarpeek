@@ -192,7 +192,12 @@ function paramMatches(param: string, written: string): boolean {
 function receiverMatches(sel: Selector, rec: Declaration): boolean {
   if (sel.receiver === undefined) return true;
   if (rec.receiverType === undefined) return false;
-  return normalizeWritten(rec.receiverType).split(".").pop() === sel.receiver;
+  // simple-to-simple: the selector's receiver may be spelled fully qualified
+  // (`#a.b.C.run`), and so may the record's receiverType — compare the last
+  // `.`-segment of both
+  return (
+    normalizeWritten(rec.receiverType).split(".").pop() === sel.receiver.split(".").pop()
+  );
 }
 
 /**

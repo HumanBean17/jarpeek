@@ -431,3 +431,50 @@ describe("round-trip through the sources jar", () => {
     expect(jarRun.signature).toBe("public Object run(String,int)");
   });
 });
+
+describe("multi-declarator fields and interface-nested types (synthetic)", () => {
+  const source = [
+    "package p;",
+    "public interface Contract {",
+    "    class Impl implements Contract {",
+    "        int a, b = 2, c;",
+    "        void go() { }",
+    "    }",
+    "    interface Inner {}",
+    "    enum Kind { X }",
+    "}",
+  ].join("\n");
+  const parsed = parseJavaSource(source, "p/Contract.java");
+  const contract = classByFqn(parsed, "p.Contract");
+  const impl = classByFqn(parsed, "p.Contract.Impl");
+
+  it("each declarator of `int a, b = 2, c;` ends on its own terminator line", () => {
+    expect(parsed.diagnostics).toEqual([]);
+    const a = member(impl, "a");
+    const b = member(impl, "b");
+    const c = member(impl, "c");
+    // all on line 4; none of them may run to end of file (line 9)
+    expect(a.lineEnd).toBe(4);
+    expect(b.lineEnd).toBe(4);
+    expect(c.lineEnd).toBe(4);
+    expect(a.lineEnd).not.toBe(parsed.classes.length + 10);
+  });
+
+  it("types nested in an interface are implicitly static (javac ACC_STATIC parity)", () => {
+    expect(member(contract, "Impl").static).toBe(true);
+    expect(member(contract, "Inner").static).toBe(true);
+    expect(member(contract, "Kind").static).toBe(true);
+    expect(impl.static).toBe(true);
+    expect(classByFqn(parsed, "p.Contract.Inner").static).toBe(true);
+  });
+
+  it("an explicitly static nested class in a class is static; a plain one is not", () => {
+    const outer = parseJavaSource(
+      ["package p;", "public class Plain {", "    static class S {}", "    class I {}", "}"].join("\n"),
+      "p/Plain.java",
+    );
+    const plain = classByFqn(outer, "p.Plain");
+    expect(member(plain, "S").static).toBe(true);
+    expect(member(plain, "I").static).toBe(false);
+  });
+});

@@ -132,6 +132,16 @@ describe("matchDeclarations", () => {
     expect(matched("#Baz.bar")).toEqual([]);
   });
 
+  it("a dotted receiver selector matches on the receiver's simple name", () => {
+    // records whose receiverType is spelled fully qualified or simply
+    const qualified = member("run", "fun a.b.C.run(String)", { receiverType: "a.b.C" });
+    const simple = member("run", "fun C.run(String)", { receiverType: "C" });
+    const records = [qualified, simple];
+    expect(matchDeclarations(records, parseSelector("#a.b.C.run"))).toHaveLength(2);
+    expect(matchDeclarations(records, parseSelector("#C.run"))).toHaveLength(2);
+    expect(matchDeclarations(records, parseSelector("#x.y.Z.run"))).toEqual([]);
+  });
+
   it("a bare name also matches fields by name", () => {
     expect(matched("#NAME").map((r) => r.kind)).toEqual(["field"]);
   });
