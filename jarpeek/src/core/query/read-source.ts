@@ -12,9 +12,10 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Provenance } from "../types.js";
-import { decompileClass } from "../../decompile/cfr.js";
+import type { Declaration, DependencyArtifact, Provenance } from "../types.js";
+import { decompileClass, type DecompileResult } from "../../decompile/cfr.js";
 import { listZipEntries, readTextEntry } from "../../parse/zip.js";
+import { runWithTimeout } from "../../util/exec.js";
 import { sliceLines, splitLines } from "../../util/lines.js";
 import type { QueryContext } from "./context.js";
 import {
@@ -23,6 +24,7 @@ import {
   orderedLookup,
   outline,
   servedStale,
+  type ArtifactHit,
   type OutlineResult,
 } from "./outline.js";
 
@@ -66,7 +68,11 @@ export interface LinesReadResult {
 
 export type ReadSourceResult = ({ mode: "outline" } & OutlineResult) | FullReadResult | LinesReadResult;
 
-interface ResolvedContent {
+export interface ResolvedContent {
+  /** Winner artifact metadata (readMember derives degradation reasons from it). */
+  meta: DependencyArtifact;
+  /** The winner's records declaring `fqn` (class row plus members). */
+  records: Declaration[];
   coordinates: string;
   file: string;
   provenance: Provenance;
@@ -74,14 +80,31 @@ interface ResolvedContent {
   stale: boolean;
   alternatives: Array<{ coordinates: string }>;
   degraded: string[];
+  /** Raw outcome when a decompile was attempted — present even when it degraded. */
+  decompile?: DecompileResult;
+  /** The header note embedded in a signature fallback's content. */
+  signatureNote?: string;
+}
+
+export interface ResolveContentOptions {
+  /** Injectable exec (tests); threaded to the decompiler only. */
+  exec?: typeof runWithTimeout;
 }
 
 const JDK_NOTE = "signatures only (jdk: decompilation is out of scope)";
 
-/** The winner's best whole-file source text, with the provenance it came from. */
-async function resolveContent(ctx: QueryContext, fqn: string): Promise<ResolvedContent> {
+/**
+ * The winner's best whole-file source text, with the provenance it came from.
+ * Exported for readMember, which reuses the whole resolution ladder.
+ */
+export async function resolveContent(
+  ctx: QueryContext,
+  fqn: string,
+  opts: ResolveContentOptions = {},
+): Promise<ResolvedContent> {
   await ctx.ensureReady();
-  const { winner, alternatives } = await orderedLookup(ctx, fqn);
+  const { winner, alternatives }: { winner: ArtifactHit; alternatives: Array<{ coordinates: string }> } =
+    await orderedLookup(ctx, fqn);
   const meta = winner.meta;
   const classRecord = winner.records.find((record) => isClassKind(record.kind));
   const internalName = fqn.replaceAll(".", "/");
@@ -90,6 +113,8 @@ async function resolveContent(ctx: QueryContext, fqn: string): Promise<ResolvedC
   const degraded = mergedDegraded(ctx, stale ? ["stale index served"] : []);
 
   const resolved = (file: string, provenance: Provenance, content: string): ResolvedContent => ({
+    meta,
+    records: winner.records,
     coordinates: meta.coordinates,
     file,
     provenance,
@@ -99,11 +124,13 @@ async function resolveContent(ctx: QueryContext, fqn: string): Promise<ResolvedC
     degraded,
   });
 
-  const signatureFallback = (note: string): ResolvedContent => ({
+  const signatureFallback = (note: string, extra: Partial<ResolvedContent> = {}): ResolvedContent => ({
     ...resolved(classRecord?.file ?? `${internalName}.java`, "signature", [
       note,
       ...winner.records.map((record) => record.signature),
     ].join("\n")),
+    signatureNote: note,
+    ...extra,
   });
 
   // 1. module sourceDir: the record's file is projectRoot-relative
@@ -132,12 +159,14 @@ async function resolveContent(ctx: QueryContext, fqn: string): Promise<ResolvedC
 
   // 3. binary jar: whole-class decompile (skipped where decompilation is out of scope)
   if (meta.binaryJar && !meta.noDecompile) {
-    const result = await decompileClass(ctx.cacheDir, meta.coordinates, meta.binaryJar, internalName);
+    const result = await decompileClass(ctx.cacheDir, meta.coordinates, meta.binaryJar, internalName, {
+      exec: opts.exec,
+    });
     if (result.provenance === "decompiled") {
       return resolved(`${internalName}.java (decompiled)`, "decompiled", result.source);
     }
     const detail = "reason" in result ? `${result.reason}${result.detail ? `: ${result.detail}` : ""}` : "unknown";
-    return signatureFallback(`signatures only (decompilation failed: ${detail})`);
+    return signatureFallback(`signatures only (decompilation failed: ${detail})`, { decompile: result });
   }
 
   // 4. nothing better than signatures (JDK classesDir, vanished sources, ...)
