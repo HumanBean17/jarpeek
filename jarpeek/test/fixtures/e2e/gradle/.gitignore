@@ -1,0 +1,4 @@
+# jarpeek resolver + Gradle run artifacts (never committed)
+.jarpeek/
+.gradle/
+build/
