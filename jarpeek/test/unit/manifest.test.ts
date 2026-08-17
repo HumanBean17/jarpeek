@@ -74,6 +74,23 @@ describe("computeDependencySetHash", () => {
     }
   });
 
+  it("changes on a new submodule build.gradle.kts (Gradle multi-module)", async () => {
+    const root = tmpProjectRoot();
+    try {
+      const before = await computeDependencySetHash(root);
+
+      mkdirSync(join(root, "sub"));
+      writeFileSync(join(root, "sub", "build.gradle.kts"), "plugins { java }\n");
+      const withSubmodule = await computeDependencySetHash(root);
+      expect(withSubmodule).not.toBe(before);
+
+      touchPlusOneSecond(join(root, "sub", "build.gradle.kts"));
+      expect(await computeDependencySetHash(root)).not.toBe(withSubmodule);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("ignores pom.xml deeper than immediate subdirectories", async () => {
     const root = tmpProjectRoot();
     try {

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -368,5 +368,38 @@ describe("indexArtifacts", () => {
     expect(ctx.progress.length).toBeGreaterThanOrEqual(8);
     expect(ctx.progress.some((l) => /^indexing com\.example:demo-lib:1\.0\.0 \(source, [1-9]\d* files\)$/.test(l))).toBe(true);
     expect(ctx.progress.some((l) => l.startsWith("skipping com.example:nothing:1.0.0"))).toBe(true);
+  });
+
+  it("an unreadable sourceDir subdirectory warns and the walk continues", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-walkfail-project-"));
+    const cacheRoot = mkdtempSync(join(tmpdir(), "jarpeek-walkfail-cache-"));
+    const sourceDir = join(projectRoot, "unwritable-lib");
+    const locked = join(sourceDir, "locked");
+    mkdirSync(join(sourceDir, "com", "ok"), { recursive: true });
+    mkdirSync(locked, { recursive: true });
+    writeFileSync(join(sourceDir, "com", "ok", "Fine.java"), "package com.ok;\n\npublic class Fine {}\n");
+    writeFileSync(join(locked, "Trapped.java"), "package locked;\n\npublic class Trapped {}\n");
+    chmodSync(locked, 0o000);
+    try {
+      const result = await indexArtifacts(projectRoot, [
+        {
+          coordinates: "com.example:unwritable-lib:1.0.0",
+          kind: "external",
+          sourceDir,
+          provenance: "source",
+          warnings: [],
+        },
+      ], { store: new IndexStore(cacheRoot) });
+
+      expect(result.indexed).toEqual(["com.example:unwritable-lib:1.0.0"]);
+      expect(result.warnings.some((w) => w.startsWith("failed to walk locked:"))).toBe(true);
+      const store = new IndexStore(cacheRoot);
+      const fine = await store.lookup("com.ok.Fine");
+      expect(fine.map((h) => h.meta.coordinates)).toEqual(["com.example:unwritable-lib:1.0.0"]);
+    } finally {
+      chmodSync(locked, 0o755); // restore so rmSync can remove it
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(cacheRoot, { recursive: true, force: true });
+    }
   });
 });

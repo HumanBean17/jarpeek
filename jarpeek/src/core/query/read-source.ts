@@ -25,6 +25,7 @@ import {
   outline,
   servedStale,
   type ArtifactHit,
+  type OrderedLookup,
   type OutlineResult,
 } from "./outline.js";
 
@@ -103,14 +104,14 @@ export async function resolveContent(
   opts: ResolveContentOptions = {},
 ): Promise<ResolvedContent> {
   await ctx.ensureReady();
-  const { winner, alternatives }: { winner: ArtifactHit; alternatives: Array<{ coordinates: string }> } =
+  const { winner, alternatives, degraded: lookupDegraded }: OrderedLookup =
     await orderedLookup(ctx, fqn);
   const meta = winner.meta;
   const classRecord = winner.records.find((record) => isClassKind(record.kind));
   const internalName = fqn.replaceAll(".", "/");
   const entryPath = classRecord?.file ?? `${internalName}.java`;
   const stale = await servedStale(ctx);
-  const degraded = mergedDegraded(ctx, stale ? ["stale index served"] : []);
+  const degraded = mergedDegraded(ctx, [...(stale ? ["stale index served"] : []), ...lookupDegraded]);
 
   const resolved = (file: string, provenance: Provenance, content: string): ResolvedContent => ({
     meta,

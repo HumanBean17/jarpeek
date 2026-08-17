@@ -2,13 +2,17 @@
  * searchSymbols: symbol search across every indexed artifact in one
  * streaming pass. Ranking is tiered like findClass — exact selector, then
  * prefix, then fuzzy subsequence — so a precise query surfaces the declared
- * member first and a loose one still finds it. Signatures are truncated to
- * keep rows cheap; the kind filter runs in flight, before any tiering.
+ * member first and a loose one still finds it. The exact and prefix tiers
+ * are collected fully; the fuzzy tier flows through a bounded keep-`limit`
+ * collector (tiers dominate ranking, so the bounded top of the fuzzy bucket
+ * is provably the same top a full sort would keep). Signatures are truncated
+ * to keep rows cheap; the kind filter and the manifest scope run in flight,
+ * before any tiering.
  */
 import type { DeclKind } from "../types.js";
 import { fuzzyScore } from "../fuzzy.js";
 import type { QueryContext } from "./context.js";
-import { manifestOrder, mergedDegraded, servedStale } from "./outline.js";
+import { manifestOrder, manifestScope, mergedDegraded, servedStale } from "./outline.js";
 
 export interface SymbolRow {
   selector: string;
@@ -58,17 +62,27 @@ export async function searchSymbols(
 ): Promise<SymbolResult> {
   const limit = opts.limit ?? DEFAULT_LIMIT;
   await ctx.ensureReady();
-  const order = manifestOrder(await ctx.manifest());
+  const manifest = await ctx.manifest();
+  const order = manifestOrder(manifest);
+  // a manifest scopes the user-global cache store to this project's artifacts
+  const scope = manifestScope(manifest);
 
-  const scored: ScoredRow[] = [];
+  /** Tier 0/1: collected fully. Tier 2 lands in `fuzzy`, bounded below. */
+  const collected: ScoredRow[] = [];
+  const fuzzy: ScoredRow[] = [];
   let seq = 0;
+
+  const byRank = (a: ScoredRow, b: ScoredRow): number =>
+    b.score - a.score || a.order - b.order || a.seq - b.seq;
+
   await ctx.store.forEachRecord((record, safe) => {
     if (opts.kind !== undefined && record.kind !== opts.kind) return;
     const score = fuzzyScore(query, record.selector);
     if (score === null) return;
-    const tier = record.selector === query ? 0 : record.selector.startsWith(query) ? 1 : 2;
     const coordinates = decodeURIComponent(safe);
-    scored.push({
+    if (scope !== null && !scope.has(coordinates)) return;
+    const tier = record.selector === query ? 0 : record.selector.startsWith(query) ? 1 : 2;
+    const scored: ScoredRow = {
       row: {
         selector: record.selector,
         fqn: record.fqn,
@@ -80,10 +94,21 @@ export async function searchSymbols(
       score,
       order: order.get(coordinates) ?? UNORDERED,
       seq: seq++,
-    });
+    };
+    if (tier < 2) {
+      collected.push(scored);
+    } else {
+      fuzzy.push(scored);
+      if (fuzzy.length > Math.max(64, limit * 8)) {
+        // bound memory: the survivors are provably ahead of everything dropped
+        fuzzy.sort(byRank);
+        fuzzy.length = limit;
+      }
+    }
   });
 
-  scored.sort(
+  fuzzy.sort(byRank);
+  const scored = [...collected, ...fuzzy].sort(
     (a, b) => a.tier - b.tier || b.score - a.score || a.order - b.order || a.seq - b.seq,
   );
 

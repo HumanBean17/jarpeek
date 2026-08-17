@@ -42,6 +42,8 @@ export interface ArtifactHit {
 export interface OrderedLookup {
   winner: ArtifactHit;
   alternatives: Array<{ coordinates: string }>;
+  /** Set when the winner came from shards the manifest no longer lists. */
+  degraded: string[];
 }
 
 export interface OutlineOptions {
@@ -62,6 +64,9 @@ export interface OutlineResult {
 
 const UNORDERED = Number.MAX_SAFE_INTEGER;
 
+/** Warning carried when a lookup had to be answered from out-of-manifest shards. */
+export const OUT_OF_MANIFEST_WARNING = "artifact no longer in dependency set";
+
 /** coordinates → position in the manifest's artifacts array; first occurrence wins. */
 export function manifestOrder(manifest: Manifest | null): Map<string, number> {
   const order = new Map<string, number>();
@@ -72,17 +77,35 @@ export function manifestOrder(manifest: Manifest | null): Map<string, number> {
 }
 
 /**
- * All shards declaring `fqn`, ordered by manifest artifacts position (shards
- * the manifest does not know — e.g. manually injected ones — sort last,
- * keeping lookup order). Empty → LookupMissError.
+ * The manifest's artifact coordinates as a membership filter, or null when the
+ * manifest is absent or lists no artifacts — the cache store is user-global
+ * and never pruned, so with a manifest present queries serve only its
+ * artifacts; without one there is nothing to scope to and every shard is fair
+ * game.
+ */
+export function manifestScope(manifest: Manifest | null): Set<string> | null {
+  if ((manifest?.artifacts.length ?? 0) === 0) return null;
+  return new Set(manifest!.artifacts.map((artifact) => artifact.coordinates));
+}
+
+/**
+ * All shards declaring `fqn`, ordered by manifest artifacts position. When a
+ * manifest scopes the index, shards it does not list are excluded — unless
+ * they are the ONLY answer, in which case they are served with the
+ * `OUT_OF_MANIFEST_WARNING` degradation (the jars still answer; the flag says
+ * the dependency set moved on). Empty → LookupMissError.
  */
 export async function orderedLookup(ctx: QueryContext, fqn: string): Promise<OrderedLookup> {
   const hits = await ctx.store.lookup(fqn);
   if (hits.length === 0) {
     throw new LookupMissError(fqn);
   }
-  const order = manifestOrder(await ctx.manifest());
-  const ranked = hits
+  const manifest = await ctx.manifest();
+  const order = manifestOrder(manifest);
+  const scope = manifestScope(manifest);
+  const scoped = scope === null ? hits : hits.filter((hit) => scope.has(hit.meta.coordinates));
+  const served = scoped.length > 0 ? scoped : hits;
+  const ranked = served
     .map((hit, index) => ({ hit, index }))
     .sort(
       (a, b) =>
@@ -94,6 +117,7 @@ export async function orderedLookup(ctx: QueryContext, fqn: string): Promise<Ord
   return {
     winner: ranked[0]!,
     alternatives: ranked.slice(1).map((hit) => ({ coordinates: hit.meta.coordinates })),
+    degraded: scoped.length === 0 ? [OUT_OF_MANIFEST_WARNING] : [],
   };
 }
 
@@ -138,7 +162,7 @@ export async function outline(
   opts: OutlineOptions = {},
 ): Promise<OutlineResult> {
   await ctx.ensureReady();
-  const { winner, alternatives } = await orderedLookup(ctx, fqn);
+  const { winner, alternatives, degraded: lookupDegraded } = await orderedLookup(ctx, fqn);
   const rows = [...winner.records, ...(await nestedClassRows(winner, ctx, fqn))].filter(
     (row) =>
       (opts.kind === undefined || row.kind === opts.kind) &&
@@ -152,6 +176,9 @@ export async function outline(
     ...(stale ? { stale: true } : {}),
     rows,
     ...(alternatives.length > 0 ? { alternatives } : {}),
-    degraded: mergedDegraded(ctx, stale ? ["stale index served"] : []),
+    degraded: mergedDegraded(ctx, [
+      ...(stale ? ["stale index served"] : []),
+      ...lookupDegraded,
+    ]),
   };
 }

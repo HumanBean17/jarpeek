@@ -53,11 +53,12 @@ function fixtureArtifacts(): DependencyArtifact[] {
 }
 
 /** Resolvers that answer instantly: gradle serves the fixtures, no JDK side effects. */
-function fakeResolvers(): InitResolvers {
+function fakeResolvers(commandOnPathResult = true): InitResolvers {
   return {
     gradle: async () => ({ ok: true, artifacts: fixtureArtifacts() }),
     includeJdk: false,
     jdk: async () => ({ artifact: null, warnings: [] }),
+    commandOnPath: () => commandOnPathResult,
   };
 }
 
@@ -207,5 +208,27 @@ describe("non-interactive", () => {
     });
     expect(result.indexed).toBe(false);
     expect(existsSync(join(root, ".jarpeek", "manifest.json"))).toBe(false);
+  });
+});
+
+describe("command PATH check (the npx-first-run trap)", () => {
+  it("notes that the wired command is not on PATH when the probe misses", async () => {
+    const root = tmpProject();
+    const result = await runInit(root, { resolvers: fakeResolvers(false) });
+
+    expect(result.notes).toContain(
+      "'jarpeek' not on PATH — installed configs invoke it; run npm install -g jarpeek",
+    );
+  });
+
+  it("stays silent when the command is on PATH or is an explicit path", async () => {
+    const onPath = await runInit(tmpProject(), { resolvers: fakeResolvers(true) });
+    expect(onPath.notes.some((n) => n.includes("not on PATH"))).toBe(false);
+
+    const explicit = await runInit(tmpProject(), {
+      resolvers: fakeResolvers(false),
+      command: "/usr/local/bin/jarpeek",
+    });
+    expect(explicit.notes.some((n) => n.includes("not on PATH"))).toBe(false);
   });
 });

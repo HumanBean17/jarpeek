@@ -104,12 +104,26 @@ function parseSourceText(text: string, file: string): { records: Declaration[]; 
 /**
  * Collect files under `root` as `/`-separated paths relative to `root`.
  * Source walks prune build-output and VCS directory segments; class walks
- * keep everything (`build/classes/...` is a legitimate classesDir).
+ * keep everything (`build/classes/...` is a legitimate classesDir). A
+ * directory that cannot be read becomes one `failed to walk` warning and the
+ * walk continues — a bad artifact never aborts the run.
  */
-function walkFiles(root: string, keep: (name: string) => boolean, prune: boolean): string[] {
+function walkFiles(
+  root: string,
+  keep: (name: string) => boolean,
+  prune: boolean,
+  warnings: string[],
+): string[] {
   const out: string[] = [];
   const walk = (dir: string, rel: string): void => {
-    for (const item of readdirSync(dir, { withFileTypes: true })) {
+    let items;
+    try {
+      items = readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+      warnings.push(`failed to walk ${rel.length === 0 ? dir : rel}: ${(e as Error).message}`);
+      return;
+    }
+    for (const item of items) {
       const relPath = rel.length === 0 ? item.name : `${rel}/${item.name}`;
       if (item.isDirectory()) {
         if (prune && PRUNED_DIR_SEGMENTS.has(item.name)) continue;
@@ -203,7 +217,7 @@ async function indexBinaryJar(jarPath: string): Promise<BranchResult> {
 function indexClassesDir(classesDir: string): BranchResult {
   const records: Declaration[] = [];
   const warnings: string[] = [];
-  const files = walkFiles(classesDir, (name) => name.endsWith(".class"), false);
+  const files = walkFiles(classesDir, (name) => name.endsWith(".class"), false, warnings);
   for (const relPath of files) {
     if (EXCLUDED_CLASS_FILES.has(basename(relPath))) continue;
     try {
@@ -219,7 +233,7 @@ function indexClassesDir(classesDir: string): BranchResult {
 function indexSourceDir(sourceDir: string, projectRoot: string): BranchResult {
   const records: Declaration[] = [];
   const warnings: string[] = [];
-  const files = walkFiles(sourceDir, isSourceEntry, true);
+  const files = walkFiles(sourceDir, isSourceEntry, true, warnings);
   for (const relToDir of files) {
     const file = relative(projectRoot, join(sourceDir, relToDir)).replaceAll("\\", "/");
     try {

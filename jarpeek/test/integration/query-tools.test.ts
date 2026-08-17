@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -295,26 +295,30 @@ describe("searchSymbols", () => {
   });
 
   it("signatures truncate at 120 characters with an ellipsis", async () => {
-    await c.ctx.store.writeArtifact(
+    const artifact = {
+      coordinates: "com.example:big-sig:1",
+      kind: "cache-scan" as const,
+      provenance: "source" as const,
+      warnings: [],
+    };
+    await c.ctx.store.writeArtifact(artifact, [
       {
-        coordinates: "com.example:big-sig:1",
-        kind: "cache-scan",
-        provenance: "source",
-        warnings: [],
+        fqn: "com.example.bigsig.BigSig",
+        file: "x",
+        selector: "bigSignatureMethod",
+        kind: "method",
+        visibility: "public",
+        static: false,
+        deprecated: false,
+        signature: "public void bigSignatureMethod(" + "x".repeat(200) + ")",
       },
-      [
-        {
-          fqn: "com.example.bigsig.BigSig",
-          file: "x",
-          selector: "bigSignatureMethod",
-          kind: "method",
-          visibility: "public",
-          static: false,
-          deprecated: false,
-          signature: "public void bigSignatureMethod(" + "x".repeat(200) + ")",
-        },
-      ],
-    );
+    ]);
+    // search is scoped to the manifest's artifact set: register the shard there
+    const manifestPath = join(c.projectRoot, ".jarpeek", "manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { artifacts: unknown[] };
+    manifest.artifacts.push(artifact);
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
     const result = await searchSymbols(c.ctx, "bigSignatureMethod");
     expect(result.rows[0]!.signature.length).toBe(121);
     expect(result.rows[0]!.signature.endsWith("…")).toBe(true);

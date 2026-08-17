@@ -23,8 +23,9 @@ export interface Manifest {
 
 /**
  * Build files whose (size, mtime) fingerprint the resolved dependency set:
- * Gradle/Maven top-level files plus `pom.xml` in immediate subdirectories
- * (Maven multi-module reactors). Depth is capped at 2 total.
+ * Gradle/Maven top-level files plus the module build files (`pom.xml`,
+ * `build.gradle[.kts]`) in immediate subdirectories — Maven reactors and
+ * Gradle multi-module builds alike. Depth is capped at 2 total.
  */
 const ROOT_BUILD_FILES = [
   "build.gradle",
@@ -110,12 +111,17 @@ function manifestPath(projectRoot: string): string {
   return join(projectRoot, ".jarpeek", "manifest.json");
 }
 
-/** Existing build-file relpaths: the fixed root set plus `pom.xml` in each immediate subdirectory. */
+/**
+ * Existing build-file relpaths: the fixed root set plus the module build
+ * files (`pom.xml`, `build.gradle[.kts]`) in each immediate subdirectory.
+ */
 function candidateFiles(projectRoot: string): string[] {
   const candidates = new Set<string>(ROOT_BUILD_FILES);
   for (const entry of readdirSync(projectRoot, { withFileTypes: true })) {
     if (entry.isDirectory() && entry.name !== ".jarpeek") {
       candidates.add(entry.name + "/pom.xml");
+      candidates.add(entry.name + "/build.gradle");
+      candidates.add(entry.name + "/build.gradle.kts");
     }
   }
   return [...candidates].filter((relpath) => {

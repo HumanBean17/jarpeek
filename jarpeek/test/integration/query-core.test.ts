@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,19 +7,35 @@ import { openContext, type QueryContext } from "../../src/core/query/context.js"
 import { findClass } from "../../src/core/query/find-class.js";
 import { outline, LookupMissError } from "../../src/core/query/outline.js";
 import { readSource } from "../../src/core/query/read-source.js";
+import { searchSymbols } from "../../src/core/query/search-symbols.js";
 import { readManifest } from "../../src/index/manifest.js";
 import { splitLines } from "../../src/util/lines.js";
 import { readTextEntry, listZipEntries } from "../../src/parse/zip.js";
-import type { DependencyArtifact } from "../../src/core/types.js";
+import type { Declaration, DependencyArtifact } from "../../src/core/types.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
 const JARS = join(FIXTURES, "jars");
 const DEMO_SOURCES_JAR = join(JARS, "demo-lib-1.0.0-sources.jar");
 const NOSOURCES_JAR = join(JARS, "nosources-lib-1.0.0.jar");
 
+/** A minimal class record for shards written directly to the store in tests. */
+function classRecord(fqn: string, signature: string): Declaration {
+  return {
+    fqn,
+    file: `${fqn.replaceAll(".", "/")}.java`,
+    selector: fqn.slice(fqn.lastIndexOf(".") + 1),
+    kind: "class",
+    visibility: "public",
+    static: false,
+    deprecated: false,
+    signature,
+  };
+}
+
 interface Ctx {
   projectRoot: string;
   cacheDir: string;
+  dupDir: string;
   ctx: QueryContext;
   resolverCallCount: () => number;
   makeResolverThrow: () => void;
@@ -32,6 +48,15 @@ beforeAll(async () => {
   const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-query-cache-"));
   // gradle marker so the resolver facade routes to the injected fake
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+
+  // a second manifest artifact declaring the same fqn as demo-lib: colliding
+  // artifacts that the manifest KNOWS still produce winner + alternatives
+  const dupDir = mkdtempSync(join(tmpdir(), "jarpeek-query-dup-"));
+  mkdirSync(join(dupDir, "com", "example"), { recursive: true });
+  writeFileSync(
+    join(dupDir, "com", "example", "Demo.java"),
+    "package com.example;\n\npublic class Demo {}\n",
+  );
 
   const artifacts: DependencyArtifact[] = [
     {
@@ -46,6 +71,13 @@ beforeAll(async () => {
       kind: "external",
       binaryJar: NOSOURCES_JAR,
       provenance: "signature",
+      warnings: [],
+    },
+    {
+      coordinates: "com.other:dup:1",
+      kind: "external",
+      sourceDir: dupDir,
+      provenance: "source",
       warnings: [],
     },
   ];
@@ -74,6 +106,7 @@ beforeAll(async () => {
   Object.assign(c, {
     projectRoot,
     cacheDir,
+    dupDir,
     ctx,
     resolverCallCount: () => resolverCallCount,
     makeResolverThrow,
@@ -83,6 +116,7 @@ beforeAll(async () => {
 afterAll(() => {
   rmSync(c.projectRoot, { recursive: true, force: true });
   rmSync(c.cacheDir, { recursive: true, force: true });
+  rmSync(c.dupDir, { recursive: true, force: true });
 });
 
 async function demoSource(): Promise<string> {
@@ -105,6 +139,7 @@ describe("query context bootstrap", () => {
     expect(manifest!.artifacts.map((a) => a.coordinates)).toEqual([
       "com.example:demo-lib:1.0.0",
       "com.example:nosources-lib:1.0.0",
+      "com.other:dup:1",
     ]);
   });
 });
@@ -267,27 +302,9 @@ describe("readSource", () => {
 
 describe("collisions and misses", () => {
   it("manifest position wins; later shards surface as alternatives", async () => {
-    await c.ctx.store.writeArtifact(
-      {
-        coordinates: "com.other:dup:1",
-        kind: "external",
-        provenance: "signature",
-        warnings: [],
-      },
-      [
-        {
-          fqn: "com.example.Demo",
-          file: "com/example/Demo.java",
-          selector: "Demo",
-          kind: "class",
-          visibility: "public",
-          static: false,
-          deprecated: false,
-          signature: "public class Demo",
-        },
-      ],
-    );
-
+    // demo-lib and the dup artifact are both IN the manifest and both declare
+    // com.example.Demo: the earlier manifest position is the winner, the other
+    // shard surfaces as an alternative
     const result = await outline(c.ctx, "com.example.Demo");
     expect(result.coordinates).toBe("com.example:demo-lib:1.0.0");
     expect(result.alternatives).toContainEqual({ coordinates: "com.other:dup:1" });
@@ -298,6 +315,80 @@ describe("collisions and misses", () => {
     expect(err).toBeInstanceOf(LookupMissError);
     expect((err as Error).name).toBe("LookupMissError");
     expect((err as LookupMissError).fqn).toBe("com.example.Missing");
+  });
+});
+
+describe("manifest scoping (the cache store is user-global)", () => {
+  it("an fqn only in out-of-manifest shards is served by outline with a degraded warning, and excluded from findClass", async () => {
+    await c.ctx.store.writeArtifact(
+      {
+        coordinates: "com.gone:old-lib:1",
+        kind: "external",
+        provenance: "signature",
+        warnings: [],
+      },
+      [classRecord("com.gone.Old", "public class Old")],
+    );
+
+    // find_class never lies: out-of-manifest shards are not search results
+    const found = await findClass(c.ctx, "com.gone.Old");
+    expect(found.hits).toEqual([]);
+
+    // a direct lookup still answers — honestly flagged as out of the set
+    const result = await outline(c.ctx, "com.gone.Old");
+    expect(result.coordinates).toBe("com.gone:old-lib:1");
+    expect(result.rows.map((r) => r.selector)).toContain("Old");
+    expect(result.degraded).toContain("artifact no longer in dependency set");
+  });
+
+  it("an out-of-manifest shard colliding with a manifest hit is excluded from hits and alternatives", async () => {
+    await c.ctx.store.writeArtifact(
+      {
+        coordinates: "com.other:gone-dup:2",
+        kind: "external",
+        provenance: "signature",
+        warnings: [],
+      },
+      [classRecord("com.example.Demo", "public class Demo")],
+    );
+
+    const found = await findClass(c.ctx, "Demo");
+    expect(found.hits.map((h) => h.coordinates)).not.toContain("com.other:gone-dup:2");
+    expect(found.hits.map((h) => h.coordinates)).toContain("com.example:demo-lib:1.0.0");
+
+    const result = await outline(c.ctx, "com.example.Demo");
+    expect(result.coordinates).toBe("com.example:demo-lib:1.0.0");
+    expect(result.alternatives ?? []).not.toContainEqual({ coordinates: "com.other:gone-dup:2" });
+  });
+
+  it("search_symbols skips records from out-of-manifest shards", async () => {
+    await c.ctx.store.writeArtifact(
+      {
+        coordinates: "com.gone:old-lib:1",
+        kind: "external",
+        provenance: "signature",
+        warnings: [],
+      },
+      [
+        classRecord("com.gone.Old", "public class Old"),
+        {
+          ...classRecord("com.gone.Old", "public class Old"),
+          selector: "goneOnlyMember",
+          kind: "method",
+          signature: "public void goneOnlyMember()",
+        },
+      ],
+    );
+
+    const rows = await searchSymbols(c.ctx, "goneOnlyMember");
+    expect(rows.rows).toEqual([]);
+  });
+
+  it("bounded fuzzy collection keeps ranking identical to a full sort", async () => {
+    const wide = await searchSymbols(c.ctx, "e", { limit: 1000 });
+    expect(wide.rows.length).toBeGreaterThan(5);
+    const narrow = await searchSymbols(c.ctx, "e", { limit: 5 });
+    expect(narrow.rows).toEqual(wide.rows.slice(0, 5));
   });
 });
 

@@ -18,6 +18,7 @@ import { detectBuildSystems, resolveDependencies, type BuildSystem, type Resolve
 import { resolveJdk } from "../resolver/jdk.js";
 import { ensureGradleInitScript } from "../resolver/gradle-init.js";
 import { indexArtifacts } from "../index/indexer.js";
+import { commandOnPath } from "../util/path-probe.js";
 import { PRIME_CONFIG_PATH } from "../prime/command.js";
 
 /** The prompts init asks; the real implementation is @clack/prompts. */
@@ -32,6 +33,8 @@ export interface InitResolvers extends ResolveDependenciesOptions {
   detectBuildSystems?: typeof detectBuildSystems;
   ensureGradleInitScript?: typeof ensureGradleInitScript;
   indexArtifacts?: typeof indexArtifacts;
+  /** PATH probe for the wired command; defaults to the real one. */
+  commandOnPath?: typeof commandOnPath;
 }
 
 export interface InitOptions {
@@ -55,6 +58,9 @@ export interface InitResult {
 }
 
 const NOTE_NON_INTERACTIVE = "non-interactive: defaults applied";
+/** The npx trap: configs invoke `jarpeek`, which only exists once installed. */
+const NOTE_NOT_ON_PATH = (command: string): string =>
+  `'${command}' not on PATH — installed configs invoke it; run npm install -g jarpeek`;
 
 /** The @clack/prompts adapter; Ctrl-C at any prompt exits cleanly. */
 function clackPromptIo(): PromptIo {
@@ -184,6 +190,14 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
     wired.push({ harness: id, mode, targets: wiringTargets(descriptor, projectRoot, mode) });
   }
   if (mode === "mcp") await writePrimeMode(projectRoot, "mcp");
+
+  // the configs invoke the command by bare name: if it is not on PATH the
+  // wiring is dead on arrival (the classic npx-first-run trap)
+  const command = opts.command ?? "jarpeek";
+  const onPath = resolvers.commandOnPath ?? commandOnPath;
+  if (!/[\\/]/.test(command) && !onPath(command)) {
+    notes.push(NOTE_NOT_ON_PATH(command));
+  }
 
   if (await ensureGitignoreJarpeek(projectRoot)) notes.push("added .jarpeek/ to .gitignore");
   if (buildSystems.includes("gradle")) {

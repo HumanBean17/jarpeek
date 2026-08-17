@@ -144,7 +144,11 @@ export async function wireMcp(
   return { target, changed };
 }
 
-/** Read a JSON object file; missing → {}; unparseable → throw (never clobber). */
+/**
+ * Read a JSON object file; missing → {}; unparseable or not an object
+ * (scalar/array/null) → throw — the merge path must never clobber a file it
+ * could not faithfully round-trip.
+ */
 async function readJson(path: string): Promise<Record<string, unknown>> {
   let text: string;
   try {
@@ -158,7 +162,10 @@ async function readJson(path: string): Promise<Record<string, unknown>> {
   } catch (e) {
     throw new Error(`${path} is not valid JSON; refusing to overwrite (${(e as Error).message})`);
   }
-  return isObject(parsed) ? parsed : {};
+  if (!isObject(parsed) || Array.isArray(parsed)) {
+    throw new Error(`${path} is not a JSON object; refusing to overwrite`);
+  }
+  return parsed;
 }
 
 async function readTextOrEmpty(path: string): Promise<string> {

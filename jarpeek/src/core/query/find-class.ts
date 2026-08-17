@@ -7,11 +7,14 @@
  * bounded collector that keeps at most a small multiple of `limit` entries
  * and sorts once at the end. Hits carry the artifact's coordinates/version/
  * provenance, ordered by the manifest's artifacts position within a tier.
+ * When a manifest scopes the index, records of shards it does not list are
+ * skipped in flight — the store is user-global, so unscoped answers would be
+ * other projects' (or stale) dependencies.
  */
 import type { ClassHit, DeclKind, Provenance } from "../types.js";
 import { fuzzyScore } from "../fuzzy.js";
 import type { QueryContext } from "./context.js";
-import { isClassKind, manifestOrder, mergedDegraded, servedStale } from "./outline.js";
+import { isClassKind, manifestOrder, manifestScope, mergedDegraded, servedStale } from "./outline.js";
 
 export interface FindClassOptions {
   limit?: number;
@@ -52,6 +55,7 @@ async function collectCandidates(
   query: string,
   limit: number,
   order: Map<string, number>,
+  scope: Set<string> | null,
 ): Promise<Candidate[][]> {
   const exact = new Map<string, Candidate>();
   const suffix = new Map<string, Candidate>();
@@ -73,6 +77,10 @@ async function collectCandidates(
     const fqn = record.fqn;
     const simpleName = record.selector || fqn.slice(fqn.lastIndexOf(".") + 1);
     const coordinates = decodeURIComponent(safe);
+    // a manifest scopes the (user-global, never pruned) cache store: shards
+    // it does not list — stale dep versions, other projects' artifacts —
+    // are not this project's search results
+    if (scope !== null && !scope.has(coordinates)) return;
     const key = `${coordinates} ${fqn}`;
     const seqNum = seq++;
 
@@ -116,15 +124,16 @@ export async function findClass(
   const limit = opts.limit ?? 20;
   await ctx.ensureReady();
 
-  // read once: tier ordering, fuzzy pruning, and provenance all use it
+  // read once: tier ordering, fuzzy pruning, scoping, and provenance all use it
   const manifest = await ctx.manifest();
   const order = manifestOrder(manifest);
+  const scope = manifestScope(manifest);
   const provenanceByCoordinates = new Map<string, Provenance>();
   for (const artifact of manifest?.artifacts ?? []) {
     provenanceByCoordinates.set(artifact.coordinates, artifact.provenance);
   }
 
-  const tiers = await collectCandidates(ctx, query, limit, order);
+  const tiers = await collectCandidates(ctx, query, limit, order, scope);
 
   // shards the manifest does not list (e.g. manually injected): one lookup
   // per distinct fqn recovers their shard metadata

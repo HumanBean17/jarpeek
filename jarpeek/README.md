@@ -28,13 +28,18 @@ harnesses that support it) and a plain CLI (for everything else).
 ## Install
 
 ```
-npx jarpeek@latest init
+npm install -g jarpeek
+jarpeek init
 ```
 
 `init` detects the build system, wires the MCP server or CLI hints into
 your AI harness (Claude Code, Codex, Gemini CLI, Qwen Code, GigaCode), and
 runs the first index. `--yes` takes the non-interactive defaults (Claude
 Code + MCP, skip the first index).
+
+For a quick trial without installing, `npx jarpeek@latest init` also works
+— but the wired configs invoke `jarpeek` by name, so install it globally
+before relying on them (`init` warns when it is not on `PATH`).
 
 Requirements: Node.js >= 20.12.0. A JVM on `PATH` (or `JAVA_HOME`) is
 optional — without it, decompilation degrades to signature-only answers.
@@ -100,6 +105,11 @@ Degradations are reported, never hidden, and the answer still arrives:
 build resolution that fails falls back to local machine caches
 (cache-scan); a failed re-resolve serves the stale index flagged `stale`.
 Each is a `warning: ...` line on stderr (a `degraded[]` field in JSON).
+Search results are scoped to the project's resolved dependency set —
+shards in the machine-wide cache that the manifest does not list (other
+projects' artifacts, stale versions of bumped dependencies) are excluded,
+and a lookup answered only by such a shard is flagged `artifact no longer
+in dependency set`.
 
 ## Configuration
 
@@ -135,6 +145,9 @@ the build script.
 - Remote artifact search (Maven Central by coordinates) is a planned
   extension, not a feature: on a miss, jarpeek reports what it searched and
   stops rather than fetching.
+- Maven SNAPSHOT dependencies resolved to timestamped jars
+  (`artifact-1.0-20240501.123456-3.jar`) are not recognized by the Maven
+  resolver's m2-layout matching and are skipped.
 - Decompilation quality is CFR's; `signature` is the floor when no JVM is
   available.
 

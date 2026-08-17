@@ -125,6 +125,14 @@ describe("wireMcp: mcp-json (claude)", () => {
       "npx",
     );
   });
+
+  it("refuses to overwrite non-object JSON, leaving the bytes unchanged", async () => {
+    for (const content of ["[1,2]", '"scalar"']) {
+      const root = tmpProject({ ".mcp.json": content });
+      await expect(wireMcp(byId("claude"), root)).rejects.toThrow("refusing to overwrite");
+      expect(readFileSync(join(root, ".mcp.json"), "utf8")).toBe(content);
+    }
+  });
 });
 
 describe("wireMcp: settings-json (gemini family)", () => {
