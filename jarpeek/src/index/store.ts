@@ -18,6 +18,8 @@ import { withLock } from "../util/lockfile.js";
 const LAYOUT_VERSION = "v1";
 /** Upper bound on parsed shards kept in memory; oldest loaded shard evicts first. */
 const LRU_CAPACITY = 64;
+/** Retries before a losing loader serves its last parse uncached instead of looping. */
+const LOAD_MAX_ATTEMPTS = 3;
 
 interface DirectoryFile {
   version: 1;
@@ -46,6 +48,13 @@ export class IndexStore {
   private readonly shardLru = new Map<string, LoadedShard>();
   private directoryCache: Map<string, string[]> | undefined;
   private directoryMtimeMs: number | undefined;
+  /**
+   * Bumped as the last step of every locked write. `loadShard` captures it
+   * before parsing and re-checks before caching: a concurrent same-process
+   * write to the same shard invalidates the in-flight parse, which otherwise
+   * streams the old inode's bytes post-rename and poisons the LRU.
+   */
+  private writeGeneration = 0;
 
   constructor(cacheRoot: string) {
     this.cacheRoot = cacheRoot;
@@ -135,6 +144,7 @@ export class IndexStore {
       this.writeDirectoryUnlocked(directory);
 
       this.shardLru.delete(safe);
+      this.writeGeneration++;
     });
   }
 
@@ -153,6 +163,7 @@ export class IndexStore {
       }
       this.writeDirectoryUnlocked(directory);
       this.shardLru.delete(safe);
+      this.writeGeneration++;
     });
   }
 
@@ -237,15 +248,45 @@ export class IndexStore {
     this.directoryCache = new Map(directory);
   }
 
-  /** Parse a shard into the LRU; missing shards return undefined. */
+  /**
+   * Parse a shard into the LRU; missing shards return undefined.
+   *
+   * The parse awaits, so a same-process write to this shard can finish while
+   * it runs. Each attempt captures the write generation up front; if a write
+   * landed mid-parse the attempt is discarded and retried against the new
+   * files. After LOAD_MAX_ATTEMPTS losses the last parse is returned WITHOUT
+   * caching (a repeated loser would loop forever; the next lookup re-reads).
+   */
   private async loadShard(safe: string): Promise<LoadedShard | undefined> {
-    const cached = this.shardLru.get(safe);
-    if (cached) {
-      // Re-insert so Map ordering tracks recency for the capacity trim.
-      this.shardLru.delete(safe);
-      this.shardLru.set(safe, cached);
-      return cached;
+    for (let attempt = 0; ; attempt++) {
+      const cached = this.shardLru.get(safe);
+      if (cached) {
+        // Re-insert so Map ordering tracks recency for the capacity trim.
+        this.shardLru.delete(safe);
+        this.shardLru.set(safe, cached);
+        return cached;
+      }
+      const generation = this.writeGeneration;
+      const loaded = await this.readShard(safe);
+      if (loaded === undefined) {
+        return undefined;
+      }
+      if (this.writeGeneration === generation) {
+        this.shardLru.set(safe, loaded);
+        while (this.shardLru.size > LRU_CAPACITY) {
+          const oldest = this.shardLru.keys().next().value as string;
+          this.shardLru.delete(oldest);
+        }
+        return loaded;
+      }
+      if (attempt >= LOAD_MAX_ATTEMPTS - 1) {
+        return loaded;
+      }
     }
+  }
+
+  /** One lock-free pass over a shard's files; missing shard → undefined. */
+  private async readShard(safe: string): Promise<LoadedShard | undefined> {
     const shardDir = this.shardDir(safe);
     const metaStats = this.statIfExists(join(shardDir, "meta.json"));
     const ndjsonStats = this.statIfExists(join(shardDir, "records.ndjson"));
@@ -284,14 +325,7 @@ export class IndexStore {
     } finally {
       reader.close();
     }
-
-    const loaded: LoadedShard = { meta, records };
-    this.shardLru.set(safe, loaded);
-    while (this.shardLru.size > LRU_CAPACITY) {
-      const oldest = this.shardLru.keys().next().value as string;
-      this.shardLru.delete(oldest);
-    }
-    return loaded;
+    return { meta, records };
   }
 
   private writeAtomically(path: string, contents: string): void {

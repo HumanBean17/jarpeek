@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { IndexStore } from "../../src/index/store.js";
 import type { Declaration, DependencyArtifact } from "../../src/core/types.js";
 
@@ -258,6 +259,72 @@ describe("IndexStore", () => {
       const stats = await store.stats();
       expect(stats.artifactCount).toBe(1);
       expect(readdirSync(join(root, "v1", "artifacts"))).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lookup racing a same-shard writeArtifact returns the new records, not stale cache", async () => {
+    const root = tmpCacheRoot();
+    try {
+      const store = new IndexStore(root);
+      // A multi-chunk shard: 20k records (~2.5MB) force the loader's stream
+      // across many macrotasks, so the write can land mid-parse — the exact
+      // interleaving the generation guard exists for. A 3-record shard would
+      // drain within one macrotask and never expose the race.
+      const bigOld = [
+        classRecord("com.race.A", "A"),
+        ...Array.from({ length: 20_000 }, (_, i) => methodRecord("com.race.A", `old${i}`)),
+      ];
+      await store.writeArtifact(artifact("g:race:1"), bigOld);
+
+      const racedLookup = store.lookup("com.race.A");
+      // Hold the write back until the loader is provably mid-stream: poll
+      // until the lookup has been running for a beat without finishing.
+      const start = Date.now();
+      while (Date.now() - start < 10) {
+        await sleep(1);
+      }
+      await store.writeArtifact(artifact("g:race:1"), [
+        classRecord("com.race.A", "A"),
+        methodRecord("com.race.A", "new1"),
+        methodRecord("com.race.A", "new2"),
+      ]);
+      const hits = await racedLookup;
+
+      // The racing caller must see post-write content...
+      expect(hits).toHaveLength(1);
+      expect(hits[0].records.map((r) => r.selector).sort()).toEqual(["A", "new1", "new2"]);
+      // ...and every later lookup must too: the LRU holds the new shard only.
+      const after = await store.lookup("com.race.A");
+      expect(after[0].records.map((r) => r.selector).sort()).toEqual(["A", "new1", "new2"]);
+      expect(store.loadedShardCount).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lookup racing a same-shard removeArtifact does not cache the removed shard", async () => {
+    const root = tmpCacheRoot();
+    try {
+      const store = new IndexStore(root);
+      const big = [
+        classRecord("com.race.A", "A"),
+        ...Array.from({ length: 20_000 }, (_, i) => methodRecord("com.race.A", `m${i}`)),
+      ];
+      await store.writeArtifact(artifact("g:race:1"), big);
+      await store.writeArtifact(artifact("g:race:2"), [classRecord("com.race.A", "A")]);
+
+      const racedLookup = store.lookup("com.race.A");
+      const start = Date.now();
+      while (Date.now() - start < 10) {
+        await sleep(1);
+      }
+      await store.removeArtifact(encodeURIComponent("g:race:1"));
+      const hits = await racedLookup;
+
+      expect(hits.map((h) => h.meta.coordinates).sort()).toEqual(["g:race:2"]);
+      expect(store.loadedShardCount).toBe(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
