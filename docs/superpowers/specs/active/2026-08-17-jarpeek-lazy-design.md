@@ -49,6 +49,7 @@ reading class content across a set — and it becomes artifact-scoped.
 | 3 | `search_symbols` requires an artifact argument (`--artifact g:a:v`); it reads one jar's content on demand. |
 | 4 | The **manifest is the only derived state on disk**. Listings and decompile results live in process memory only. |
 | 5 | Approach chosen: fully lazy, no index subsystem. An opt-in "warm" index was rejected — it keeps the machinery (shards, locks, staleness, unbounded cache) that caused the v1 failure. Incremental index-on-touch was rejected for the same reason plus first-touch freezes. |
+| 6 | Legacy-CLI review (GH#3): adopt `list_classes(artifact, prefix?, limit?)` only. Rejected: machine-global `~/.m2` scope + persistent FQN index, `<jar> <fqn>` path plumbing, decompile-first reads, config/completion/cache/pager chrome, not-found exit codes, and `method --context` (composed instead via `read_member` line spans + `read_source --lines`). |
 
 ## Architecture
 
@@ -58,7 +59,7 @@ reading class content across a set — and it becomes artifact-scoped.
 └────┬────┘  └────┬────┘
      └──────┬─────┘
       ┌─────▼──────────┐
-      │  query layer    │  same 9 tools; every tool = locate → parse-one-file
+      │  query layer    │  10 tools (the 9 + new list_classes); locate → parse-one-file
       ├────────────────┤
       │ listing service │  in-process zip central-dir listings,
       │  (memory only)  │  artifact → entry names, validated by (mtime, size)
@@ -120,7 +121,9 @@ is re-listed. FQN derivation: `a/b/C.class` → `a.b.C`; nested classes keep
 `$` (`a/b/Outer$Inner.class` → `a.b.Outer$Inner`); entries whose simple name
 (after the last `$` or `.`) does not start a Java identifier are skipped —
 the same anonymous/local-class filter the v1 indexer applied. Unreadable
-jars skip the artifact and aggregate into one warning.
+jars skip the artifact and aggregate into one warning. The same listings
+serve the `list_classes` tool directly — one central-directory read, zero
+content parses.
 
 ### Provenance — computed per answer, never stored
 
@@ -161,6 +164,7 @@ order, rest as `alternatives` (unchanged contract).
 | Tool | Lazy path | Change vs v1 |
 |---|---|---|
 | `find_class` | Scan in-process listings; tiers unchanged (exact FQN → segment suffix → simple → fuzzy). `kind` parsed from the class/source header of the returned hits only (≤ `limit` reads). | No index read; no bootstrap indexing |
+| `list_classes` | One artifact's class FQNs straight from its listing; optional `prefix` (FQN starts-with) applies before `limit` (default 50); overflow answers `truncated` + `total`; unknown artifact → miss with did-you-mean; a prefix matching nothing → miss with the artifact's top-level package segments (≤ 8) as the hint | **New** — the artifact-side dual of `find_class`, the single adoption from the legacy-CLI review |
 | `outline` | Listings locate the jar → parse one file → class row + members + nested rows | Backing swapped |
 | `read_member` | Same locate → member spans from the one file; binary+JVM → CFR memo; else "signature only" | CFR disk cache → memo |
 | `read_source` | Same locate → `outline`/`full`/`lines` over the one file | Backing swapped |
@@ -176,7 +180,8 @@ survive unchanged; miss answers now derive candidates from listings.
 
 **MCP/CLI parity**: same tool names and schemas except `search_symbols`
 gains a required `artifact` argument and `where`/`resolve` result shapes slim
-down. CLI `--json` remains the exact MCP result object.
+down. `list_classes` is new: `(artifact, prefix?, limit?)`. CLI `--json`
+remains the exact MCP result object.
 
 ### Output discipline — the agentic-first contract
 
@@ -225,7 +230,9 @@ the README are rewritten for the new contracts.
 - **Deleted**: store, indexer, `sourceSig`, index-shape, bootstrap-index suites.
 - **New unit**: listing service (FQN derivation, `$` filter, mtime
   invalidation, unreadable jars); provenance-promise computation; scoped
-  `search_symbols` with memoization; `$`↔`.` normalization.
+  `search_symbols` with memoization; `$`↔`.` normalization; `list_classes`
+  (prefix-before-limit, `truncated`/`total` on overflow, unknown-artifact
+  miss, empty-prefix package hint).
 - **New contract tests**: stderr ≤ 3 lines on every fixture path including
   auto-resolve; stdout purity; `resolve`'s one-line output. The line budget
   is asserted as a product feature, alongside the existing outline
@@ -251,5 +258,7 @@ the README are rewritten for the new contracts.
 - JDK classes without `src.zip` (jimage parsing/extraction).
 - Unpacked-source directories for external Grep (`where` prints paths; agents
   unpack themselves if they truly need to).
+- Entry listing beyond class FQNs — resource-entry content stays
+  `read_resource`'s contract.
 - Everything already outside v1 scope (type hierarchy, find-usages, remote
   artifact search, generated-source awareness).
