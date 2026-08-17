@@ -291,6 +291,79 @@ describe("advanced syntax (synthetic)", () => {
   });
 });
 
+describe("recovery regressions (synthetic)", () => {
+  it("parses fun interface as a kind keyword without eating the rest of the file", () => {
+    const source = [
+      "package p",
+      "",
+      "fun interface Printer {",
+      "    fun print(s: String)",
+      "}",
+      "",
+      "class After {",
+      '    val tag: String = "a"',
+      "}",
+    ].join("\n");
+    const parsed = parseKotlinSource(source, "p/Printer.kt");
+    expect(parsed.diagnostics).toEqual([]);
+    const printer = classByFqn(parsed, "p.Printer");
+    expect(printer.kind).toBe("interface");
+    expect(printer.signature).toBe("fun interface Printer");
+    expect(printer.members.some((m) => m.selector === "print")).toBe(true);
+    const after = classByFqn(parsed, "p.After");
+    expect(member(after, "tag").kind).toBe("property");
+  });
+
+  it("parses explicit primary constructors with modifiers and annotations", () => {
+    const source = [
+      "package p",
+      "",
+      "class Solo private constructor(x: Int) {",
+      "    fun ping(): Int = x",
+      "}",
+      "",
+      "class Tagged @Inject constructor() {",
+      "    val tag: Int = 1",
+      "}",
+      "",
+      "val afterSolo: Int = 2",
+    ].join("\n");
+    const parsed = parseKotlinSource(source, "p/Solo.kt");
+    expect(parsed.diagnostics).toEqual([]);
+    const solo = classByFqn(parsed, "p.Solo");
+    expect(solo.signature).toBe("class Solo(Int)");
+    expect(member(solo, "ping")).toBeDefined();
+    const tagged = classByFqn(parsed, "p.Tagged");
+    expect(tagged.signature).toBe("class Tagged()");
+    expect(member(tagged, "tag")).toBeDefined();
+    const facade = classByFqn(parsed, "p.SoloKt");
+    expect(member(facade, "afterSolo").kind).toBe("property");
+  });
+
+  it("folds a modifier accessor into the property and keeps later members", () => {
+    const source = [
+      "package p",
+      "",
+      "class Counter {",
+      "    var count: Int = 0",
+      "        private set",
+      "    fun bump() {",
+      "        count += 1",
+      "    }",
+      '    val name: String = "c"',
+      "}",
+    ].join("\n");
+    const parsed = parseKotlinSource(source, "p/Counter.kt");
+    expect(parsed.diagnostics).toEqual([]);
+    const counter = classByFqn(parsed, "p.Counter");
+    const count = member(counter, "count");
+    expect(count.lineEnd).toBe(5); // the `private set` line
+    expect(member(counter, "bump")).toBeDefined();
+    expect(member(counter, "name")).toBeDefined();
+    expect(counter.members.filter((m) => m.selector === "set")).toHaveLength(0);
+  });
+});
+
 describe("graceful degradation", () => {
   it("never throws on unterminated, malformed, or empty input", () => {
     const junk = [

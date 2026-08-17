@@ -109,6 +109,8 @@ const PARAM_MODIFIERS = new Set([
   "override",
 ]);
 
+const VISIBILITY_KEYWORDS = new Set(["public", "protected", "internal", "private"]);
+
 const isWordChar = (c: string | undefined): boolean => !!c && /[A-Za-z0-9_$]/.test(c);
 const isIdent = (t: Token | undefined, text?: string): boolean =>
   !!t && t.kind === "ident" && (text === undefined || t.text === text);
@@ -445,6 +447,57 @@ class Parser {
   }
 
   /**
+   * Consume an explicit primary-constructor keyword with its leading
+   * annotations and visibility modifiers (`class Solo private
+   * constructor(x: Int)`), leaving pos at the `(`. Restores pos when no
+   * `constructor` keyword follows, so ordinary class headers are untouched.
+   */
+  private skipExplicitCtorKeyword(): void {
+    const save = this.pos;
+    for (;;) {
+      const t = this.peek();
+      if (t !== undefined && isPunct(t, "@") && this.peek(1) !== undefined) {
+        this.pos++;
+        // use-site target such as `field:` between @ and the name
+        if (isIdent(this.peek()) && isPunct(this.peek(1), ":")) this.pos += 2;
+        this.readDottedName();
+        this.skipParenGroup();
+        continue;
+      }
+      if (t !== undefined && isIdent(t) && VISIBILITY_KEYWORDS.has(t.text)) {
+        this.pos++;
+        continue;
+      }
+      break;
+    }
+    if (!isIdent(this.peek(), "constructor")) {
+      this.pos = save;
+      return;
+    }
+    this.pos++; // the constructor keyword itself
+  }
+
+  /** Consume annotations and visibility modifiers preceding an accessor keyword. */
+  private skipAccessorPrefix(): void {
+    for (;;) {
+      const t = this.peek();
+      if (t !== undefined && isPunct(t, "@") && this.peek(1) !== undefined) {
+        this.pos++;
+        // use-site target such as `set:` between @ and the name
+        if (isIdent(this.peek()) && isPunct(this.peek(1), ":")) this.pos += 2;
+        this.readDottedName();
+        this.skipParenGroup();
+        continue;
+      }
+      if (t !== undefined && isIdent(t) && VISIBILITY_KEYWORDS.has(t.text)) {
+        this.pos++;
+        continue;
+      }
+      return;
+    }
+  }
+
+  /**
    * Skip a `{...}` block (function body, accessor body, initializer) starting
    * at the current `{`. Returns the closing `}` token, or null at EOF.
    */
@@ -621,6 +674,7 @@ class Parser {
       if (this.isClassKindKeyword(kw)) {
         this.parseClassDeclaration(null, header, kw.text as "class" | "interface" | "object", false);
       } else if (isIdent(kw, "fun") && isIdent(this.peek(1), "interface")) {
+        this.pos++; // `fun` is a modifier here; `interface` is the kind keyword
         header.modifiers.push("fun");
         this.parseClassDeclaration(null, header, "interface", false);
       } else if (isIdent(kw, "fun")) {
@@ -667,11 +721,14 @@ class Parser {
       return;
     }
     const typeParamTokens = isPunct(this.peek(), "<") ? this.skipAngleGroup() : [];
+    // `class Solo private constructor(x: Int)` — the explicit keyword (with
+    // modifiers/annotations) precedes the parameter list
+    this.skipExplicitCtorKeyword();
     // primary constructor: plain params feed the signature, val/var params
     // become property members
     const primary = isPunct(this.peek(), "(")
       ? this.parsePrimaryCtor()
-      : { paramTypes: [] as string[], properties: [] as CtorProperty[] };
+      : { paramTypes: [] as string[], properties: [] as CtorProperty[], explicit: false };
     if (isPunct(this.peek(), ":") || isIdent(this.peek(), "where")) this.skipToBody();
 
     const kind = header.modifiers.includes("enum")
@@ -698,7 +755,8 @@ class Parser {
               : "object"
             : kindKeyword;
     const typeParamsSig = typeParamTokens.length > 0 ? joinTokens(typeParamTokens) : "";
-    const primarySig = primary.paramTypes.length > 0 ? `(${primary.paramTypes.join(",")})` : "";
+    const primarySig =
+      primary.paramTypes.length > 0 || primary.explicit ? `(${primary.paramTypes.join(",")})` : "";
     const signature = [...sigModifiers, `${sigKeyword} ${name}${typeParamsSig}${primarySig}`]
       .filter((s) => s.length > 0)
       .join(" ");
@@ -809,10 +867,16 @@ class Parser {
    * Parse a primary-constructor parameter list: plain params feed the class
    * signature, `val`/`var` params additionally become property members.
    */
-  private parsePrimaryCtor(): { paramTypes: string[]; properties: CtorProperty[] } {
+  private parsePrimaryCtor(): {
+    paramTypes: string[];
+    properties: CtorProperty[];
+    /** true when a parameter list was written at all (`class Foo()`) */
+    explicit: boolean;
+  } {
     const paramTypes: string[] = [];
     const properties: CtorProperty[] = [];
-    for (const group of this.paramGroups()) {
+    const groups = this.paramGroups();
+    for (const group of groups) {
       const p = this.splitParam(group);
       paramTypes.push([p.mods.join(" "), p.typeSig].filter((s) => s.length > 0).join(" "));
       if (p.kw !== undefined && p.name !== undefined) {
@@ -828,7 +892,7 @@ class Parser {
         });
       }
     }
-    return { paramTypes, properties };
+    return { paramTypes, properties, explicit: true };
   }
 
   /**
@@ -1158,15 +1222,36 @@ class Parser {
       this.pos++;
       lineEnd = this.skipInitializer();
     }
-    // custom accessors do not create separate members; they extend lineEnd
+    // custom accessors do not create separate members; they extend lineEnd.
+    // Accessors may carry modifiers/annotations (`private set`, `@Inject set`)
+    // or be bare (`private set` with no explicit body)
     for (;;) {
       const t = this.peek();
-      if (t === undefined || !(isIdent(t, "get") || isIdent(t, "set"))) break;
-      const after = this.peek(1);
-      if (after === undefined || !(isPunct(after, "(") || isPunct(after, "=") || isPunct(after, "{"))) {
+      if (t === undefined) break;
+      if (isIdent(t, "get") || isIdent(t, "set")) {
+        const after = this.peek(1);
+        const hasBody =
+          after !== undefined &&
+          (isPunct(after, "(") || isPunct(after, "=") || isPunct(after, "{"));
+        // a bare accessor ends at a newline, `;`, `}`, or EOF
+        const bare =
+          after === undefined || isPunct(after, ";") || isPunct(after, "}") || after.line > t.line;
+        if (!hasBody && !bare) break;
+      } else if (isPunct(t, "@") || (isIdent(t) && VISIBILITY_KEYWORDS.has(t.text))) {
+        // modifiers/annotations only count when an accessor follows them;
+        // otherwise they start the next member and must be left in place
+        const save = this.pos;
+        this.skipAccessorPrefix();
+        const kw = this.peek();
+        if (kw === undefined || !(isIdent(kw, "get") || isIdent(kw, "set"))) {
+          this.pos = save;
+          break;
+        }
+        continue; // re-enter with pos at get/set
+      } else {
         break;
       }
-      this.pos++;
+      this.pos++; // the accessor keyword
       if (isPunct(this.peek(), "(")) this.skipParenGroup();
       lineEnd = Math.max(lineEnd, this.parseTail());
     }
@@ -1248,6 +1333,7 @@ class Parser {
         if (this.isClassKindKeyword(kw)) {
           this.parseClassDeclaration(cls, header, kw!.text as "class" | "interface" | "object", staticCtx);
         } else if (isIdent(kw, "fun") && isIdent(this.peek(1), "interface")) {
+          this.pos++; // `fun` is a modifier here; `interface` is the kind keyword
           header.modifiers.push("fun");
           this.parseClassDeclaration(cls, header, "interface", staticCtx);
         } else if (isIdent(kw, "fun")) {
