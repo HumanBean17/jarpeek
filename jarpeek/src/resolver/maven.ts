@@ -90,13 +90,35 @@ function stderrTail(stderr: string): string {
 }
 
 /**
- * Classpath entries of a cp.txt: `;`-joined when the content carries a `;`
- * (windows output), `:`-joined otherwise. Whitespace-only content yields [].
+ * Diagnosis text for a failed mvn run, never empty: the stderr tail, else
+ * the stdout tail (a quiet `-q` run may print its only error there), else a
+ * marker naming the exit code — a signal kill says `(killed)` since it has
+ * none. The reason is what a user reads when resolution degrades, so an
+ * empty `mvn-failed:` would hide the failure entirely.
+ */
+function failureDetail(result: RunResult): string {
+  const tail = stderrTail(result.stderr);
+  if (tail.length > 0) return tail;
+  const out = stderrTail(result.stdout);
+  if (out.length > 0) return out;
+  return result.code === null ? "(killed)" : `exit ${result.code} (no output)`;
+}
+
+/** A windows drive-letter root: `C:\` or `C:/`. */
+const WINDOWS_DRIVE = /^[A-Za-z]:[\\/]/;
+
+/**
+ * Classpath entries of a cp.txt: `;`-joined windows output, `:`-joined unix.
+ * The windows decision cannot rest on `;` alone — a one-dependency project
+ * emits a single entry with no separator at all, and splitting that on `:`
+ * would shred the drive letter into two unmatchable halves — so a leading
+ * drive-letter pattern counts as windows too. Whitespace-only yields [].
  */
 function splitClasspath(content: string): string[] {
   const trimmed = content.trim();
   if (trimmed.length === 0) return [];
-  const separator = content.includes(";") ? ";" : ":";
+  const windows = content.includes(";") || WINDOWS_DRIVE.test(trimmed);
+  const separator = windows ? ";" : ":";
   return trimmed
     .split(separator)
     .map((entry) => entry.trim())
@@ -260,9 +282,7 @@ export async function resolveMaven(
         throw error;
       }
       if (result.code !== 0) {
-        let tail = stderrTail(result.stderr);
-        if (tail.length === 0 && result.code === null) tail = "(killed)"; // signal-killed, no diagnosis
-        return { ok: false, artifacts: [], reason: `mvn-failed:${tail}` };
+        return { ok: false, artifacts: [], reason: `mvn-failed:${failureDetail(result)}` };
       }
     }
 

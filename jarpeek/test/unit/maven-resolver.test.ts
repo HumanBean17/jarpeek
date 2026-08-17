@@ -186,13 +186,11 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     // the sources run follows and reuses the same command
     expect(calls).toHaveLength(2);
     expect(calls[0].cmd).toBe("mvn");
-    expect(calls[0].args).toEqual([
-      "-B",
-      "-q",
-      "dependency:build-classpath",
-      `-Dmdep.outputFile=${outputFileOf(calls[0])}`,
-    ]);
-    expect(outputFileOf(calls[0]).startsWith(join(tmpdir(), "jarpeek-mvn-"))).toBe(true);
+    expect(calls[0].args.slice(0, 3)).toEqual(["-B", "-q", "dependency:build-classpath"]);
+    expect(calls[0].args).toHaveLength(4);
+    const out = outputFileOf(calls[0]);
+    expect(out.startsWith(join(tmpdir(), "jarpeek-mvn-"))).toBe(true);
+    expect(out.endsWith("cp-0.txt")).toBe(true);
     expect(calls[0].opts.cwd).toBe(projectRoot);
     expect(calls[0].opts.timeoutMs).toBe(180_000);
     expect(calls[1].cmd).toBe("mvn");
@@ -220,6 +218,37 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     expect(b.sourcesJar).toBeUndefined(); // no sibling in the fixture m2
     expect(b.provenance).toBe("signature");
     expect(calls[0].args[2]).toBe("dependency:build-classpath");
+  });
+
+  it("resolves a single windows entry with no ; separator (drive-letter pattern)", async () => {
+    const projectRoot = scratch();
+    const single = "C:\\Users\\dev\\.m2\\repository\\org\\a\\b\\1.0\\b-1.0.jar";
+    const { exec } = cpExec(single);
+
+    const resolution = await resolveMaven(projectRoot, {
+      exec,
+      mvnOnPath: PROBE_FOUND,
+      m2Dir: "C:\\Users\\dev\\.m2\\repository",
+    });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolution.artifacts).toHaveLength(1); // not split at "C:" into two duds
+    const b = indexBy(resolution.artifacts)("org.a:b:1.0");
+    expect(b.binaryJar).toBe(single);
+    expect(b.provenance).toBe("signature");
+  });
+
+  it("keeps unix splitting for a lone entry with no separator at all", async () => {
+    const projectRoot = scratch();
+    const m2 = join(projectRoot, "m2");
+    const lone = m2Jar(m2, "com", "example", "solo", "1.2", "solo-1.2.jar");
+    const { exec } = cpExec(lone);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolution.artifacts).toHaveLength(1);
+    expect(resolution.artifacts[0].coordinates).toBe("com.example:solo:1.2");
   });
 
   it("tolerates a failing dependency:sources run without failing resolution", async () => {
@@ -259,6 +288,30 @@ describe("resolveMaven: failure and degradation reasons", () => {
       mvnOnPath: PROBE_FOUND,
     });
     expect(longStderr.reason).toBe(`mvn-failed:${"x".repeat(496)}boom`);
+  });
+
+  it("never yields an empty reason: non-zero exit with no stderr falls back to stdout, then a marker", async () => {
+    const projectRoot = scratch();
+    const quietStdout = await resolveMaven(projectRoot, {
+      exec: stubExec(async (_cmd, args) =>
+        args.includes("dependency:sources")
+          ? { stdout: "", stderr: "", code: 0 }
+          : { stdout: "[ERROR] build failed", stderr: "", code: 1 },
+      ).exec,
+      mvnOnPath: PROBE_FOUND,
+    });
+    expect(quietStdout.ok).toBe(false);
+    expect(quietStdout.reason).toBe("mvn-failed:[ERROR] build failed");
+
+    const fullyQuiet = await resolveMaven(projectRoot, {
+      exec: stubExec(async (_cmd, args) =>
+        args.includes("dependency:sources")
+          ? { stdout: "", stderr: "", code: 0 }
+          : { stdout: "", stderr: "", code: 1 },
+      ).exec,
+      mvnOnPath: PROBE_FOUND,
+    });
+    expect(fullyQuiet.reason).toBe("mvn-failed:exit 1 (no output)");
   });
 
   it("reports timeout when exec rejects with TimeoutError", async () => {
@@ -353,14 +406,11 @@ describe("resolveMaven: wrapper selection", () => {
 
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe("cmd");
-    expect(calls[0].args).toEqual([
-      "/c",
-      "mvn",
-      "-B",
-      "-q",
-      "dependency:build-classpath",
-      `-Dmdep.outputFile=${outputFileOf(calls[0])}`,
-    ]);
+    expect(calls[0].args.slice(0, 5)).toEqual(["/c", "mvn", "-B", "-q", "dependency:build-classpath"]);
+    expect(calls[0].args).toHaveLength(6);
+    const bareOut = outputFileOf(calls[0]);
+    expect(bareOut.startsWith(join(tmpdir(), "jarpeek-mvn-"))).toBe(true);
+    expect(bareOut.endsWith("cp-0.txt")).toBe(true);
   });
 });
 
