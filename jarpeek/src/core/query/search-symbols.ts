@@ -75,7 +75,7 @@ export async function searchSymbols(
   const byRank = (a: ScoredRow, b: ScoredRow): number =>
     b.score - a.score || a.order - b.order || a.seq - b.seq;
 
-  await ctx.store.forEachRecord((record, safe) => {
+  const streamWarnings = await ctx.store.forEachRecord((record, safe) => {
     if (opts.kind !== undefined && record.kind !== opts.kind) return;
     const score = fuzzyScore(query, record.selector);
     if (score === null) return;
@@ -113,5 +113,11 @@ export async function searchSymbols(
   );
 
   const stale = await servedStale(ctx);
-  return { rows: scored.slice(0, limit).map((s) => s.row), degraded: mergedDegraded(ctx, stale ? ["stale index served"] : []) };
+  return {
+    rows: scored.slice(0, limit).map((s) => s.row),
+    degraded: await mergedDegraded(ctx, [
+      ...(stale ? ["stale index served"] : []),
+      ...streamWarnings,
+    ]),
+  };
 }

@@ -10,7 +10,7 @@
  * continues — a bad artifact never aborts the run. After every artifact, the
  * project manifest is written with the final provenance and warnings.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import type { Declaration, DependencyArtifact, Provenance } from "../core/types.js";
 import { parseJavaSource } from "../parse/java-lexer.js";
@@ -20,7 +20,8 @@ import { parseClassFile } from "../parse/classfile.js";
 import { listZipEntries, readTextEntry, readZipEntry } from "../parse/zip.js";
 import { ensureCacheDir } from "../util/cache-dir.js";
 import { IndexStore } from "./store.js";
-import { computeDependencySetHash, writeManifest } from "./manifest.js";
+import { computeDependencySetHash, computeSourceDirSignature, writeManifest } from "./manifest.js";
+import { isSourceEntry, walkFiles } from "./walk.js";
 
 export interface IndexerOptions {
   store?: IndexStore;
@@ -34,13 +35,8 @@ export interface IndexResult {
   durationMs: number;
 }
 
-/** Directory segments pruned from sourceDir walks (build outputs and VCS dirs). */
-const PRUNED_DIR_SEGMENTS = new Set(["build", "target", "out", ".git", "node_modules"]);
-
 /** Class entries that carry no declarations worth indexing. */
 const EXCLUDED_CLASS_FILES = new Set(["module-info.class", "package-info.class"]);
-
-const isSourceEntry = (name: string): boolean => name.endsWith(".java") || name.endsWith(".kt");
 
 const isClassEntry = (name: string): boolean =>
   name.endsWith(".class") && !EXCLUDED_CLASS_FILES.has(basename(name));
@@ -99,42 +95,6 @@ function parseSourceText(text: string, file: string): { records: Declaration[]; 
     }
   }
   return { records, diagnostics: parsed.diagnostics };
-}
-
-/**
- * Collect files under `root` as `/`-separated paths relative to `root`.
- * Source walks prune build-output and VCS directory segments; class walks
- * keep everything (`build/classes/...` is a legitimate classesDir). A
- * directory that cannot be read becomes one `failed to walk` warning and the
- * walk continues — a bad artifact never aborts the run.
- */
-function walkFiles(
-  root: string,
-  keep: (name: string) => boolean,
-  prune: boolean,
-  warnings: string[],
-): string[] {
-  const out: string[] = [];
-  const walk = (dir: string, rel: string): void => {
-    let items;
-    try {
-      items = readdirSync(dir, { withFileTypes: true });
-    } catch (e) {
-      warnings.push(`failed to walk ${rel.length === 0 ? dir : rel}: ${(e as Error).message}`);
-      return;
-    }
-    for (const item of items) {
-      const relPath = rel.length === 0 ? item.name : `${rel}/${item.name}`;
-      if (item.isDirectory()) {
-        if (prune && PRUNED_DIR_SEGMENTS.has(item.name)) continue;
-        walk(join(dir, item.name), relPath);
-      } else if (keep(item.name)) {
-        out.push(relPath);
-      }
-    }
-  };
-  walk(root, "");
-  return out.sort();
 }
 
 /** One compiled class buffer → class + member records, or a warning on failure. */
@@ -288,15 +248,23 @@ export async function indexArtifacts(
     }
 
     warnings.push(...result.warnings);
+    // fingerprint the module tree at index time so a later sibling-file edit
+    // flips staleness (module line ranges describe files that can change
+    // without any build file moving); null = tree unwalkable, nothing recorded
+    const sourceSig =
+      artifact.sourceDir !== undefined && existsSync(artifact.sourceDir)
+        ? await computeSourceDirSignature(artifact.sourceDir)
+        : undefined;
     const finalArtifact: DependencyArtifact = {
       ...artifact,
       provenance: result.provenance,
       warnings: [...artifact.warnings, ...result.warnings],
+      ...(sourceSig !== null && sourceSig !== undefined ? { sourceSig } : {}),
     };
-    if (result.records.length > 0) {
-      await store.writeArtifact(finalArtifact, result.records);
-      indexed.push(artifact.coordinates);
-    }
+    // always written, even with zero records: an empty shard replaces the
+    // previous one instead of leaving stale records serving as fresh forever
+    await store.writeArtifact(finalArtifact, result.records);
+    indexed.push(artifact.coordinates);
     manifestArtifacts.push(finalArtifact);
     progress(`indexing ${artifact.coordinates} (${result.provenance}, ${result.files} files)`);
   }

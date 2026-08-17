@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deflateRawSync } from "node:zlib";
 import {
   EntryTooLargeError,
   Zip64UnsupportedError,
@@ -59,6 +60,10 @@ function craftStoredZip(opts: {
   comment?: string;
   zip64ExtraBytes?: number;
   declaredCompressedSize?: number;
+  /** compression method recorded in both headers (payload must match it). */
+  method?: 0 | 8;
+  /** lie about the uncompressed size (deflate bomb shape). */
+  declaredUncompressedSize?: number;
 }): CraftedZip {
   const name = Buffer.from(opts.name, "utf8");
   const size = opts.payload.length;
@@ -68,12 +73,12 @@ function craftStoredZip(opts: {
     u32(LFH_SIG),
     u16(20), // version needed
     u16(0), // flags
-    u16(0), // method: stored
+    u16(opts.method ?? 0),
     u16(0), // time
     u16(0), // date
     u32(crc),
     u32(size),
-    u32(size),
+    u32(opts.declaredUncompressedSize ?? size),
     u16(name.length),
     u16(0), // extra length
     name,
@@ -96,12 +101,12 @@ function craftStoredZip(opts: {
     u16(20), // version made by
     u16(20), // version needed
     u16(0), // flags
-    u16(0), // method: stored
+    u16(opts.method ?? 0),
     u16(0), // time
     u16(0), // date
     u32(crc),
     u32(opts.zip64 ? 0xffffffff : size),
-    u32(opts.zip64 ? 0xffffffff : size),
+    u32(opts.zip64 ? 0xffffffff : (opts.declaredUncompressedSize ?? size)),
     u16(name.length),
     u16(zip64Extra.length),
     u16(0), // comment length
@@ -321,6 +326,89 @@ describe("readTextEntry", () => {
     const entry = findEntry(entries, "com/example/Demo.class");
     await expect(readTextEntry(DEMO_JAR, entry, 8)).rejects.toBeInstanceOf(EntryTooLargeError);
     await expect(readTextEntry(DEMO_JAR, entry, 8)).rejects.toBeInstanceOf(ZipError);
+  });
+});
+
+describe("inflate bounds (lying central directory)", () => {
+  // 2 MiB of compressible bytes in ~2 KiB of deflate: the archive declares
+  // uncompressedSize=3, the classic zip-bomb shape
+  const bombPayload = deflateRawSync(Buffer.alloc(2 * 1024 * 1024, 0x41));
+  const craftBomb = () =>
+    craftStoredZip({
+      name: "evil/tiny.java",
+      payload: bombPayload,
+      method: 8,
+      declaredUncompressedSize: 3,
+    });
+
+  it("throws ZipError when inflated output does not match the declared size", async () => {
+    const { bytes } = craftBomb();
+    const path = await writeTmpFile(bytes);
+    try {
+      const entries = await listZipEntries(path);
+      expect(entries[0].uncompressedSize).toBe(3);
+      // declared 3 passes the size gate; the inflate/verify must refuse
+      await expect(readTextEntry(path, entries[0])).rejects.toBeInstanceOf(ZipError);
+      await expect(readTextEntry(path, entries[0])).rejects.toMatchObject({ name: "ZipError" });
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+  });
+
+  it("never materializes output beyond maxBytes + slack, however small the lie", async () => {
+    const { bytes } = craftBomb();
+    const path = await writeTmpFile(bytes);
+    try {
+      const entries = await listZipEntries(path);
+      // a 1 KiB text budget must not allocate the 2 MiB the stream really holds
+      await expect(readTextEntry(path, entries[0], 1024)).rejects.toBeInstanceOf(ZipError);
+      await expect(readZipEntry(path, entries[0], 2048)).rejects.toBeInstanceOf(ZipError);
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+  });
+
+  it("throws ZipError when the declared uncompressed size exceeds the readZipEntry cap", async () => {
+    const payload = deflateRawSync(Buffer.from("x".repeat(64)));
+    const { bytes } = craftStoredZip({
+      name: "evil/declared-huge.java",
+      payload,
+      method: 8,
+      declaredUncompressedSize: 0x40000000, // 1 GiB declared, 64 bytes real
+    });
+    const path = await writeTmpFile(bytes);
+    try {
+      const entries = await listZipEntries(path);
+      await expect(readZipEntry(path, entries[0])).rejects.toBeInstanceOf(ZipError);
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+  });
+
+  it("still round-trips honest deflated entries with exact declared sizes", async () => {
+    const original = Buffer.from("public class Honest {}\n", "utf8");
+    const payload = deflateRawSync(original);
+    const { bytes } = craftStoredZip({
+      name: "Honest.java",
+      payload,
+      method: 8,
+      declaredUncompressedSize: original.length,
+    });
+    const path = await writeTmpFile(bytes);
+    try {
+      const entries = await listZipEntries(path);
+      const text = await readTextEntry(path, entries[0]);
+      expect(text).toBe("public class Honest {}\n");
+    } finally {
+      rmSync(dirname(path), { recursive: true, force: true });
+    }
+  });
+
+  it("round-trips the real deflated Demo.class with length equal to the declared size", async () => {
+    const entries = await listZipEntries(DEMO_JAR);
+    const entry = findEntry(entries, "com/example/Demo.class");
+    const bytes = await readZipEntry(DEMO_JAR, entry);
+    expect(bytes.length).toBe(entry.uncompressedSize);
   });
 });
 

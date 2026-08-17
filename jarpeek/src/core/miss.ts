@@ -126,7 +126,7 @@ export async function handleMiss(
   // 4. negative: report the searched set honestly and stop
   const manifest = await ctx.manifest();
   const searchedArtifacts = (manifest?.artifacts ?? []).map((artifact) => artifact.coordinates);
-  if (ctx.bootstrapWarnings().includes("degraded-to-cache-scan")) {
+  if ((await ctx.bootstrapWarnings()).includes("degraded-to-cache-scan")) {
     searchedArtifacts.push(CACHE_SCAN_NOTE);
   }
   return { found: false, via: "negative", searchedArtifacts, note: NEGATIVE_NOTE };

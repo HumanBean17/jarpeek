@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { DependencyArtifact } from "../../src/core/types.js";
 import {
   computeDependencySetHash,
+  computeSourceDirSignature,
   isStale,
   readManifest,
   writeManifest,
@@ -193,6 +194,82 @@ describe("isStale", () => {
         artifact({ coordinates: ":cls2", kind: "module", classesDir: join(root, "gone-classes") }),
       ]);
       expect(await isStale(root, anyMissing)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("module source signature (sourceSig)", () => {
+  function moduleDir(): string {
+    const root = tmpProjectRoot();
+    mkdirSync(join(root, "src", "main", "java", "com", "mod"), { recursive: true });
+    writeFileSync(
+      join(root, "src", "main", "java", "com", "mod", "Thing.java"),
+      "package com.mod;\n\npublic class Thing {\n  int x = 1;\n}\n",
+    );
+    writeFileSync(join(root, "src", "main", "java", "com", "mod", "Helper.kt"), "package com.mod\n\nclass Helper\n");
+    return root;
+  }
+
+  it("is stable across calls and changes on edit, add, and remove", async () => {
+    const root = moduleDir();
+    try {
+      const dir = join(root, "src", "main", "java");
+      const first = await computeSourceDirSignature(dir);
+      expect(first).toBeTruthy();
+      expect(await computeSourceDirSignature(dir)).toBe(first);
+
+      const java = join(dir, "com", "mod", "Thing.java");
+      writeFileSync(java, "package com.mod;\n\npublic class Thing {\n  int x = 2;\n}\n");
+      touchPlusOneSecond(java);
+      expect(await computeSourceDirSignature(dir)).not.toBe(first);
+
+      const afterEdit = await computeSourceDirSignature(dir);
+      writeFileSync(join(dir, "com", "mod", "Extra.java"), "package com.mod;\n\npublic class Extra {}\n");
+      expect(await computeSourceDirSignature(dir)).not.toBe(afterEdit);
+
+      const afterAdd = await computeSourceDirSignature(dir);
+      rmSync(join(dir, "com", "mod", "Extra.java"));
+      expect(await computeSourceDirSignature(dir)).not.toBe(afterAdd);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("isStale flags a module whose sources changed even though no build file did", async () => {
+    const root = moduleDir();
+    try {
+      const sourceDir = join(root, "src", "main", "java");
+      const hash = await computeDependencySetHash(root);
+      const m: Manifest = manifestFor(hash, [
+        artifact({
+          coordinates: ":app",
+          kind: "module",
+          sourceDir,
+          sourceSig: await computeSourceDirSignature(sourceDir),
+        }),
+      ]);
+      expect(await isStale(root, m)).toBe(false);
+
+      // the agent-edit workflow: a sibling module source changes after indexing
+      const helper = join(sourceDir, "com", "mod", "Helper.kt");
+      writeFileSync(helper, "package com.mod\n\nclass Helper(val extra: Int)\n");
+      touchPlusOneSecond(helper);
+      expect(await isStale(root, m)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("tolerates manifests written before sourceSig existed (no false staleness)", async () => {
+    const root = moduleDir();
+    try {
+      const hash = await computeDependencySetHash(root);
+      const m: Manifest = manifestFor(hash, [
+        artifact({ coordinates: ":app", kind: "module", sourceDir: join(root, "src", "main", "java") }),
+      ]);
+      expect(await isStale(root, m)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

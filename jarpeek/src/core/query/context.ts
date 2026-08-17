@@ -37,8 +37,13 @@ export interface QueryContext {
   ensureReady(): Promise<EnsureReadyResult>;
   manifest(): Promise<Manifest | null>;
   artifacts(): Promise<DependencyArtifact[]>;
-  /** Warnings accumulated by the last bootstrap (cache-scan, stale-served, ...). */
-  bootstrapWarnings(): string[];
+  /**
+   * Warnings of the last bootstrap (cache-scan, stale-served, ...) plus the
+   * persisted per-artifact warnings of the manifest being served — a fresh
+   * process serving an existing manifest still surfaces what indexing
+   * degraded on.
+   */
+  bootstrapWarnings(): Promise<string[]>;
 }
 
 export interface OpenContextOptions {
@@ -73,9 +78,20 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
     if (!warnings.includes(msg)) warnings.push(msg);
   };
 
+  /** Fold the served manifest's persisted per-artifact warnings in (deduped). */
+  async function addPersistedArtifactWarnings(): Promise<void> {
+    const manifest = await readManifest(projectRoot);
+    for (const artifact of manifest?.artifacts ?? []) {
+      for (const warning of artifact.warnings) addWarning(warning);
+    }
+  }
+
   async function runBootstrap(wasStale: boolean): Promise<EnsureReadyResult> {
     try {
       const resolution = await resolveDependencies(projectRoot, opts.resolvers);
+      // the channel documents the LAST bootstrap: a successful one starts
+      // from a clean slate instead of stacking every historical warning
+      warnings.length = 0;
       for (const entry of resolution.degraded) addWarning(`${entry.from}: ${entry.reason}`);
       for (const warning of resolution.warnings) addWarning(warning);
       const result = await indexArtifacts(projectRoot, resolution.artifacts, {
@@ -89,6 +105,7 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       const manifest = await readManifest(projectRoot);
       if (manifest !== null) {
         addWarning(`stale index served (resolution failed: ${errorMessage(e)})`);
+        await addPersistedArtifactWarnings();
         return { bootstrapped: false, stale: true };
       }
       // nothing to serve and nothing produced: memoize the failure so a
@@ -108,6 +125,9 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
     async ensureReady(): Promise<EnsureReadyResult> {
       const manifest = await readManifest(projectRoot);
       if (manifest !== null && !(await isStale(projectRoot, manifest))) {
+        // serving an existing manifest without bootstrapping: its persisted
+        // warnings are this process's view of what indexing degraded on
+        await addPersistedArtifactWarnings();
         return { bootstrapped: false, stale: false };
       }
       if (manifest === null && failedAt !== undefined && now() - failedAt < FAILED_BOOTSTRAP_BACKOFF_MS) {
@@ -126,6 +146,6 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       const manifest = await readManifest(projectRoot);
       return manifest === null ? [] : manifest.artifacts;
     },
-    bootstrapWarnings: () => [...warnings],
+    bootstrapWarnings: async () => [...warnings],
   };
 }

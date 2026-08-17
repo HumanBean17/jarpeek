@@ -60,6 +60,6 @@ export async function status(ctx: QueryContext): Promise<StatusResult> {
     },
     index: { artifactCount: stats.artifactCount, fqnCount: stats.fqnCount },
     jvm: await (jvmProbe ??= probeJvm()),
-    degraded: mergedDegraded(ctx, stale ? ["stale index served"] : []),
+    degraded: await mergedDegraded(ctx, stale ? ["stale index served"] : []),
   };
 }

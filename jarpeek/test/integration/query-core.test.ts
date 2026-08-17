@@ -407,3 +407,56 @@ describe("stale index served", () => {
     expect(result.degraded.some((d) => d.includes("stale"))).toBe(true);
   });
 });
+
+describe("module source staleness (agent edits while the server runs)", () => {
+  it("a module edit flips isStale, and serving a shrunken file warns about misalignment", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-modstale-project-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-modstale-cache-"));
+    try {
+      writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+      const srcDir = join(projectRoot, "src", "main", "java");
+      mkdirSync(join(srcDir, "com", "mod"), { recursive: true });
+      writeFileSync(
+        join(srcDir, "com", "mod", "Svc.java"),
+        [
+          "package com.mod;",
+          "",
+          "public class Svc {",
+          ...Array.from({ length: 40 }, (_, i) => `  int f${i} = ${i};`),
+          "}",
+          "",
+        ].join("\n"),
+      );
+      const artifacts: DependencyArtifact[] = [
+        { coordinates: ":app", kind: "module", sourceDir: srcDir, provenance: "source", warnings: [] },
+      ];
+      let impl: () => Promise<{ ok: boolean; artifacts: DependencyArtifact[] }> = async () => ({
+        ok: true,
+        artifacts,
+      });
+      const ctx = openContext(projectRoot, {
+        resolvers: { gradle: async () => impl(), includeJdk: false },
+        cacheDir,
+        onProgress: () => {},
+      });
+
+      await outline(ctx, "com.mod.Svc"); // bootstrap: index with line ranges
+
+      // the agent rewrites the module source far shorter; the next resolve
+      // fails, so the stale manifest is served against the CURRENT file
+      writeFileSync(join(srcDir, "com", "mod", "Svc.java"), "package com.mod;\n\npublic class Svc {\n}\n");
+      impl = async () => {
+        throw new Error("build broken");
+      };
+
+      const full = await readSource(ctx, "com.mod.Svc", { mode: "full" });
+      expect(full.provenance).toBe("source");
+      expect(full.stale).toBe(true);
+      expect(full.lineCount).toBeLessThan(10);
+      expect(full.degraded.some((d) => d.includes("module source changed since index"))).toBe(true);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+});

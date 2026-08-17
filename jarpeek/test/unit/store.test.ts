@@ -245,6 +245,88 @@ describe("IndexStore", () => {
     }
   });
 
+  it("forEachRecord treats a shard deleted mid-iteration as empty, not an error", async () => {
+    const root = tmpCacheRoot();
+    try {
+      const store = new IndexStore(root);
+      await store.writeArtifact(artifact("g:keeper:1"), [classRecord("com.x.K", "K")]);
+      await store.writeArtifact(artifact("g:vanishing:1"), [
+        classRecord("com.x.V", "V"),
+        ...Array.from({ length: 500 }, (_, i) => methodRecord("com.x.V", `m${i}`)),
+      ]);
+      // force the directory (and thus the shards list) into memory first
+      await store.lookup("com.x.V");
+
+      // the vanish happens while the stream is already open: the callback
+      // deletes the not-yet-visited artifact's shard before its turn
+      let deleted = false;
+      const collected: string[] = [];
+      await store.forEachRecord((rec) => {
+        if (!deleted && rec.fqn === "com.x.K") {
+          deleted = true;
+          rmSync(join(root, "v1", "artifacts", encodeURIComponent("g:vanishing:1")), {
+            recursive: true,
+            force: true,
+          });
+        }
+        collected.push(rec.fqn);
+      });
+
+      // no throw; whatever was already streamed may arrive, the rest does not
+      expect(collected).toContain("com.x.K");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("re-writing an artifact with fewer classes drops its stale directory entries", async () => {
+    const root = tmpCacheRoot();
+    try {
+      const store = new IndexStore(root);
+      await store.writeArtifact(artifact("g:shrink:1"), [
+        classRecord("com.x.A", "A"),
+        classRecord("com.x.B", "B"),
+      ]);
+      // another artifact also declares B: its entry must survive the rebuild
+      await store.writeArtifact(artifact("g:other:1"), [classRecord("com.x.B", "B")]);
+
+      await store.writeArtifact(artifact("g:shrink:1"), [classRecord("com.x.A", "A")]);
+
+      // A still resolves through the shrunken artifact
+      const a = await store.lookup("com.x.A");
+      expect(a.map((h) => h.meta.coordinates)).toEqual(["g:shrink:1"]);
+      // B survives via the OTHER safe only — not an empty-record winner
+      const b = await store.lookup("com.x.B");
+      expect(b.map((h) => h.meta.coordinates)).toEqual(["g:other:1"]);
+      expect(b[0].records).toHaveLength(1);
+      // and a fqn nobody declares anymore is a clean miss
+      await store.writeArtifact(artifact("g:other:1"), [classRecord("com.x.C", "C")]);
+      expect(await store.lookup("com.x.B")).toEqual([]);
+      expect((await store.stats()).fqnCount).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writeArtifact with zero records empties the shard and the directory", async () => {
+    const root = tmpCacheRoot();
+    try {
+      const store = new IndexStore(root);
+      await store.writeArtifact(artifact("g:zero:1"), [classRecord("com.x.Z", "Z")]);
+      expect(await store.lookup("com.x.Z")).toHaveLength(1);
+
+      await store.writeArtifact(artifact("g:zero:1"), []);
+      expect(await store.lookup("com.x.Z")).toEqual([]);
+
+      const shardDir = join(root, "v1", "artifacts", encodeURIComponent("g:zero:1"));
+      expect(readRawLines(join(shardDir, "records.ndjson"))).toEqual([]);
+      const hits = await store.lookup("com.x.Z");
+      expect(hits).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("removeArtifact deletes the shard and its directory entries", async () => {
     const root = tmpCacheRoot();
     try {

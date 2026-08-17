@@ -95,6 +95,15 @@ export interface ResolveContentOptions {
 const JDK_NOTE = "signatures only (jdk: decompilation is out of scope)";
 
 /**
+ * Served when a module artifact's current file is shorter than the indexed
+ * line ranges claim: the slices would be taken from the wrong lines, so the
+ * answer still arrives but never unmarked. (The staleness signature is the
+ * primary guard; this is the belt for a stale-served manifest.)
+ */
+export const MODULE_SOURCE_CHANGED_WARNING =
+  "module source changed since index; line ranges may be misaligned (run resolve)";
+
+/**
  * The winner's best whole-file source text, with the provenance it came from.
  * Exported for readMember, which reuses the whole resolution ladder.
  */
@@ -111,7 +120,10 @@ export async function resolveContent(
   const internalName = fqn.replaceAll(".", "/");
   const entryPath = classRecord?.file ?? `${internalName}.java`;
   const stale = await servedStale(ctx);
-  const degraded = mergedDegraded(ctx, [...(stale ? ["stale index served"] : []), ...lookupDegraded]);
+  const degraded = await mergedDegraded(ctx, [
+    ...(stale ? ["stale index served"] : []),
+    ...lookupDegraded,
+  ]);
 
   const resolved = (file: string, provenance: Provenance, content: string): ResolvedContent => ({
     meta,
@@ -137,7 +149,14 @@ export async function resolveContent(
   // 1. module sourceDir: the record's file is projectRoot-relative
   if (meta.sourceDir) {
     try {
-      return resolved(entryPath, "source", readFileSync(join(ctx.projectRoot, entryPath), "utf8"));
+      const content = readFileSync(join(ctx.projectRoot, entryPath), "utf8");
+      // the indexed lineEnd values describe the file AT INDEX TIME; a current
+      // file too short to hold them means the ranges no longer align
+      const maxIndexedLineEnd = winner.records.reduce((max, r) => Math.max(max, r.lineEnd ?? 0), 0);
+      if (maxIndexedLineEnd > 0 && splitLines(content).length < maxIndexedLineEnd) {
+        degraded.push(MODULE_SOURCE_CHANGED_WARNING);
+      }
+      return resolved(entryPath, "source", content);
     } catch {
       // unreadable path — fall through to the next source
     }

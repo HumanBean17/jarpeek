@@ -61,6 +61,14 @@ const SENTINEL16 = 0xffff;
 const SENTINEL32 = 0xffffffff;
 const ZIP64_EXTRA_ID = 0x0001;
 const DEFAULT_TEXT_LIMIT_BYTES = 5 * 1024 * 1024;
+/**
+ * Hard ceiling on one entry's inflated output (512 MiB): bounds the
+ * allocation a lying central directory can drive, and refuses honest
+ * entries too large for any legitimate use before inflate runs.
+ */
+const MAX_INFLATED_BYTES = 512 * 1024 * 1024;
+/** Slack over a caller's text budget, so an honest-at-the-limit entry reads. */
+const TEXT_LIMIT_SLACK_BYTES = 64 * 1024;
 
 /** Read exactly `length` bytes at `position`, tolerating short reads. */
 async function readFull(fh: FileHandle, length: number, position: number): Promise<Buffer> {
@@ -237,8 +245,17 @@ export async function listZipEntries(zipPath: string): Promise<ZipEntry[]> {
   }
 }
 
-/** Extract and decompress one entry (method 0 stored, method 8 deflate). */
-export async function readZipEntry(zipPath: string, entry: ZipEntry): Promise<Buffer> {
+/**
+ * Extract and decompress one entry (method 0 stored, method 8 deflate).
+ * Inflation is bounded by `maxOutputBytes` (default 512 MiB) — the declared
+ * uncompressedSize is a lie until proven otherwise — and the result must
+ * match the declared size exactly, else the archive is corrupt.
+ */
+export async function readZipEntry(
+  zipPath: string,
+  entry: ZipEntry,
+  maxOutputBytes: number = MAX_INFLATED_BYTES,
+): Promise<Buffer> {
   const fh = await open(zipPath, "r");
   try {
     const { size } = await fh.stat();
@@ -259,14 +276,30 @@ export async function readZipEntry(zipPath: string, entry: ZipEntry): Promise<Bu
           `past the end of the ${size}-byte file`,
       );
     }
+    if (entry.method === 8 && entry.uncompressedSize > maxOutputBytes) {
+      throw new ZipError(
+        `entry ${entry.name} declares ${entry.uncompressedSize} bytes uncompressed, ` +
+          `over the ${maxOutputBytes}-byte inflation cap`,
+      );
+    }
     const raw = await readFull(fh, entry.compressedSize, dataOffset);
     if (entry.method === 0) return raw;
     if (entry.method === 8) {
+      let inflated: Buffer;
       try {
-        return inflateRawSync(raw);
+        // maxOutputLength bounds the allocation itself: a deflate stream
+        // lying about its size cannot make inflate materialize past the cap
+        inflated = inflateRawSync(raw, { maxOutputLength: maxOutputBytes });
       } catch (cause) {
         throw new ZipError(`failed to inflate entry ${entry.name}: ${(cause as Error).message}`);
       }
+      if (inflated.length !== entry.uncompressedSize) {
+        throw new ZipError(
+          `entry ${entry.name} inflated to ${inflated.length} bytes but declared ` +
+            `${entry.uncompressedSize} (corrupt archive)`,
+        );
+      }
+      return inflated;
     }
     throw new ZipError(`unsupported compression method ${entry.method} for entry ${entry.name}`);
   } finally {
@@ -285,5 +318,5 @@ export async function readTextEntry(
       `entry ${entry.name} is ${entry.uncompressedSize} bytes uncompressed, over the ${maxBytes}-byte limit`,
     );
   }
-  return (await readZipEntry(zipPath, entry)).toString("utf8");
+  return (await readZipEntry(zipPath, entry, maxBytes + TEXT_LIMIT_SLACK_BYTES)).toString("utf8");
 }

@@ -117,8 +117,12 @@ export class IndexStore {
 
   /**
    * Persist one artifact's records under the writers lock: shard files and
-   * directory.json each go through tmp + rename, and the directory gains the
-   * artifact under every distinct fqn in `records`.
+   * directory.json each go through tmp + rename. An empty `records` list is
+   * valid and writes an empty shard — re-indexing a broken artifact must
+   * clear what a previous good index left, not preserve it as fresh. The
+   * directory's membership for THIS safe is rebuilt from the new record set
+   * (other safes' entries are preserved), so classes the artifact no longer
+   * declares stop resolving instead of answering with empty shards.
    */
   async writeArtifact(artifact: DependencyArtifact, records: Declaration[]): Promise<void> {
     await withLock(this.cacheRoot, async () => {
@@ -134,6 +138,16 @@ export class IndexStore {
       );
 
       const directory = await this.readDirectoryUnlocked();
+      const declared = new Set(records.map((record) => record.fqn));
+      for (const [fqn, safes] of [...directory]) {
+        if (!safes.includes(safe) || declared.has(fqn)) continue;
+        const kept = safes.filter((s) => s !== safe);
+        if (kept.length === 0) {
+          directory.delete(fqn);
+        } else {
+          directory.set(fqn, kept);
+        }
+      }
       for (const record of records) {
         const existing = directory.get(record.fqn) ?? [];
         if (!existing.includes(safe)) {
@@ -169,32 +183,36 @@ export class IndexStore {
 
   /**
    * Stream every record of every shard to `fn`, artifacts in readdir order.
-   * Reads shard files line-by-line and bypasses the LRU entirely.
+   * Reads shard files line-by-line and bypasses the LRU entirely. A shard
+   * that vanishes or goes unreadable mid-iteration is treated as empty (the
+   * lines that already arrived are delivered) and counted in the returned
+   * warnings — iteration never throws at a caller for a shard's sake.
    */
-  async forEachRecord(fn: (rec: Declaration, safe: string) => void | Promise<void>): Promise<void> {
+  async forEachRecord(fn: (rec: Declaration, safe: string) => void | Promise<void>): Promise<string[]> {
+    const warnings: string[] = [];
     if (!existsSync(this.artifactsDir)) {
-      return;
+      return warnings;
     }
     for (const safe of readdirSync(this.artifactsDir)) {
       const shardPath = join(this.shardDir(safe), "records.ndjson");
       if (!this.statIfExists(shardPath)) {
         continue;
       }
-      const reader = createInterface({ input: createReadStream(shardPath, "utf8"), crlfDelay: Infinity });
-      try {
-        for await (const line of reader) {
-          if (line.trim().length === 0) {
-            continue;
-          }
-          const record = parseRecordLine(line);
-          if (record) {
-            await fn(record, safe);
-          }
+      const { lines, error } = await readShardLines(shardPath);
+      if (error !== undefined) {
+        warnings.push(`unreadable shard ${decodeURIComponent(safe)}`);
+      }
+      for (const line of lines) {
+        if (line.trim().length === 0) {
+          continue;
         }
-      } finally {
-        reader.close();
+        const record = parseRecordLine(line);
+        if (record) {
+          await fn(record, safe);
+        }
       }
     }
+    return warnings;
   }
 
   /** Directory + artifacts-dir counts; never touches shard files. */
@@ -306,24 +324,22 @@ export class IndexStore {
     };
 
     const records: Declaration[] = [];
-    const reader = createInterface({
-      input: createReadStream(join(shardDir, "records.ndjson"), "utf8"),
-      crlfDelay: Infinity,
-    });
-    try {
-      for await (const line of reader) {
-        if (line.trim().length === 0) {
-          continue;
-        }
-        const record = parseRecordLine(line);
-        if (record) {
-          records.push(record);
-        } else {
-          meta.warnings.push("corrupt record in shard");
-        }
+    const { lines, error } = await readShardLines(join(shardDir, "records.ndjson"));
+    if (error !== undefined) {
+      // vanished or unreadable mid-parse: serve the complete lines that
+      // arrived, marked — a lookup never throws for a shard's sake
+      meta.warnings.push("unreadable shard");
+    }
+    for (const line of lines) {
+      if (line.trim().length === 0) {
+        continue;
       }
-    } finally {
-      reader.close();
+      const record = parseRecordLine(line);
+      if (record) {
+        records.push(record);
+      } else {
+        meta.warnings.push("corrupt record in shard");
+      }
     }
     return { meta, records };
   }
@@ -353,6 +369,31 @@ export class IndexStore {
 
 function safeName(coordinates: string): string {
   return encodeURIComponent(coordinates);
+}
+
+/**
+ * One shard's complete lines, with a stream failure (file deleted or
+ * unreadable mid-read) reported as `error` instead of rejecting. Only the
+ * stream read is guarded — caller-side processing of the returned lines
+ * still throws normally.
+ */
+async function readShardLines(shardPath: string): Promise<{ lines: string[]; error: unknown }> {
+  const lines: string[] = [];
+  const reader = createInterface({
+    input: createReadStream(shardPath, "utf8"),
+    crlfDelay: Infinity,
+  });
+  let error: unknown;
+  try {
+    for await (const line of reader) {
+      lines.push(line);
+    }
+  } catch (e) {
+    error = e;
+  } finally {
+    reader.close();
+  }
+  return { lines, error };
 }
 
 /** One NDJSON line → Declaration; blank/invalid lines yield undefined. */

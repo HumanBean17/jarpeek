@@ -47,6 +47,8 @@ export interface ReadMemberResult {
   stale?: boolean;
   members: MemberSlice[];
   misses: Array<{ selector: string; reason: string }>;
+  /** Bootstrap + resolution degradations (misaligned module source, ...). */
+  degraded: string[];
 }
 
 /**
@@ -209,5 +211,6 @@ export async function readMember(
     ...(source.stale ? { stale: true } : {}),
     members,
     misses,
+    degraded: source.degraded,
   };
 }

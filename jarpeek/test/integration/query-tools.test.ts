@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -369,5 +369,46 @@ describe("where", () => {
 
   it("unknown artifact query throws", async () => {
     await expect(where(c.ctx, "no-such-artifact")).rejects.toThrow(/unknown artifact/);
+  });
+});
+
+describe("read_resource / where honesty parity", () => {
+  it("a stale-served manifest carries stale:true and a degraded entry on both tools", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-parity-project-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-parity-cache-"));
+    suites.push({ projectRoot, cacheDir, ctx: undefined as unknown as QueryContext });
+    try {
+      writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+      let impl: () => Promise<{ ok: boolean; artifacts: DependencyArtifact[] }> = async () => ({
+        ok: true,
+        artifacts: demoArtifacts(),
+      });
+      const ctx = openContext(projectRoot, {
+        resolvers: { gradle: async () => impl(), includeJdk: false },
+        cacheDir,
+        onProgress: () => {},
+      });
+      await readResource(ctx, "demo-lib", "config/*"); // bootstrap
+
+      // build file moves, re-resolve fails: the stale index is served
+      const gradle = join(projectRoot, "build.gradle");
+      writeFileSync(gradle, "plugins { id 'java' }\n// moved\n");
+      const future = new Date(Date.now() + 60_000);
+      utimesSync(gradle, future, future);
+      impl = async () => {
+        throw new Error("offline");
+      };
+
+      const resource = await readResource(ctx, "demo-lib", "config/*");
+      expect(resource.entries[0]!.content).toBe("key=value");
+      expect(resource.stale).toBe(true);
+      expect(resource.degraded.some((d) => d.includes("stale"))).toBe(true);
+
+      const location = await where(ctx, "demo-lib");
+      expect(location.stale).toBe(true);
+      expect(location.degraded.some((d) => d.includes("stale"))).toBe(true);
+    } finally {
+      // cleaned up via suites in afterAll
+    }
   });
 });

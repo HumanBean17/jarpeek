@@ -51,14 +51,14 @@ describe("failed-bootstrap backoff", () => {
     const first = await c.ctx.ensureReady();
     expect(first).toEqual({ bootstrapped: false, stale: false });
     expect(c.calls()).toBe(1);
-    expect(c.ctx.bootstrapWarnings()).toContain("resolution failed: resolver exploded");
+    expect(await c.ctx.bootstrapWarnings()).toContain("resolution failed: resolver exploded");
 
     // within the window: no resolver invocation, degraded warning surfaced
     c.advance(10_000);
     const second = await c.ctx.ensureReady();
     expect(second).toEqual({ bootstrapped: false, stale: false });
     expect(c.calls()).toBe(1);
-    expect(c.ctx.bootstrapWarnings()).toContain("resolution failed recently; retrying later");
+    expect(await c.ctx.bootstrapWarnings()).toContain("resolution failed recently; retrying later");
 
     // past the window: resolution is attempted again
     c.advance(51_000);

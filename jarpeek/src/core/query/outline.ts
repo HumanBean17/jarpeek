@@ -77,15 +77,16 @@ export function manifestOrder(manifest: Manifest | null): Map<string, number> {
 }
 
 /**
- * The manifest's artifact coordinates as a membership filter, or null when the
- * manifest is absent or lists no artifacts — the cache store is user-global
- * and never pruned, so with a manifest present queries serve only its
- * artifacts; without one there is nothing to scope to and every shard is fair
- * game.
+ * The manifest's artifact coordinates as a membership filter, or null only
+ * when no manifest exists — the cache store is user-global and never pruned,
+ * so with a manifest present queries serve only its artifacts. A manifest
+ * that lists ZERO artifacts still scopes: it says the resolved set is empty,
+ * so foreign shards are excluded (and any fallback serving is flagged), not
+ * silently treated as fair game.
  */
 export function manifestScope(manifest: Manifest | null): Set<string> | null {
-  if ((manifest?.artifacts.length ?? 0) === 0) return null;
-  return new Set(manifest!.artifacts.map((artifact) => artifact.coordinates));
+  if (manifest === null) return null;
+  return new Set(manifest.artifacts.map((artifact) => artifact.coordinates));
 }
 
 /**
@@ -128,8 +129,8 @@ export async function servedStale(ctx: QueryContext): Promise<boolean> {
 }
 
 /** Merge bootstrap warnings with per-call degradation, without duplicates. */
-export function mergedDegraded(ctx: QueryContext, extra: string[]): string[] {
-  return [...new Set([...ctx.bootstrapWarnings(), ...extra])];
+export async function mergedDegraded(ctx: QueryContext, extra: string[]): Promise<string[]> {
+  return [...new Set([...(await ctx.bootstrapWarnings()), ...extra])];
 }
 
 /** Class-level rows of the artifact's directly nested classes (`fqn` is their prefix). */
@@ -176,7 +177,7 @@ export async function outline(
     ...(stale ? { stale: true } : {}),
     rows,
     ...(alternatives.length > 0 ? { alternatives } : {}),
-    degraded: mergedDegraded(ctx, [
+    degraded: await mergedDegraded(ctx, [
       ...(stale ? ["stale index served"] : []),
       ...lookupDegraded,
     ]),

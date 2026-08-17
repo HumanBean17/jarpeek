@@ -33,7 +33,7 @@ interface StubCtx {
   cacheDir: string;
   store: {
     lookup(fqn: string): Promise<ShardHit[]>;
-    forEachRecord(fn: (rec: Declaration, safe: string) => void | Promise<void>): Promise<void>;
+    forEachRecord(fn: (rec: Declaration, safe: string) => void | Promise<void>): Promise<string[]>;
   };
   manifest(): Promise<Manifest | null>;
   ensureReady(): Promise<{ bootstrapped: boolean; stale: boolean }>;
@@ -60,7 +60,7 @@ function artifact(coordinates: string, kind: DependencyArtifact["kind"] = "exter
   return { coordinates, kind, provenance: "source", warnings: [] };
 }
 
-const noRecords = async (): Promise<void> => {};
+const noRecords = async (): Promise<string[]> => [];
 
 describe("handleMiss step 1: fuzzy candidates", () => {
   it("a class-lookup miss with findClass hits returns them via fuzzy-candidates", async () => {
@@ -81,11 +81,12 @@ describe("handleMiss step 1: fuzzy candidates", () => {
         lookup: async () => [],
         forEachRecord: async (fn) => {
           await fn(zzzHelper, "com.example%3Aother%3A1");
+          return [];
         },
       },
       manifest: async () => manifestOf([artifact("com.example:other:1")]),
       ensureReady: async () => ({ bootstrapped: false, stale: false }),
-      bootstrapWarnings: () => [],
+      bootstrapWarnings: async () => [],
     };
 
     const result = await handleMiss(asCtx(stub), new LookupMissError("com.example.Zzz"));
@@ -120,7 +121,7 @@ describe("handleMiss step 2: JDK namespace routing", () => {
       },
       manifest: async () => manifestOf([jdk]),
       ensureReady: async () => ({ bootstrapped: false, stale: false }),
-      bootstrapWarnings: () => [],
+      bootstrapWarnings: async () => [],
     };
 
     const result = await handleMiss(asCtx(stub), new LookupMissError("java.util.FakeMiss"));
@@ -142,7 +143,7 @@ describe("handleMiss step 2: JDK namespace routing", () => {
         store: { lookup: async () => [], forEachRecord: noRecords },
         manifest: async () => manifestOf([]),
         ensureReady: async () => ({ bootstrapped: false, stale: false }),
-        bootstrapWarnings: () => [],
+        bootstrapWarnings: async () => [],
       };
       const result = await handleMiss(asCtx(stub), new LookupMissError(fqn), {
         // injected so the unit test never touches a real JDK install
@@ -181,7 +182,7 @@ describe("handleMiss step 3: staleness re-resolve", () => {
         ensureReadyCalls++;
         return { bootstrapped: true, stale: false };
       },
-      bootstrapWarnings: () => [],
+      bootstrapWarnings: async () => [],
     };
 
     const result = await handleMiss(asCtx(stub), new LookupMissError("com.example.Late"));
@@ -203,7 +204,7 @@ describe("handleMiss step 4: negative", () => {
       manifest: async () =>
         manifestOf([artifact("com.example:demo-lib:1.0.0"), artifact("com.example:nosources-lib:1.0.0")]),
       ensureReady: async () => ({ bootstrapped: false, stale: false }),
-      bootstrapWarnings: () => ["degraded-to-cache-scan"],
+      bootstrapWarnings: async () => ["degraded-to-cache-scan"],
     };
 
     const result = await handleMiss(asCtx(stub), new LookupMissError("com.example.Nowhere"));
@@ -223,7 +224,7 @@ describe("handleMiss step 4: negative", () => {
       store: { lookup: async () => [], forEachRecord: noRecords },
       manifest: async () => manifestOf([artifact("com.example:demo-lib:1.0.0")]),
       ensureReady: async () => ({ bootstrapped: false, stale: false }),
-      bootstrapWarnings: () => [],
+      bootstrapWarnings: async () => [],
     };
     const result = await handleMiss(asCtx(stub), { query: "some-resource-glob" });
     expect(result.found).toBe(false);
@@ -246,7 +247,7 @@ describe("handleMiss staleness snapshot (fix round 1)", () => {
         ensureReadyCalls++;
         return { bootstrapped: true, stale: false };
       },
-      bootstrapWarnings: () => [],
+      bootstrapWarnings: async () => [],
     };
 
     const result = await handleMiss(asCtx(stub), new LookupMissError("java.util.Gone"), {
@@ -296,7 +297,7 @@ describe("handleMiss staleness snapshot (fix round 1)", () => {
         ensureReadyCalls++;
         return { bootstrapped: false, stale: false };
       },
-      bootstrapWarnings: () => [],
+      bootstrapWarnings: async () => [],
     };
 
     const result = await handleMiss(asCtx(stub), new LookupMissError("java.util.Fresh"), {

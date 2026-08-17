@@ -48,7 +48,8 @@ function versionOf(coordinates: string): string {
 
 /**
  * Stream class records once, filling the exact/suffix/simple tiers fully and
- * the fuzzy tier through a bounded keep-`limit` collector.
+ * the fuzzy tier through a bounded keep-`limit` collector. Shards that went
+ * unreadable mid-iteration surface as warnings, never as a throw.
  */
 async function collectCandidates(
   ctx: QueryContext,
@@ -56,7 +57,7 @@ async function collectCandidates(
   limit: number,
   order: Map<string, number>,
   scope: Set<string> | null,
-): Promise<Candidate[][]> {
+): Promise<{ tiers: Candidate[][]; warnings: string[] }> {
   const exact = new Map<string, Candidate>();
   const suffix = new Map<string, Candidate>();
   const simple = new Map<string, Candidate>();
@@ -72,7 +73,7 @@ async function collectCandidates(
       (order.get(b.candidate.coordinates) ?? UNORDERED) ||
     a.candidate.seq - b.candidate.seq;
 
-  await ctx.store.forEachRecord((record, safe) => {
+  const streamWarnings = await ctx.store.forEachRecord((record, safe) => {
     if (!isClassKind(record.kind)) return;
     const fqn = record.fqn;
     const simpleName = record.selector || fqn.slice(fqn.lastIndexOf(".") + 1);
@@ -104,12 +105,15 @@ async function collectCandidates(
   });
 
   fuzzy.sort(byRank);
-  return [
-    [...exact.values()],
-    [...suffix.values()],
-    [...simple.values()],
-    fuzzy.map((e) => e.candidate),
-  ];
+  return {
+    tiers: [
+      [...exact.values()],
+      [...suffix.values()],
+      [...simple.values()],
+      fuzzy.map((e) => e.candidate),
+    ],
+    warnings: streamWarnings,
+  };
 }
 
 /**
@@ -133,7 +137,7 @@ export async function findClass(
     provenanceByCoordinates.set(artifact.coordinates, artifact.provenance);
   }
 
-  const tiers = await collectCandidates(ctx, query, limit, order, scope);
+  const { tiers, warnings: streamWarnings } = await collectCandidates(ctx, query, limit, order, scope);
 
   // shards the manifest does not list (e.g. manually injected): one lookup
   // per distinct fqn recovers their shard metadata
@@ -162,5 +166,11 @@ export async function findClass(
   );
 
   const stale = await servedStale(ctx);
-  return { hits, degraded: mergedDegraded(ctx, stale ? ["stale index served"] : []) };
+  return {
+    hits,
+    degraded: await mergedDegraded(ctx, [
+      ...(stale ? ["stale index served"] : []),
+      ...streamWarnings,
+    ]),
+  };
 }

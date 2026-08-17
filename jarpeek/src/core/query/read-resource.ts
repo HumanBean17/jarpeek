@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import type { DependencyArtifact, Provenance } from "../types.js";
 import { listZipEntries, readZipEntry } from "../../parse/zip.js";
 import type { QueryContext } from "./context.js";
+import { mergedDegraded, servedStale } from "./outline.js";
 
 export interface ResourceEntry {
   path: string;
@@ -24,6 +25,10 @@ export interface ReadResourceResult {
   artifact: string;
   entries: ResourceEntry[];
   provenance: Provenance;
+  /** Present (and true) only when a stale index had to be served. */
+  stale?: boolean;
+  /** Bootstrap + staleness degradations, same channel as the sibling tools. */
+  degraded: string[];
 }
 
 /** Extensions that never have readable text content. */
@@ -162,5 +167,12 @@ export async function readResource(
     }
     entries.push(entry(zipEntry.name, await readZipEntry(jar, zipEntry)));
   }
-  return { artifact: artifact.coordinates, entries, provenance: artifact.provenance };
+  const stale = await servedStale(ctx);
+  return {
+    artifact: artifact.coordinates,
+    entries,
+    provenance: artifact.provenance,
+    ...(stale ? { stale: true } : {}),
+    degraded: await mergedDegraded(ctx, stale ? ["stale index served"] : []),
+  };
 }

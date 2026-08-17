@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "nod
 import { dirname, join, resolve, sep } from "node:path";
 import { listZipEntries, readZipEntry } from "../../parse/zip.js";
 import type { QueryContext } from "./context.js";
+import { mergedDegraded, servedStale } from "./outline.js";
 import { resolveArtifactQuery } from "./read-resource.js";
 
 export interface WhereResult {
@@ -17,6 +18,10 @@ export interface WhereResult {
   dir: string;
   fileCount: number;
   note?: string;
+  /** Present (and true) only when a stale index had to be served. */
+  stale?: boolean;
+  /** Bootstrap + staleness degradations, same channel as the sibling tools. */
+  degraded: string[];
 }
 
 /** Marker written after a complete extraction; its mtime is the freshness clock. */
@@ -75,9 +80,19 @@ async function unpackSources(ctx: QueryContext, jar: string, safeDir: string): P
 export async function where(ctx: QueryContext, coordinates: string): Promise<WhereResult> {
   await ctx.ensureReady();
   const artifact = await resolveArtifactQuery(ctx, coordinates);
+  const stale = await servedStale(ctx);
+  const honesty = {
+    ...(stale ? { stale: true as const } : {}),
+    degraded: await mergedDegraded(ctx, stale ? ["stale index served"] : []),
+  };
 
   if (artifact.sourceDir !== undefined && existsSync(artifact.sourceDir)) {
-    return { coordinates: artifact.coordinates, dir: artifact.sourceDir, fileCount: countFiles(artifact.sourceDir) };
+    return {
+      coordinates: artifact.coordinates,
+      dir: artifact.sourceDir,
+      fileCount: countFiles(artifact.sourceDir),
+      ...honesty,
+    };
   }
 
   // JDK sources are not unpacked: src.zip is browsable in place and the
@@ -90,6 +105,7 @@ export async function where(ctx: QueryContext, coordinates: string): Promise<Whe
         dir: dirname(artifact.sourcesJar),
         fileCount: entries,
         note: `jdk src.zip (${artifact.sourcesJar})`,
+        ...honesty,
       };
     }
     if (artifact.classesDir !== undefined && existsSync(artifact.classesDir)) {
@@ -98,6 +114,7 @@ export async function where(ctx: QueryContext, coordinates: string): Promise<Whe
         dir: dirname(artifact.classesDir),
         fileCount: countFiles(artifact.classesDir),
         note: "jdk jimage-extracted class files (signatures only)",
+        ...honesty,
       };
     }
   }
@@ -106,7 +123,7 @@ export async function where(ctx: QueryContext, coordinates: string): Promise<Whe
     const safe = encodeURIComponent(artifact.coordinates);
     const dir = join(ctx.cacheDir, "v1", "unpacked", safe);
     const fileCount = await unpackSources(ctx, artifact.sourcesJar, dir);
-    return { coordinates: artifact.coordinates, dir, fileCount };
+    return { coordinates: artifact.coordinates, dir, fileCount, ...honesty };
   }
 
   if (artifact.binaryJar !== undefined && existsSync(artifact.binaryJar)) {
@@ -116,6 +133,7 @@ export async function where(ctx: QueryContext, coordinates: string): Promise<Whe
       dir: artifact.binaryJar,
       fileCount: entries,
       note: "no sources jar; binary jar path",
+      ...honesty,
     };
   }
 
@@ -125,6 +143,7 @@ export async function where(ctx: QueryContext, coordinates: string): Promise<Whe
       dir: dirname(artifact.classesDir),
       fileCount: countFiles(artifact.classesDir),
       note: "classes directory (parent of classesDir)",
+      ...honesty,
     };
   }
 

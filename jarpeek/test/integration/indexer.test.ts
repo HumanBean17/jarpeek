@@ -295,6 +295,14 @@ describe("indexArtifacts", () => {
     expect(pruned).toEqual([]);
   });
 
+  it("the manifest records a source signature for every module artifact", async () => {
+    const manifest = await readManifest(ctx.projectRoot);
+    const byCoordinates = new Map(manifest!.artifacts.map((a) => [a.coordinates, a]));
+    expect(byCoordinates.get("com.example:mod:1.0")!.sourceSig).toEqual(expect.any(String));
+    // artifacts without a source dir have nothing to fingerprint
+    expect(byCoordinates.get("com.example:demo-lib:1.0.0")!.sourceSig).toBeUndefined();
+  });
+
   it("Kotlin facade classes flow through as regular class records", async () => {
     const hit = await hitFor("com.example.KtHelperKt", "com.example:mod:1.0");
     const classRecord = hit.records.find((r) => r.selector === "KtHelperKt" && r.kind === "class");
@@ -328,16 +336,47 @@ describe("indexArtifacts", () => {
   });
 
   it("corrupt sources jar degrades to a warning without aborting the run", () => {
+    // the corrupt artifact IS indexed — with an empty shard, so a re-index of
+    // a previously-good artifact cannot leave its old records serving
     expect(ctx.result.indexed).toEqual([
       "com.example:demo-lib:1.0.0",
       "com.example:nosources-lib:1.0.0",
       "com.example:demo-lib-bin:1.0.0",
       "com.example:mod:1.0",
       "jdk:java.fake",
+      "com.example:corrupt:1.0.0",
       "com.example:extracted:1.0.0",
     ]);
     expect(ctx.result.warnings.some((w) => w.startsWith("failed to index ") && w.includes("corrupt-sources.jar"))).toBe(true);
     expect(ctx.result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("a zero-record re-index empties the shard instead of serving stale records", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-reindex-project-"));
+    const cacheRoot = mkdtempSync(join(tmpdir(), "jarpeek-reindex-cache-"));
+    try {
+      const store = new IndexStore(cacheRoot);
+      const good: DependencyArtifact = {
+        coordinates: "com.example:flaky:1.0",
+        kind: "external",
+        sourcesJar: DEMO_SOURCES_JAR,
+        provenance: "source",
+        warnings: [],
+      };
+      await indexArtifacts(projectRoot, [good], { store });
+      expect(await store.lookup("com.example.Demo")).toHaveLength(1);
+
+      // the sources jar goes bad: 0 records must still WRITE, clearing the
+      // previous shard rather than leaving it to serve as fresh forever
+      const broken: DependencyArtifact = { ...good, sourcesJar: join(projectRoot, "corrupt.jar") };
+      writeFileSync(broken.sourcesJar!, "not a zip");
+      const result = await indexArtifacts(projectRoot, [broken], { store });
+      expect(result.indexed).toEqual(["com.example:flaky:1.0"]);
+      expect(await store.lookup("com.example.Demo")).toEqual([]);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+      rmSync(cacheRoot, { recursive: true, force: true });
+    }
   });
 
   it("artifacts without any source are skipped with a reason", () => {
