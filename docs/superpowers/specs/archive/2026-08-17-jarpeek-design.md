@@ -1,6 +1,6 @@
 # jarpeek — Dependency Source Access for AI Agents on JVM Projects
 
-**Status:** draft
+**Status:** released
 
 ## Problem
 
