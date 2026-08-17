@@ -44,8 +44,8 @@ describe("CLI smoke", () => {
     expect(stdout).toContain("mcp");
   });
 
-  it("find-class Foo exits 1 with not implemented on stderr", async () => {
-    const { stderr, code } = await runCli(["find-class", "Foo"]);
+  it("stubbed subcommands (init until Task 22) exit 1 with not implemented on stderr", async () => {
+    const { stderr, code } = await runCli(["init"]);
     expect(code).toBe(1);
     expect(stderr).toContain("not implemented");
   });
