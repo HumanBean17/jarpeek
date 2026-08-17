@@ -1,0 +1,1 @@
+C:\Users\dev\.m2\repository\org\a\b\1.0\b-1.0.jar;D:\opt\local\custom.jar

@@ -1,0 +1,1 @@
+/home/dev/.m2/repository/org/springframework/spring-tx/6.1.4/spring-tx-6.1.4.jar:/home/dev/.m2/repository/org/junit/jupiter/junit-jupiter/5.10.2/junit-jupiter-5.10.2.jar:/opt/local/custom.jar
