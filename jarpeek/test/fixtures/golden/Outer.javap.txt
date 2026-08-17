@@ -1,0 +1,6 @@
+Compiled from "Outer.java"
+public class com.example.Outer {
+  public com.example.Outer();
+  public void dispatch(java.lang.String);
+  private static void lambda$dispatch$0(java.lang.String);
+}

@@ -1,0 +1,5 @@
+Compiled from "Demo.java"
+public class com.example.Demo$Worker {
+  public com.example.Demo$Worker();
+  protected int work();
+}

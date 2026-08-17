@@ -22,6 +22,7 @@ const SRC = join(PKG_ROOT, "test/fixtures/src/java");
 const NOSOURCES_SRC = join(PKG_ROOT, "test/fixtures/src-nosources/java");
 const RESOURCES = join(PKG_ROOT, "test/fixtures/src/resources");
 const OUT_DIR = join(PKG_ROOT, "test/fixtures/jars");
+const GOLDEN_DIR = join(PKG_ROOT, "test/fixtures/golden");
 const JAR_DATE = "2020-01-01T00:00:00Z";
 
 /** 8 bytes with a NUL in the middle: binary-sniff fixture for logo.png. */
@@ -80,6 +81,31 @@ function summary(label, jarPath) {
   return { label, entries };
 }
 
+/** The demo classes whose `javap -p` output becomes a committed golden. */
+const DEMO_GOLDENS = [
+  "com.example.Demo",
+  "com.example.Demo$Worker",
+  "com.example.Outer",
+  "com.example.Outer$Inner",
+  "com.example.Colors",
+  "com.example.Point",
+  "com.example.Res",
+];
+
+/**
+ * Emit one `javap -p` golden for the class-file reader's parity tests. Run
+ * against the tmp classes dir before cleanup; the committed golden is then
+ * compared at test time without needing javap on PATH.
+ */
+function writeJavapGolden(classesDir, binaryName) {
+  const fileName = `${binaryName.split(".").pop()}.javap.txt`;
+  const out = execFileSync("javap", ["-p", "-classpath", classesDir, binaryName], {
+    encoding: "utf8",
+  });
+  writeFileSync(join(GOLDEN_DIR, fileName), out);
+  console.log(`wrote test/fixtures/golden/${fileName}`);
+}
+
 function main() {
   const tmp = mkdtempSync(join(tmpdir(), "jarpeek-fixtures-"));
   try {
@@ -103,6 +129,10 @@ function main() {
     run("jar", demoArgs);
     summary("demo-lib", demoJar);
 
+    // javap goldens for the class-file reader, from the same compiled classes
+    mkdirSync(GOLDEN_DIR, { recursive: true });
+    for (const binaryName of DEMO_GOLDENS) writeJavapGolden(demoClasses, binaryName);
+
     // sources jar: the same .java files, nothing else.
     const sourcesJar = join(OUT_DIR, "demo-lib-1.0.0-sources.jar");
     const sourcesArgs = createJar(sourcesJar, { manifest: false });
@@ -119,6 +149,7 @@ function main() {
     for (const f of listFiles(hiddenClasses)) nosourcesArgs.push("-C", hiddenClasses, f);
     run("jar", nosourcesArgs);
     summary("nosources", nosourcesJar);
+    writeJavapGolden(hiddenClasses, "com.example.nosources.Hidden");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

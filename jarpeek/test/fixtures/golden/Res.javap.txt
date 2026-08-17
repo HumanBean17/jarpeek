@@ -1,0 +1,4 @@
+Compiled from "Res.java"
+public interface com.example.Res extends java.lang.annotation.Annotation {
+  public abstract java.lang.String value();
+}

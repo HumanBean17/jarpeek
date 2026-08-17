@@ -1,0 +1,13 @@
+Compiled from "Colors.java"
+public final class com.example.Colors extends java.lang.Enum<com.example.Colors> {
+  public static final com.example.Colors RED;
+  public static final com.example.Colors GREEN;
+  public static final com.example.Colors BLUE;
+  private static final com.example.Colors[] $VALUES;
+  public static com.example.Colors[] values();
+  public static com.example.Colors valueOf(java.lang.String);
+  private com.example.Colors();
+  public java.lang.String label();
+  private static com.example.Colors[] $values();
+  static {};
+}

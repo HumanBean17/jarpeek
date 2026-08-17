@@ -1,0 +1,11 @@
+Compiled from "Point.java"
+public final class com.example.Point extends java.lang.Record {
+  private final int x;
+  private final int y;
+  public com.example.Point(int, int);
+  public final java.lang.String toString();
+  public final int hashCode();
+  public final boolean equals(java.lang.Object);
+  public int x();
+  public int y();
+}

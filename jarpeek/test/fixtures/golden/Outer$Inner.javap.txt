@@ -1,0 +1,5 @@
+Compiled from "Outer.java"
+public class com.example.Outer$Inner {
+  public com.example.Outer$Inner(com.example.Outer);
+  public java.lang.String describe();
+}

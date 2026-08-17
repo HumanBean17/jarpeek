@@ -1,0 +1,5 @@
+Compiled from "Hidden.java"
+public class com.example.nosources.Hidden {
+  public com.example.nosources.Hidden();
+  public java.lang.String secret();
+}
