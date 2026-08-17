@@ -11,26 +11,10 @@
  * diagnostic string, and parseJavaSource never throws on any input.
  */
 import type { Declaration, Visibility } from "../core/types.js";
+import type { ParsedClass, SourceFileDeclarations } from "./declarations.js";
 
-export interface ParsedClass {
-  fqn: string;
-  kind: "class" | "interface" | "enum" | "record" | "annotation";
-  visibility: Visibility;
-  static: boolean;
-  deprecated: boolean;
-  signature: string;
-  lineStart: number;
-  lineEnd: number;
-  javadocStart?: number;
-  members: Declaration[];
-}
-
-export interface SourceFileDeclarations {
-  file: string;
-  pkg: string | null;
-  classes: ParsedClass[];
-  diagnostics: string[];
-}
+// Re-exported for Task 4 consumers; the canonical home is declarations.ts.
+export type { ParsedClass, SourceFileDeclarations };
 
 type TokenKind = "ident" | "number" | "string" | "char" | "punct";
 
