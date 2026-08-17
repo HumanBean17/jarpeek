@@ -487,3 +487,42 @@ describe("prime over the CLI transport", () => {
     }
   });
 });
+
+describe("numeric flag validation", () => {
+  it("rejects a non-integer --limit with usage on stderr and exit 1", () => {
+    const run = cli(c, ["find-class", "Demo", "--limit", "abc"]);
+    expect(run.code).toBe(1);
+    expect(run.stderr).toMatch(/positive integer/);
+    expect(run.stdout).toBe("");
+  });
+
+  it("rejects a non-positive --limit", () => {
+    for (const bad of ["0", "-3"]) {
+      const run = cli(c, ["find-class", "Demo", "--limit", bad]);
+      expect(run.code).toBe(1);
+      expect(run.stderr).toMatch(/positive integer/);
+    }
+    const symbols = cli(c, ["search-symbols", "run", "--limit", "0"]);
+    expect(symbols.code).toBe(1);
+    expect(symbols.stderr).toMatch(/positive integer/);
+  });
+
+  it("rejects a 0-based or inverted --lines range", () => {
+    for (const bad of ["0:5", "5:2"]) {
+      const run = cli(c, ["read-source", "com.example.Demo", "--lines", bad]);
+      expect(run.code).toBe(1);
+      expect(run.stderr).toMatch(/1-based from:to/);
+    }
+  });
+
+  it("valid values still work unchanged", () => {
+    const limited = cli(c, ["--json", "find-class", "Demo", "--limit", "2"]);
+    expect(limited.code).toBe(0);
+    const hits = JSON.parse(limited.stdout);
+    expect(hits.hits.length).toBeLessThanOrEqual(2);
+
+    const lines = cli(c, ["--json", "read-source", "com.example.Demo", "--lines", "2:4"]);
+    expect(lines.code).toBe(0);
+    expect(JSON.parse(lines.stdout).startLine).toBe(2);
+  });
+});

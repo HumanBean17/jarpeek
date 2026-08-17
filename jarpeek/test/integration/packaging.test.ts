@@ -23,6 +23,10 @@ interface PkgJson {
   files?: string[];
   scripts?: Record<string, string>;
   dependencies?: Record<string, string>;
+  license?: string;
+  description?: string;
+  repository?: { url?: string };
+  keywords?: string[];
 }
 
 interface PackEntry {
@@ -82,6 +86,14 @@ describe("packaging", () => {
     expect(readPkg().bin).toEqual({ jarpeek: "dist/cli/index.js" });
   });
 
+  it("carries the npm registry metadata: license, description, repository, keywords", () => {
+    const pkg = readPkg();
+    expect(pkg.license).toBe("MIT");
+    expect(pkg.description).toMatch(/JVM dependency sources/i);
+    expect(pkg.repository?.url).toContain("github.com/HumanBean17/jarpeek");
+    expect(pkg.keywords).toEqual(["mcp", "jvm", "java", "kotlin", "dependencies", "ai-agents"]);
+  });
+
   it("pins the engines floor the runtime dep closure requires", () => {
     expect(readPkg().engines?.node).toBe(">=20.12.0");
   });
@@ -103,6 +115,14 @@ describe("packaging", () => {
         `no packed file under ${banned}`,
       ).toEqual([]);
     }
+  });
+
+  it("packs CFR's MIT license (attribution travels with the binary)", () => {
+    const paths = packedPaths(npm("pack --dry-run --json"));
+    expect(paths).toContain("vendor/cfr-LICENSE.txt");
+    const license = readFileSync(join(PKG_ROOT, "vendor", "cfr-LICENSE.txt"), "utf8");
+    expect(license).toContain("MIT");
+    expect(license).toContain("Lee Benfield");
   });
 
   it("documents install, usage, and provenance in the README", () => {

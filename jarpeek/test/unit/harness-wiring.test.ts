@@ -4,7 +4,7 @@
  * SessionStart hook merges, and the .gitignore guard — all over tmp roots,
  * every case idempotent by second-run byte comparison.
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -340,5 +340,96 @@ describe("gitignore guard", () => {
     const has = tmpProject({ ".gitignore": "target/\n.jarpeek/\n" });
     expect(await ensureGitignoreJarpeek(has)).toBe(false);
     expect(readFileSync(join(has, ".gitignore"), "utf8")).toBe("target/\n.jarpeek/\n");
+  });
+});
+
+describe("wireMcp: CRLF configs (codex-toml)", () => {
+  const realPlatform = process.platform;
+  const stubPlatform = (platform: string): void => {
+    Object.defineProperty(process, "platform", { value: platform, writable: true, configurable: true });
+  };
+  afterEach(() => stubPlatform(realPlatform));
+
+  it("replaces an existing jarpeek section in place — no duplicate table", async () => {
+    const home = codexHome();
+    const existing = [
+      '# my config',
+      '[mcp_servers.jarpeek]',
+      'command = "old"',
+      'args = ["old-mode"]',
+      '',
+      '[profile.x]',
+      'editor = "vim"',
+      '',
+    ].join("\r\n");
+    writeFileSync(join(home, ".codex", "config.toml"), existing);
+
+    await wireMcp(byId("codex"), home);
+    const text = readFileSync(join(home, ".codex", "config.toml"), "utf8");
+
+    // exactly one jarpeek table header: the CRLF header must match, so the
+    // append path (which would create a duplicate, invalid table) stays closed
+    expect(text.split("\n").filter((l) => l.trim() === "[mcp_servers.jarpeek]")).toHaveLength(1);
+    expect(text).toContain('command = "jarpeek"');
+    expect(text).not.toContain('command = "old"');
+    expect(text).toContain('args = ["mcp"]');
+    expect(text).toContain('[profile.x]');
+    expect(text).toContain('editor = "vim"');
+    // the dominant line ending survives
+    expect(text.includes("\r\n")).toBe(true);
+  });
+
+  it("appends the section with CRLF endings when none exists", async () => {
+    const home = codexHome();
+    writeFileSync(join(home, ".codex", "config.toml"), '[profile.x]\r\neditor = "vim"\r\n');
+
+    await wireMcp(byId("codex"), home);
+    const text = readFileSync(join(home, ".codex", "config.toml"), "utf8");
+    expect(text.split("\n").filter((l) => l.trim() === "[mcp_servers.jarpeek]")).toHaveLength(1);
+    // every line this editor wrote ends CRLF — no mixed endings
+    for (const line of text.split("\n").slice(0, -1)) {
+      expect(line.endsWith("\r")).toBe(true);
+    }
+    expect(text).toContain('command = "jarpeek"');
+    expect(text).toContain('args = ["mcp"]');
+  });
+});
+
+describe("wireMcp: win32 spawn shape", () => {
+  const realPlatform = process.platform;
+  const stubPlatform = (platform: string): void => {
+    Object.defineProperty(process, "platform", { value: platform, writable: true, configurable: true });
+  };
+  afterEach(() => stubPlatform(realPlatform));
+
+  it("registers cmd /c jarpeek mcp on win32 (npm bin is jarpeek.cmd)", async () => {
+    stubPlatform("win32");
+    const root = tmpProject();
+    await wireMcp(byId("claude"), root);
+    expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8")).mcpServers.jarpeek).toEqual({
+      command: "cmd",
+      args: ["/c", "jarpeek", "mcp"],
+    });
+
+    const gemini = tmpProject();
+    await wireMcp(byId("gemini"), gemini);
+    expect(
+      JSON.parse(readFileSync(join(gemini, ".gemini", "settings.json"), "utf8")).mcpServers.jarpeek,
+    ).toEqual({ command: "cmd", args: ["/c", "jarpeek", "mcp"] });
+
+    const home = codexHome();
+    await wireMcp(byId("codex"), home);
+    const toml = readFileSync(join(home, ".codex", "config.toml"), "utf8");
+    expect(toml).toContain('command = "cmd"');
+    expect(toml).toContain('args = ["/c", "jarpeek", "mcp"]');
+  });
+
+  it("keeps the plain spawn on posix platforms", async () => {
+    stubPlatform("darwin");
+    const root = tmpProject();
+    await wireMcp(byId("claude"), root);
+    expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8")).mcpServers.jarpeek).toEqual(
+      JARPEEK_SERVER,
+    );
   });
 });

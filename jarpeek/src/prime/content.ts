@@ -77,11 +77,12 @@ protocol below has already tried the three recovery steps for you.
 | \`status\` | — | manifest, index, and JVM availability report |
 | \`where <coordinates>\` | one artifact | the on-disk directory its sources are unpacked to |
 
-Add \`--json\` to any command for the machine-readable result object — the
-exact payload the matching MCP tool returns (MCP names are the underscore
-forms of the same nine: find_class, outline, read_member, read_source,
-read_resource, search_symbols, resolve, status, where). \`--project <dir>\`
-picks the project root; the default is the current directory.
+Add \`--json\` to any of the nine query commands above for the
+machine-readable result object — the exact payload the matching MCP tool
+returns (MCP names are the underscore forms: find_class, outline,
+read_member, read_source, read_resource, search_symbols, resolve, status,
+where). \`--project <dir>\` picks the project root; the default is the
+current directory.
 
 ## Provenance
 

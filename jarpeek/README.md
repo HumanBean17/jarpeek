@@ -22,8 +22,8 @@ token cost:
 
 jarpeek resolves the project's dependency set once (Gradle, Maven, local
 caches, the JDK), indexes declarations from sources jars and bytecode, and
-decompiles on demand with a bundled CFR. It speaks MCP (in-process, for
-harnesses that support it) and a plain CLI (for everything else).
+decompiles on demand with a bundled CFR. It speaks MCP (a stdio subprocess,
+for harnesses that support it) and a plain CLI (for everything else).
 
 ## Install
 
@@ -72,7 +72,7 @@ Member selectors are `#name` or `#name(Type,...)` for overloads.
 ```
 jarpeek --json find-class StringJoiner --limit 5
 jarpeek outline java.util.StringJoiner --kind method
-jarpeek read-member com.example.lib.ApiClient #execute(Request,int)
+jarpeek read-member com.example.lib.ApiClient '#execute(Request,int)'
 jarpeek read-source com.example.lib.ApiClient --lines 40:80
 jarpeek read-resource com.example:demo-lib:1.0.0 'META-INF/**'
 jarpeek search-symbols builder --kind method
@@ -150,6 +150,11 @@ the build script.
   resolver's m2-layout matching and are skipped.
 - Decompilation quality is CFR's; `signature` is the floor when no JVM is
   available.
+
+## Credits
+
+Decompilation ships [CFR](https://github.com/leibnitz27/cfr) 0.152 by Lee
+Benfield (MIT); its license is included as `vendor/cfr-LICENSE.txt`.
 
 ## License
 

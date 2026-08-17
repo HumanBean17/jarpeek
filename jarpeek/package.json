@@ -1,6 +1,20 @@
 {
   "name": "jarpeek",
   "version": "0.1.0",
+  "description": "Context-frugal navigation into JVM dependency sources, for AI agents",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HumanBean17/jarpeek.git"
+  },
+  "keywords": [
+    "mcp",
+    "jvm",
+    "java",
+    "kotlin",
+    "dependencies",
+    "ai-agents"
+  ],
   "type": "module",
   "bin": {
     "jarpeek": "dist/cli/index.js"

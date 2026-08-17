@@ -244,13 +244,31 @@ function renderWhere(result: WhereResult): string {
 
 // -- flag parsing --------------------------------------------------------------
 
-/** `a:b` → {from, to}; anything else is a usage error. */
+/** `a:b` → {from, to}; non-numeric, 0-based, or inverted ranges are usage errors. */
 function parseLinesFlag(value: string): { from: number; to: number } {
   const match = /^(\d+):(\d+)$/.exec(value);
   if (match === null) {
     throw new InvalidArgumentError(`--lines expects from:to (e.g. 2:3), got "${value}"`);
   }
-  return { from: Number(match[1]), to: Number(match[2]) };
+  const from = Number(match[1]);
+  const to = Number(match[2]);
+  if (from < 1 || to < from) {
+    throw new InvalidArgumentError(`--lines expects 1-based from:to with to >= from, got "${value}"`);
+  }
+  return { from, to };
+}
+
+/**
+ * `--limit` value → positive integer. A NaN limit (e.g. `--limit abc`)
+ * silently emptied every result set; a non-positive one was meaningless —
+ * both are usage errors now, not quiet zeros.
+ */
+function parsePositiveInt(value: string): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new InvalidArgumentError(`expected a positive integer, got "${value}"`);
+  }
+  return n;
 }
 
 function renderInit(result: InitResult): string {
@@ -296,12 +314,12 @@ function invocation(): Invocation {
 
 command("find-class", "find classes by FQN, suffix, simple name, or fuzzy name")
   .argument("<query>")
-  .option("--limit <n>", "max hits", "20")
-  .action(async (query: string, cmd: { limit: string }) => {
+  .option("--limit <n>", "max hits", parsePositiveInt, 20)
+  .action(async (query: string, cmd: { limit: number }) => {
     const inv = invocation();
     const ctx = ctxFor(inv);
     await runQuery(inv, ctx, async () => {
-      const result = await findClass(ctx, query, { limit: Number(cmd.limit) });
+      const result = await findClass(ctx, query, { limit: cmd.limit });
       if (result.hits.length === 0) {
         // the tiers already ran the suggestion ladder; only the negative remains
         emitMiss(await handleMiss(ctx, { query }), query, inv);
@@ -346,6 +364,7 @@ command("read-member", "source slices for member selectors (#name, #name(T1,T2))
       const result = await readMember(ctx, fqn, selectors.join(","));
       emit(result, inv, () => renderReadMember(result));
       for (const miss of result.misses) warn(`${miss.selector}: ${miss.reason}`);
+      if (result.degraded.length > 0) warn(...result.degraded);
     });
   });
 
@@ -384,14 +403,14 @@ command("read-resource", "non-class jar entries (config, services, manifests)")
 
 command("search-symbols", "find declarations by member name across artifacts")
   .argument("<query>")
-  .option("--limit <n>", "max rows", "50")
+  .option("--limit <n>", "max rows", parsePositiveInt, 50)
   .option("--kind <k>", "filter by declaration kind")
-  .action(async (query: string, cmd: { limit: string; kind?: string }) => {
+  .action(async (query: string, cmd: { limit: number; kind?: string }) => {
     const inv = invocation();
     const ctx = ctxFor(inv);
     await runQuery(inv, ctx, async () => {
       const result = await searchSymbols(ctx, query, {
-        limit: Number(cmd.limit),
+        limit: cmd.limit,
         ...(cmd.kind !== undefined ? { kind: cmd.kind as DeclKind } : {}),
       });
       emit(

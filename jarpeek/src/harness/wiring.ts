@@ -120,6 +120,19 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 
 // -- MCP wiring -------------------------------------------------------------------
 
+/**
+ * The server entry to register. On win32 the npm bin is `jarpeek.cmd`, which
+ * Node-hosted MCP clients cannot spawn without a shell — the entry goes
+ * through `cmd /c` instead. (SessionStart hook commands are NOT wrapped:
+ * harnesses already run those through a shell.)
+ */
+function mcpServerEntry(command: string): { command: string; args: string[] } {
+  if (process.platform === "win32") {
+    return { command: "cmd", args: ["/c", command, "mcp"] };
+  }
+  return { command, args: ["mcp"] };
+}
+
 /** Register the jarpeek stdio server in the harness's MCP config. */
 export async function wireMcp(
   descriptor: HarnessDescriptor,
@@ -128,17 +141,18 @@ export async function wireMcp(
 ): Promise<WireMcpResult> {
   const target = resolveTarget(descriptor.mcp.target, projectRoot);
   const command = opts.command ?? "jarpeek";
+  const entry = mcpServerEntry(command);
   let changed: boolean;
 
   if (descriptor.mcp.format === "codex-toml") {
     const text = await readTextOrEmpty(target);
-    changed = await writeIfChanged(target, editTomlMcpSection(text, command));
+    changed = await writeIfChanged(target, editTomlMcpSection(text, entry));
   } else {
     // mcp-json and settings-json share the shape: set mcpServers.jarpeek,
     // leave every other key (servers, themes, tool config) untouched
     const doc = await readJson(target);
     const servers = isObject(doc.mcpServers) ? doc.mcpServers : {};
-    doc.mcpServers = { ...servers, jarpeek: { command, args: ["mcp"] } };
+    doc.mcpServers = { ...servers, jarpeek: entry };
     changed = await writeIfChanged(target, jsonText(doc));
   }
   return { target, changed };
@@ -179,7 +193,8 @@ async function readTextOrEmpty(path: string): Promise<string> {
 // -- TOML editor --------------------------------------------------------------------
 
 /** A `[table]` or `[[array-of-tables]]` header line, captured without brackets. */
-const HEADER_RE = /^[ \t]*\[\[([^\]]+)\]\][ \t]*(?:#.*)?$|^[ \t]*\[([^\]]+)\][ \t]*(?:#.*)?$/;
+const HEADER_RE =
+  /^[ \t]*\[\[([^\]]+)\]\][ \t]*(?:#[^\r\n]*)?\r?$|^[ \t]*\[([^\]]+)\][ \t]*(?:#[^\r\n]*)?\r?$/;
 
 const headerName = (line: string): string | null => {
   const match = HEADER_RE.exec(line);
@@ -187,28 +202,38 @@ const headerName = (line: string): string | null => {
   return (match[1] ?? match[2]).trim();
 };
 
-const keyLine = (key: string): RegExp => new RegExp(`^[ \t]*${key}[ \t]*=`);
+const keyLine = (key: string): RegExp => new RegExp(`^[ \t]*${key}[ \t]*\r?[ \t]*=`);
 
 /** TOML basic-string escaping for the values jarpeek writes. */
 const tomlString = (value: string): string => `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 
+/** Render a TOML array-of-strings value, e.g. `["mcp"]`. */
+const tomlStringArray = (values: string[]): string => `[${values.map(tomlString).join(", ")}]`;
+
 /**
  * Set `command`/`args` of `[mcp_servers.jarpeek]`: replace the section's own
  * key lines in place (inserting after the header when missing), or append the
- * whole section at EOF. Every other line is byte-preserved.
+ * whole section at EOF. Every other line is byte-preserved. The file's
+ * dominant line ending — CRLF when any `\r\n` is present — is used for the
+ * lines this editor writes, so a CRLF config never ends up mixed or with a
+ * `\r` stranded inside a header (which would defeat header matching and
+ * append a duplicate table).
  */
-function editTomlMcpSection(text: string, command: string): string {
+function editTomlMcpSection(text: string, entry: { command: string; args: string[] }): string {
+  const crlf = text.includes("\r\n");
+  const eol = crlf ? "\r\n" : "\n";
   const fields: Array<[string, string]> = [
-    ["command", tomlString(command)],
-    ["args", '["mcp"]'],
+    ["command", tomlString(entry.command)],
+    ["args", tomlStringArray(entry.args)],
   ];
   const lines = text.split("\n");
   const headerIndex = lines.findIndex((line) => headerName(line) === "mcp_servers.jarpeek");
 
   if (headerIndex === -1) {
     let out = text;
-    if (out.length > 0) out += out.endsWith("\n") ? "\n" : "\n\n";
-    out += ["[mcp_servers.jarpeek]", ...fields.map(([k, v]) => `${k} = ${v}`)].join("\n") + "\n";
+    if (out.length > 0) out += out.endsWith("\n") ? eol : eol + eol;
+    out +=
+      ["[mcp_servers.jarpeek]", ...fields.map(([k, v]) => `${k} = ${v}`)].join(eol) + eol;
     return out;
   }
 
@@ -223,13 +248,13 @@ function editTomlMcpSection(text: string, command: string): string {
   for (let i = headerIndex + 1; i < end; i++) {
     for (const [key, value] of fields) {
       if (pending.has(key) && keyLine(key).test(lines[i])) {
-        lines[i] = `${key} = ${value}`;
+        lines[i] = `${key} = ${value}${lines[i]!.endsWith("\r") ? "\r" : ""}`;
         pending.delete(key);
       }
     }
   }
   if (pending.size > 0) {
-    const insertions = [...pending.entries()].map(([k, v]) => `${k} = ${v}`);
+    const insertions = [...pending.entries()].map(([k, v]) => `${k} = ${v}${crlf ? "\r" : ""}`);
     lines.splice(end, 0, ...insertions);
   }
   return lines.join("\n");
