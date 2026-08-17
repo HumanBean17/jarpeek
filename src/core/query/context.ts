@@ -16,6 +16,9 @@
  * simply miss; a bootstrap that fails in that state is memoized for 60s so
  * repeated queries degrade fast instead of re-running a broken build each
  * time.
+ *
+ * A context owns a ListingService and a memoized decompiler; lazy lookups
+ * are coming in Task 11.
  */
 import type { DependencyArtifact } from "../types.js";
 import { indexArtifacts } from "../../index/indexer.js";
@@ -23,6 +26,8 @@ import { isStale, readManifest, type Manifest } from "../../index/manifest.js";
 import { IndexStore } from "../../index/store.js";
 import { resolveDependencies, type ResolveDependenciesOptions } from "../../resolver/index.js";
 import { ensureCacheDir } from "../../util/cache-dir.js";
+import { ListingService } from "../listing.js";
+import { createDecompiler, type DecompileFn } from "../../decompile/cfr.js";
 
 export interface EnsureReadyResult {
   /** True when this call ran resolve+index (vs serving an existing fresh manifest). */
@@ -34,8 +39,12 @@ export interface EnsureReadyResult {
 export interface QueryContext {
   readonly projectRoot: string;
   readonly store: IndexStore;
-  /** Cache root shared by the store and the decompile cache. */
+  /** Cache root shared by the store. */
   readonly cacheDir: string;
+  /** Listing service: provides artifact listings. */
+  readonly listings: ListingService;
+  /** Memoized decompiler function. */
+  readonly decompiler: DecompileFn;
   ensureReady(): Promise<EnsureReadyResult>;
   manifest(): Promise<Manifest | null>;
   artifacts(): Promise<DependencyArtifact[]>;
@@ -138,10 +147,16 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
 
   let inFlight: Promise<EnsureReadyResult> | undefined;
 
+  // Construct once per context
+  const listings = new ListingService();
+  const decompiler = createDecompiler();
+
   return {
     projectRoot,
     store,
     cacheDir,
+    listings,
+    decompiler,
     async ensureReady(): Promise<EnsureReadyResult> {
       const manifest = await readManifest(projectRoot);
       if (manifest !== null && !(await isStale(projectRoot, manifest))) {
