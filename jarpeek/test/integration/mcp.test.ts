@@ -333,21 +333,32 @@ describe("status", () => {
 describe("context-cost budget (the product's core promise)", () => {
   // BigService: 100 methods, 408 source lines. Its outline must fit the
   // frugal budget so an agent's first look at a class costs ~100 lines, not
-  // ~400.
+  // ~400. The payload is compact JSON (one physical line), so the honest
+  // line-count proxy is one per declaration row; the full-source contrast
+  // proves the outline is what keeps the budget.
   const BUDGET_LINES = 120;
 
   it("outline of BigService stays within the budget", async () => {
     const result = await call("outline", { fqn: "com.example.BigService" });
-    const text = (result.content![0] as { text: string }).text;
-    const lines = text.split("\n");
-    expect(lines.length).toBeLessThanOrEqual(BUDGET_LINES);
+    const parsed = payload(result);
+    expect(parsed.rows).toHaveLength(101); // 100 methods + the class row
+    expect(parsed.rows.length).toBeLessThanOrEqual(BUDGET_LINES);
+    expect((result.content![0] as { text: string }).text.split("\n").length).toBeLessThanOrEqual(
+      BUDGET_LINES,
+    );
   });
 
   it("read_source outline mode stays within the same budget", async () => {
-    const result = await call("read_source", { fqn: "com.example.BigService", mode: "outline" });
-    const text = (result.content![0] as { text: string }).text;
-    const lines = text.split("\n");
-    expect(lines.length).toBeLessThanOrEqual(BUDGET_LINES);
+    const parsed = payload(
+      await call("read_source", { fqn: "com.example.BigService", mode: "outline" }),
+    );
+    expect(parsed.rows.length).toBeLessThanOrEqual(BUDGET_LINES);
+  });
+
+  it("full source blows the budget — outline is what keeps it", async () => {
+    const parsed = payload(await call("read_source", { fqn: "com.example.BigService", mode: "full" }));
+    expect(parsed.lineCount).toBe(408);
+    expect(parsed.lineCount).toBeGreaterThan(BUDGET_LINES);
   });
 });
 
