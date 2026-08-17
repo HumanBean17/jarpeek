@@ -47,6 +47,8 @@ export interface ReadMemberResult {
   stale?: boolean;
   members: MemberSlice[];
   misses: Array<{ selector: string; reason: string }>;
+  /** Other artifacts declaring the same fqn, when the winner had collisions. */
+  alternatives?: Array<{ coordinates: string }>;
   /** Bootstrap + resolution degradations (misaligned module source, ...). */
   degraded: string[];
 }
@@ -211,6 +213,7 @@ export async function readMember(
     ...(source.stale ? { stale: true } : {}),
     members,
     misses,
+    ...(source.alternatives.length > 0 ? { alternatives: source.alternatives } : {}),
     degraded: source.degraded,
   };
 }

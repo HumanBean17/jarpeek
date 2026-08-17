@@ -13,6 +13,7 @@
 import { accessSync, constants, existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import type { DependencyArtifact } from "../core/types.js";
+import { moduleCoordinates } from "./module-coordinate.js";
 import { ensureGradleInitScript } from "./gradle-init.js";
 import { runWithTimeout, SpawnError, TimeoutError, type RunResult } from "../util/exec.js";
 
@@ -106,18 +107,22 @@ function failureDetail(result: RunResult): string {
  * configuration in document order winning (compileClasspath precedes
  * runtimeClasspath in the init script's iteration, so main-compile labels
  * stick). External artifacts pair with the sources map; module artifacts
- * carry the project directory. Errored configurations contribute nothing.
+ * carry the project directory under namespaced coordinates — the bare
+ * project path (":app") would collide with another project's identically
+ * named module in the user-global index cache. Errored configurations
+ * contribute nothing.
  */
-function mapArtifacts(document: DumpDocument): DependencyArtifact[] {
+function mapArtifacts(document: DumpDocument, projectRoot: string): DependencyArtifact[] {
   const byCoordinates = new Map<string, DependencyArtifact>();
   const sources = document.sources ?? {};
 
   for (const configuration of document.configurations ?? []) {
     for (const dependency of configuration.dependencies ?? []) {
-      if (byCoordinates.has(dependency.coordinates)) continue;
       if (dependency.kind === "module") {
-        byCoordinates.set(dependency.coordinates, {
-          coordinates: dependency.coordinates,
+        const coordinates = moduleCoordinates(projectRoot, dependency.coordinates);
+        if (byCoordinates.has(coordinates)) continue;
+        byCoordinates.set(coordinates, {
+          coordinates,
           kind: "module",
           sourceDir: dependency.path,
           provenance: "source",
@@ -125,6 +130,7 @@ function mapArtifacts(document: DumpDocument): DependencyArtifact[] {
         });
         continue;
       }
+      if (byCoordinates.has(dependency.coordinates)) continue;
       const sourcesJar = sources[dependency.coordinates];
       byCoordinates.set(dependency.coordinates, {
         coordinates: dependency.coordinates,
@@ -253,5 +259,5 @@ export async function resolveGradle(
   } catch {
     return { ok: false, artifacts: [], reason: "bad-json" };
   }
-  return { ok: true, artifacts: mapArtifacts(document) };
+  return { ok: true, artifacts: mapArtifacts(document, projectRoot) };
 }

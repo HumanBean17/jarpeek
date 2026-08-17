@@ -478,3 +478,27 @@ describe("multi-declarator fields and interface-nested types (synthetic)", () =>
     expect(member(plain, "I").static).toBe(false);
   });
 });
+
+describe("generic-qualified types (Outer<T>.Inner)", () => {
+  it("a field or parameter typed Outer<T>.Inner parses instead of being dropped", () => {
+    const source = [
+      "package p;",
+      "",
+      "public class GenericQualified {",
+      "    Outer<String>.Inner field;",
+      "",
+      "    void use(Outer<String>.Inner p) { }",
+      "",
+      "    Map<String, List<String>>.Entry entry() { return null; }",
+      "}",
+      "",
+    ].join("\n");
+    const parsed = parseJavaSource(source, "GenericQualified.java");
+    const cls = parsed.classes.find((c) => c.fqn === "p.GenericQualified");
+    expect(cls, "class should parse").toBeDefined();
+    expect(cls!.members.map((m) => m.selector)).toEqual(["field", "use", "entry"]);
+    expect(cls!.members[0]!.kind).toBe("field");
+    expect(cls!.members[0]!.signature).toContain("Outer<String>.Inner");
+    expect(parsed.diagnostics).toEqual([]);
+  });
+});

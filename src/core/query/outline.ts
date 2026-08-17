@@ -133,8 +133,19 @@ export async function mergedDegraded(ctx: QueryContext, extra: string[]): Promis
   return [...new Set([...(await ctx.bootstrapWarnings()), ...extra])];
 }
 
-/** Class-level rows of the artifact's directly nested classes (`fqn` is their prefix). */
-async function nestedClassRows(winner: ArtifactHit, ctx: QueryContext, fqn: string): Promise<Declaration[]> {
+/**
+ * Class-level rows of the artifact's directly nested classes (`fqn` is their
+ * prefix). Nested lookups obey the same manifest scope as the winner lookup:
+ * a stale shard's declarations never leak into a newer winner's outline
+ * unflagged — when no in-scope shard declares the nested class, the
+ * out-of-manifest shard serves it with the `OUT_OF_MANIFEST_WARNING`.
+ */
+async function nestedClassRows(
+  winner: ArtifactHit,
+  ctx: QueryContext,
+  fqn: string,
+  scope: Set<string> | null,
+): Promise<{ rows: Declaration[]; degraded: string[] }> {
   const prefix = `${fqn}.`;
   const nestedFqns: string[] = [];
   for (const other of (await ctx.store.readDirectory()).keys()) {
@@ -143,13 +154,17 @@ async function nestedClassRows(winner: ArtifactHit, ctx: QueryContext, fqn: stri
     }
   }
   const rows: Declaration[] = [];
+  let outOfManifest = false;
   for (const nestedFqn of nestedFqns) {
     const shards = await ctx.store.lookup(nestedFqn);
     if (shards.length === 0) continue;
-    const shard = shards.find((hit) => hit.safe === winner.safe) ?? shards[0]!;
+    const scoped = scope === null ? shards : shards.filter((hit) => scope.has(hit.meta.coordinates));
+    if (scoped.length === 0) outOfManifest = true;
+    const pool = scoped.length > 0 ? scoped : shards;
+    const shard = pool.find((hit) => hit.safe === winner.safe) ?? pool[0]!;
     rows.push(...shard.records.filter((record) => record.fqn === nestedFqn && isClassKind(record.kind)));
   }
-  return rows;
+  return { rows, degraded: outOfManifest ? [OUT_OF_MANIFEST_WARNING] : [] };
 }
 
 /**
@@ -164,7 +179,8 @@ export async function outline(
 ): Promise<OutlineResult> {
   await ctx.ensureReady();
   const { winner, alternatives, degraded: lookupDegraded } = await orderedLookup(ctx, fqn);
-  const rows = [...winner.records, ...(await nestedClassRows(winner, ctx, fqn))].filter(
+  const nested = await nestedClassRows(winner, ctx, fqn, manifestScope(await ctx.manifest()));
+  const rows = [...winner.records, ...nested.rows].filter(
     (row) =>
       (opts.kind === undefined || row.kind === opts.kind) &&
       (opts.visibility === undefined || row.visibility === opts.visibility),
@@ -180,6 +196,7 @@ export async function outline(
     degraded: await mergedDegraded(ctx, [
       ...(stale ? ["stale index served"] : []),
       ...lookupDegraded,
+      ...nested.degraded,
     ]),
   };
 }

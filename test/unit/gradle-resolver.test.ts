@@ -13,6 +13,7 @@ import {
 } from "../../src/util/exec.js";
 import { GRADLE_INIT_SCRIPT, ensureGradleInitScript } from "../../src/resolver/gradle-init.js";
 import { gradleOnPathDefault, resolveGradle } from "../../src/resolver/gradle.js";
+import { moduleCoordinates, moduleNamespace } from "../../src/resolver/module-coordinate.js";
 
 /** Always-true PATH probe; installed by tests that reach the bare-gradle path. */
 const PROBE_FOUND = () => true;
@@ -134,7 +135,11 @@ describe("resolveGradle: parsing the sentinel-wrapped dump", () => {
     expect(junit.binaryJar).toBe(JUNIT_JAR);
     expect(junit.provenance).toBe("signature");
 
-    const app = lookup(":app");
+    // module coordinates are namespaced per project root: the bare project
+    // path (":app") would collide with another project's ":app" in the
+    // user-global index cache
+    const app = lookup(moduleCoordinates(projectRoot, ":app"));
+    expect(app.coordinates).toBe(`module:${moduleNamespace(projectRoot)}:app`);
     expect(app.kind).toBe("module");
     expect(app.sourceDir).toBe(APP_DIR);
     expect(app.provenance).toBe("source");

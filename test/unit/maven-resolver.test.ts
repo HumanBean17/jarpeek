@@ -11,6 +11,7 @@ import {
   type RunResult,
 } from "../../src/util/exec.js";
 import { mvnOnPathDefault, resolveMaven } from "../../src/resolver/maven.js";
+import { moduleCoordinates } from "../../src/resolver/module-coordinate.js";
 
 /** Always-true PATH probe; installed by tests that reach the bare-mvn path. */
 const PROBE_FOUND = () => true;
@@ -538,6 +539,30 @@ describe("resolveMaven: multi-module", () => {
 
     expect(resolution.ok).toBe(true);
     expect(resolution.artifacts).toHaveLength(2);
+  });
+
+  it("maps a sibling's target/classes entry to a kind:module artifact on the module directory", async () => {
+    const { projectRoot, mod } = multiModule();
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const jar = m2Jar(m2, "com", "example", "lib", "2.0", "lib-2.0.jar");
+    // a reactor run resolving root's dependencies onto sibling mod's compiled
+    // output plus one external jar
+    const modClasses = join(mod, "target", "classes");
+    const { exec } = perModuleCpExec([
+      { cwd: projectRoot, content: `${modClasses}:${jar}` },
+      { cwd: mod, content: "" },
+    ]);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    const lookup = indexBy(resolution.artifacts);
+    const module = lookup(moduleCoordinates(projectRoot, "mod"));
+    expect(module.kind).toBe("module");
+    expect(module.sourceDir).toBe(mod); // indexed in place, like a Gradle module
+    expect(module.provenance).toBe("source");
+    expect(lookup(LIB)).toBeDefined(); // the m2 jar alongside it survives
   });
 });
 

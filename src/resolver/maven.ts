@@ -12,8 +12,9 @@
  */
 import { accessSync, constants, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, relative } from "node:path";
 import type { DependencyArtifact } from "../core/types.js";
+import { moduleCoordinates } from "./module-coordinate.js";
 import { runWithTimeout, SpawnError, TimeoutError, type RunResult } from "../util/exec.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
@@ -201,16 +202,35 @@ function moduleDirs(projectRoot: string): string[] {
 }
 
 /**
+ * Reverse-map a reactor classpath entry onto the module directory whose
+ * compiled output it is (`<module>/target/classes`), or null when the entry
+ * is not a module's classes. Comparison is on `/`-normalized paths,
+ * case-insensitive like the m2 anchor: windows maven output may spell the
+ * drive differently than the directory walk did.
+ */
+function matchModuleClasses(raw: string, modules: string[]): string | null {
+  const normalized = toForwardSlashes(raw).replace(/\/+$/, "");
+  for (const moduleDir of modules) {
+    const base = `${toForwardSlashes(moduleDir)}/target/classes`;
+    if (normalized.toLowerCase() === base.toLowerCase()) return moduleDir;
+  }
+  return null;
+}
+
+/**
  * Parse the collected build-classpath outputs into artifacts, deduplicated by
- * coordinates with the first module in run order winning. An output that is
+ * coordinates with the first module in run order winning. A sibling reactor
+ * module appears as its `<module>/target/classes` output — mapped to a
+ * `kind: "module"` artifact on the module directory itself, so its sources
+ * are indexed in place exactly like a Gradle module's. An output that is
  * missing or empty contributes nothing; only when every output was empty is
  * the resolution a `no-classpath` failure (the root POM may legitimately be
  * a dep-less aggregator whose submodules carry everything). Outputs that
- * carried entries but not one m2-layout path mean the local repository was
- * relocated out of `~/.m2/repository` — reported as a named failure rather
- * than a misleading empty success.
+ * carried entries but matched neither m2 layout nor a module directory mean
+ * the local repository was relocated out of `~/.m2/repository` — reported as
+ * a named failure rather than a misleading empty success.
  */
-function parseOutputs(outputs: string[], m2Dir: string): MavenResolution {
+function parseOutputs(outputs: string[], m2Dir: string, projectRoot: string, modules: string[]): MavenResolution {
   const byCoordinates = new Map<string, DependencyArtifact>();
   let sawContent = false;
   for (const output of outputs) {
@@ -224,7 +244,29 @@ function parseOutputs(outputs: string[], m2Dir: string): MavenResolution {
     sawContent = true;
     for (const raw of splitClasspath(content)) {
       const hit = parseM2Entry(raw, m2Dir);
-      if (hit === null) continue; // non-m2 layout: skipped silently (v1)
+      if (hit === null) {
+        // a reactor sibling's compiled output is the module itself, not an
+        // external jar; anything else (system-scoped jars, IDE caches) is
+        // skipped silently (v1)
+        const moduleDir = matchModuleClasses(raw, modules);
+        if (moduleDir !== null) {
+          const coordinates = moduleCoordinates(
+            projectRoot,
+            relative(projectRoot, moduleDir).replaceAll("\\", "/"),
+          );
+          if (!byCoordinates.has(coordinates)) {
+            byCoordinates.set(coordinates, {
+              coordinates,
+              configuration: "compile+runtime+test",
+              kind: "module",
+              sourceDir: moduleDir,
+              provenance: "source",
+              warnings: [],
+            });
+          }
+        }
+        continue;
+      }
       const coordinates = `${hit.group}:${hit.artifact}:${hit.version}`;
       if (byCoordinates.has(coordinates)) continue;
       const sourcesJar = sourcesSibling(raw, hit.artifact, hit.version);
@@ -271,11 +313,12 @@ export async function resolveMaven(
 
   const scratch = mkdtempSync(join(tmpdir(), "jarpeek-mvn-"));
   const outputs: string[] = [];
+  const modules = moduleDirs(projectRoot);
   try {
     // every invocation is --non-recursive with its own output file: a root
     // reactor run would overwrite the absolute outputFile per module, so the
     // surviving file would hold only the LAST module's classpath
-    for (const [index, moduleDir] of [projectRoot, ...moduleDirs(projectRoot)].entries()) {
+    for (const [index, moduleDir] of [projectRoot, ...modules].entries()) {
       const output = join(scratch, `cp-${index}.txt`);
       outputs.push(output);
       const args = [
@@ -317,7 +360,7 @@ export async function resolveMaven(
       // tolerated: pairing simply falls back to whatever sources already exist
     }
 
-    return parseOutputs(outputs, m2Dir);
+    return parseOutputs(outputs, m2Dir, projectRoot, modules);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

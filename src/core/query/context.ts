@@ -10,8 +10,10 @@
  *
  * Resolver failures never propagate when there is a manifest to serve — the
  * stale index is served with a `stale` flag and a warning (the degradation
- * ladder). With no manifest at all there is nothing to serve, and lookups
- * simply miss; a bootstrap that throws in that state is memoized for 60s so
+ * ladder). That includes a resolution that degraded all the way to the cache
+ * scan: a heuristic artifact set never overwrites a manifest a build tool
+ * produced. With no manifest at all there is nothing to serve, and lookups
+ * simply miss; a bootstrap that fails in that state is memoized for 60s so
  * repeated queries degrade fast instead of re-running a broken build each
  * time.
  */
@@ -58,8 +60,11 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** How long a failed no-manifest bootstrap suppresses re-resolution. */
+/** How long a failed bootstrap suppresses re-resolution. */
 const FAILED_BOOTSTRAP_BACKOFF_MS = 60_000;
+
+/** Warning carried when a heuristic cache scan could not replace a real manifest. */
+const STALE_SERVED_CACHE_SCAN = "stale index served (resolution degraded to cache scan)";
 
 /**
  * Open a query context. Nothing touches the filesystem beyond cache-dir
@@ -71,7 +76,7 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
   const warnings: string[] = [];
   const now = opts.now ?? Date.now;
 
-  /** When a bootstrap threw with no manifest to serve: retries back off to this. */
+  /** When a bootstrap failed or served stale (throw, or cache-scan fallback): retries back off to this. */
   let failedAt: number | undefined;
 
   const addWarning = (msg: string): void => {
@@ -89,6 +94,21 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
   async function runBootstrap(wasStale: boolean): Promise<EnsureReadyResult> {
     try {
       const resolution = await resolveDependencies(projectRoot, opts.resolvers);
+      // cache-scan is the answer of last resort: when a manifest with indexed
+      // artifacts already describes this project, serving it stale (flagged)
+      // beats replacing it with a heuristic artifact set that reads as fresh —
+      // the degradation ladder's "serve stale index" row
+      if (resolution.viaCacheScan) {
+        const existing = await readManifest(projectRoot);
+        if (existing !== null && existing.artifacts.length > 0) {
+          warnings.length = 0;
+          for (const entry of resolution.degraded) addWarning(`${entry.from}: ${entry.reason}`);
+          addWarning(STALE_SERVED_CACHE_SCAN);
+          await addPersistedArtifactWarnings();
+          failedAt = now();
+          return { bootstrapped: false, stale: true };
+        }
+      }
       // the channel documents the LAST bootstrap: a successful one starts
       // from a clean slate instead of stacking every historical warning
       warnings.length = 0;
@@ -130,9 +150,15 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
         await addPersistedArtifactWarnings();
         return { bootstrapped: false, stale: false };
       }
-      if (manifest === null && failedAt !== undefined && now() - failedAt < FAILED_BOOTSTRAP_BACKOFF_MS) {
-        addWarning("resolution failed recently; retrying later");
-        return { bootstrapped: false, stale: false };
+      if (failedAt !== undefined && now() - failedAt < FAILED_BOOTSTRAP_BACKOFF_MS) {
+        if (manifest === null) {
+          addWarning("resolution failed recently; retrying later");
+          return { bootstrapped: false, stale: false };
+        }
+        // resolution keeps failing or degrading while a manifest exists:
+        // serve it stale rather than re-running a broken build per query
+        addWarning("stale index served (resolution failed recently)");
+        return { bootstrapped: false, stale: true };
       }
       if (!inFlight) {
         inFlight = runBootstrap(manifest !== null).finally(() => {

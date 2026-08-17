@@ -149,9 +149,11 @@ function renderMember(member: MemberSlice, fqn: string, provenance: string): str
 
 function renderReadMember(result: ReadMemberResult): string {
   const blocks = result.members.map((member) => renderMember(member, result.fqn, result.provenance));
-  return [...blocks, ...result.misses.map((miss) => `miss ${miss.selector}: ${miss.reason}`)].join(
-    "\n\n",
-  );
+  return [
+    ...blocks,
+    ...result.misses.map((miss) => `miss ${miss.selector}: ${miss.reason}`),
+    ...(result.alternatives?.map((alt) => `alternative: ${alt.coordinates}`) ?? []),
+  ].join("\n\n");
 }
 
 function renderReadSource(result: ReadSourceResult): string {
@@ -192,12 +194,13 @@ function renderReadResource(result: ReadResourceResult): string {
 
 function renderSearchSymbols(result: SymbolResult): string {
   return renderTable([
-    ["SELECTOR", "FQN", "KIND", "ARTIFACT", "SIGNATURE"],
+    ["SELECTOR", "FQN", "KIND", "ARTIFACT", "PROV", "SIGNATURE"],
     ...result.rows.map((row) => [
       clipCell(row.selector),
       clipCell(row.fqn),
       row.kind,
       row.coordinates,
+      row.provenance,
       clipCell(row.signature),
     ]),
   ]);

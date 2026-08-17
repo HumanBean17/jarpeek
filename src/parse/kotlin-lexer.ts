@@ -184,7 +184,11 @@ function tokenize(text: string): { tokens: Token[]; javadocs: JavadocInfo[] } {
   /**
    * Skip one string literal (plain or raw `"""`). `$` templates switch to an
    * expression frame so braces and nested strings inside `${...}` never end
-   * the literal early; the whole literal becomes one inert token.
+   * the literal early; the whole literal becomes one inert token. A raw
+   * literal may span lines, but a plain one (or a `${...}` template inside
+   * one) legally cannot — so when a plain frame is still open at a line
+   * break, the literal ends there: one unterminated string costs one
+   * declaration, not the rest of the file.
    */
   const skipString = (): void => {
     const raw = text[i + 1] === '"' && text[i + 2] === '"';
@@ -195,14 +199,10 @@ function tokenize(text: string): { tokens: Token[]; javadocs: JavadocInfo[] } {
     while (i < n && frames.length > 0) {
       const c = text[i]!;
       const top = frames[frames.length - 1]!;
-      if (c === "\n") {
+      if (c === "\n" || c === "\r") {
+        if (frames.some((frame) => frame.kind === "str")) break; // unterminated plain string
         line++;
-        i++;
-        continue;
-      }
-      if (c === "\r") {
-        line++;
-        i += text[i + 1] === "\n" ? 2 : 1;
+        i += c === "\r" && text[i + 1] === "\n" ? 2 : 1;
         continue;
       }
       if (top.kind === "expr") {
@@ -828,7 +828,9 @@ class Parser {
 
   /**
    * Split a `(...)` parameter list into per-parameter token groups, consuming
-   * the parens. Commas inside nested parens or generics do not split.
+   * the parens. Commas inside nested parens, generics, or braces do not
+   * split — braces because a default value may be a lambda literal whose
+   * parameter list has its own commas (`= { a, b -> ... }`).
    */
   private paramGroups(): Token[][] {
     if (!isPunct(this.peek(), "(")) return [];
@@ -836,6 +838,7 @@ class Parser {
     const groups: Token[][] = [[]];
     let parenDepth = 0;
     let angleDepth = 0;
+    let braceDepth = 0;
     while (this.pos < this.tokens.length) {
       const t = this.peek()!;
       if (t.text === "(") parenDepth++;
@@ -847,7 +850,9 @@ class Parser {
         parenDepth--;
       } else if (t.text === "<") angleDepth++;
       else if (t.text === ">") angleDepth = Math.max(0, angleDepth - 1);
-      else if (t.text === "," && parenDepth === 0 && angleDepth === 0) {
+      else if (t.text === "{") braceDepth++;
+      else if (t.text === "}") braceDepth = Math.max(0, braceDepth - 1);
+      else if (t.text === "," && parenDepth === 0 && angleDepth === 0 && braceDepth === 0) {
         this.pos++;
         groups.push([]);
         continue;

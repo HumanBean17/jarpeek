@@ -928,24 +928,25 @@ class Parser {
   }
 
   /**
-   * Consume exactly one type reference — a qualified name, optionally one
-   * generic argument group, then array brackets. The member name follows and
-   * must not be swallowed here. Returns its tokens; empty when the current
-   * token cannot start a type.
+   * Consume exactly one type reference — qualified-name segments and generic
+   * argument groups interleaved (`Outer<T>`, `Map<K,V>.Entry`, `A<B>.C<D>`),
+   * then array brackets. The member name follows and must not be swallowed
+   * here. Returns its tokens; empty when the current token cannot start a
+   * type.
    */
   private parseTypeTokens(): Token[] {
     const out: Token[] = [];
     if (!isIdent(this.peek())) return out;
     out.push(this.peek()!);
     this.pos++;
-    while (isPunct(this.peek(), ".") && isIdent(this.peek(1))) {
-      out.push(this.peek()!);
-      this.pos++;
-      out.push(this.peek()!);
-      this.pos++;
-    }
-    if (isPunct(this.peek(), "<")) {
+    for (;;) {
+      while (isPunct(this.peek(), ".") && isIdent(this.peek(1))) {
+        out.push(this.peek()!, this.peek(1)!);
+        this.pos += 2;
+      }
+      if (!isPunct(this.peek(), "<")) break;
       out.push(...this.skipAngleGroup());
+      // a generic group may be a qualifier: `Outer<T>.Inner` continues
     }
     while (isPunct(this.peek(), "[")) {
       out.push(this.peek()!);
