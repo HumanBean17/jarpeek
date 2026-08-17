@@ -13,10 +13,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import type { Declaration, DependencyArtifact, Provenance } from "../core/types.js";
-import { parseJavaSource } from "../parse/java-lexer.js";
-import { parseKotlinSource } from "../parse/kotlin-lexer.js";
-import type { ParsedClass } from "../parse/declarations.js";
-import { parseClassFile } from "../parse/classfile.js";
+import {
+  isClassEntry,
+  recordsFromSourceText,
+  recordsFromClassBytes,
+} from "../parse/records.js";
 import { listZipEntries, readTextEntry, readZipEntry } from "../parse/zip.js";
 import { ensureCacheDir } from "../util/cache-dir.js";
 import { IndexStore } from "./store.js";
@@ -35,20 +36,6 @@ export interface IndexResult {
   durationMs: number;
 }
 
-/** Class entries that carry no declarations worth indexing. */
-const EXCLUDED_CLASS_FILES = new Set(["module-info.class", "package-info.class"]);
-
-const isClassEntry = (name: string): boolean =>
-  name.endsWith(".class") && !EXCLUDED_CLASS_FILES.has(basename(name));
-
-/**
- * Anonymous and local classes compile to digit simple names (`Outer$1` →
- * `Outer.1`); synthetic lambda shapes surface the same way. None of them are
- * navigation targets, so the whole class record — members included — is
- * dropped when the last fqn segment does not start a Java identifier.
- */
-const isIndexableClass = (fqn: string): boolean => /^[A-Za-z_]/.test(fqn.slice(fqn.lastIndexOf(".") + 1));
-
 /** What one source branch produced for one artifact. */
 interface BranchResult {
   records: Declaration[];
@@ -56,67 +43,6 @@ interface BranchResult {
   /** Files handed to a parser; surfaced in the progress line. */
   files: number;
   provenance: Provenance;
-}
-
-/** Fields shared by ParsedClass and ParsedClassFile, minus the members. */
-type ClassRecordSource = Pick<
-  ParsedClass,
-  "fqn" | "kind" | "visibility" | "static" | "deprecated" | "signature"
-> &
-  Partial<Pick<ParsedClass, "lineStart" | "lineEnd" | "javadocStart">>;
-
-/** Class-level Declaration: selector is the simple name, per the query contract. */
-function classRecord(cls: ClassRecordSource, file: string): Declaration {
-  return {
-    fqn: cls.fqn,
-    file,
-    selector: cls.fqn.slice(cls.fqn.lastIndexOf(".") + 1),
-    kind: cls.kind,
-    visibility: cls.visibility,
-    static: cls.static,
-    deprecated: cls.deprecated,
-    signature: cls.signature,
-    ...(cls.lineStart !== undefined ? { lineStart: cls.lineStart, lineEnd: cls.lineEnd } : {}),
-    ...(cls.javadocStart !== undefined ? { javadocStart: cls.javadocStart } : {}),
-  };
-}
-
-/**
- * Parse one source text into class + member records. Lexers never throw;
- * their per-file diagnostics become `failed to index` warnings upstream.
- */
-function parseSourceText(text: string, file: string): { records: Declaration[]; diagnostics: string[] } {
-  const parsed = file.endsWith(".kt") ? parseKotlinSource(text, file) : parseJavaSource(text, file);
-  const records: Declaration[] = [];
-  for (const cls of parsed.classes) {
-    records.push(classRecord(cls, file));
-    for (const member of cls.members) {
-      records.push({ ...member, fqn: cls.fqn, file });
-    }
-  }
-  return { records, diagnostics: parsed.diagnostics };
-}
-
-/** One compiled class buffer → class + member records, or a warning on failure. */
-function classFileRecords(
-  buf: Buffer,
-  file: string,
-  label: string,
-  records: Declaration[],
-  warnings: string[],
-): void {
-  let parsed;
-  try {
-    parsed = parseClassFile(buf);
-  } catch (e) {
-    warnings.push(`failed to index ${label}: ${(e as Error).message}`);
-    return;
-  }
-  if (!isIndexableClass(parsed.fqn)) return;
-  records.push(classRecord(parsed, file));
-  for (const member of parsed.members) {
-    records.push({ ...member, fqn: parsed.fqn, file });
-  }
 }
 
 /** A sources jar: parse every .java/.kt entry, fqn from parsed packages. */
@@ -141,7 +67,7 @@ async function indexSourcesJar(jarPath: string): Promise<BranchResult> {
       warnings.push(`failed to index ${entry.name}: ${(e as Error).message}`);
       continue;
     }
-    const parsed = parseSourceText(text, entry.name);
+    const parsed = recordsFromSourceText(text, entry.name);
     records.push(...parsed.records);
     for (const diagnostic of parsed.diagnostics) {
       warnings.push(`failed to index ${entry.name}: ${diagnostic}`);
@@ -165,7 +91,9 @@ async function indexBinaryJar(jarPath: string): Promise<BranchResult> {
     if (entry.isDirectory || !isClassEntry(entry.name)) continue;
     files++;
     try {
-      classFileRecords(await readZipEntry(jarPath, entry), entry.name, entry.name, records, warnings);
+      const parsed = recordsFromClassBytes(await readZipEntry(jarPath, entry), entry.name, entry.name);
+      records.push(...parsed.records);
+      if (parsed.warning !== undefined) warnings.push(parsed.warning);
     } catch (e) {
       warnings.push(`failed to index ${entry.name}: ${(e as Error).message}`);
     }
@@ -179,9 +107,11 @@ function indexClassesDir(classesDir: string): BranchResult {
   const warnings: string[] = [];
   const files = walkFiles(classesDir, (name) => name.endsWith(".class"), false, warnings);
   for (const relPath of files) {
-    if (EXCLUDED_CLASS_FILES.has(basename(relPath))) continue;
+    if (!isClassEntry(relPath)) continue;
     try {
-      classFileRecords(readFileSync(join(classesDir, relPath)), relPath, relPath, records, warnings);
+      const parsed = recordsFromClassBytes(readFileSync(join(classesDir, relPath)), relPath, relPath);
+      records.push(...parsed.records);
+      if (parsed.warning !== undefined) warnings.push(parsed.warning);
     } catch (e) {
       warnings.push(`failed to index ${relPath}: ${(e as Error).message}`);
     }
@@ -197,7 +127,7 @@ function indexSourceDir(sourceDir: string, projectRoot: string): BranchResult {
   for (const relToDir of files) {
     const file = relative(projectRoot, join(sourceDir, relToDir)).replaceAll("\\", "/");
     try {
-      const parsed = parseSourceText(readFileSync(join(sourceDir, relToDir), "utf8"), file);
+      const parsed = recordsFromSourceText(readFileSync(join(sourceDir, relToDir), "utf8"), file);
       records.push(...parsed.records);
       for (const diagnostic of parsed.diagnostics) {
         warnings.push(`failed to index ${file}: ${diagnostic}`);
