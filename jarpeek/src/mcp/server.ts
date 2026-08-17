@@ -44,6 +44,8 @@ const KIND_VALUES = [
 
 /** Compile-time: every DeclKind appears in KIND_VALUES, or this fails to build. */
 type _KindExhaustive = Exclude<DeclKind, (typeof KIND_VALUES)[number]> extends never ? true : never;
+// the use site is what makes the alias bite — a bare conditional type never errors
+const _kindCheck: _KindExhaustive = true;
 
 /** Visibility names, as a runtime-validated enum (mirrors Visibility). */
 const VISIBILITY_VALUES = [
@@ -57,6 +59,8 @@ const VISIBILITY_VALUES = [
 type _VisibilityExhaustive = Exclude<Visibility, (typeof VISIBILITY_VALUES)[number]> extends never
   ? true
   : never;
+// same as above: the const forces the check to run
+const _visibilityCheck: _VisibilityExhaustive = true;
 
 const KIND_ENUM = z.enum(KIND_VALUES);
 const VISIBILITY_ENUM = z.enum(VISIBILITY_VALUES);

@@ -164,10 +164,13 @@ function expectGolden(name: string, actual: unknown): void {
 
 /**
  * Replace run- and machine-varying status fields with sentinels before the
- * golden compare: tmpdir paths, timestamps, hashes, and the whole JVM probe
- * (both its boolean and its version differ per machine — a no-JVM machine
- * answers `available: false` with no version key). Tolerates a manifest-less
- * report: every keyed-off field is optional, so absent stays absent.
+ * golden compare: tmpdir paths, timestamps, hashes, and the whole JVM probe.
+ * The jvm block is normalized unconditionally — both values AND their
+ * presence differ per machine (no-JVM answers `available: false` with no
+ * version key; an unparseable `-version` answers `available: true` with no
+ * version key), so sentinels replace whatever was reported, missing keys
+ * included. Manifest fields stay presence-optional: the suite bootstraps a
+ * manifest deterministically, so their presence does not vary by machine.
  */
 function normalizeStatus(result: any): any {
   const optional = (value: unknown, sentinel: string): unknown =>
@@ -189,10 +192,8 @@ function normalizeStatus(result: any): any {
       ? {
           jvm: {
             ...result.jvm,
-            // unconditional: no-JVM answers false, and whether a parseable
-            // version exists at all is itself machine-dependent
             available: "<jvmAvailable>",
-            version: optional(result.jvm.version, "<jvmVersion>"),
+            version: "<jvmVersion>",
           },
         }
       : {}),
