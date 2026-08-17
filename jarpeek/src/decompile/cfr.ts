@@ -24,8 +24,20 @@ export const CFR_VERSION = "0.152";
 
 const CFR_TIMEOUT_MS = 60_000;
 const DETAIL_TAIL_CHARS = 400;
-/** A crude "this is decompiled Java, not a stack trace" probe for the stderr fallback. */
-const LOOKS_LIKE_JAVA = /\b(?:class|interface|enum|record)\s+[A-Za-z_$]/;
+/**
+ * A declaration-shaped line — `class Foo`, `enum Bar`, ... with a real Java
+ * identifier after the keyword (so prose like "Can't load the class specified"
+ * or "for class file 'X'" does not match: no identifier follows).
+ */
+const DECLARATION_LINE = /^[^\n]*\b(?:class|interface|enum|record|@interface)\s+[A-Za-z_$][A-Za-z0-9_$]*/m;
+/**
+ * CFR's own failure chatter. An unloadable class makes CFR exit 0 with the
+ * failure on stderr, so the stderr fallback must veto these markers. Applied
+ * to stderr only: genuine decompiled code happily contains `catch (Exception
+ * e)`, so stdout is gated on shape, not on these markers.
+ */
+const CFR_FAILURE_MARKERS =
+  /can't load|cannot load|unable to|exception|error\s*:|caused by|at org\.benf\.cfr/i;
 
 export type DecompileResult =
   | { provenance: "decompiled"; source: string; cached: boolean }
@@ -94,6 +106,12 @@ function detailTail(text: string): string {
     : trimmed;
 }
 
+/** Message of an unknown rejection — a non-Error throw must not escape the catch. */
+function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
 /** Read a cached decompile; undefined means "not cached, go decompile". */
 async function readCache(cacheFile: string): Promise<string | undefined> {
   try {
@@ -118,13 +136,16 @@ async function writeCache(cacheFile: string, source: string): Promise<void> {
 
 /**
  * Pick the decompiled source from a CFR run. CFR prints code to stdout and
- * analysis chatter to stderr; an empty stdout falls back to stderr only when
- * it actually looks like Java source, because an unloadable class makes CFR
- * exit 0 with the failure message on stderr.
+ * analysis chatter to stderr. Non-empty stdout is trusted on shape alone
+ * (real code contains `catch (Exception e)`); the stderr fallback must both
+ * look like declarations and carry no CFR failure markers, because an
+ * unloadable class makes CFR exit 0 with the failure message on stderr.
  */
 function selectSource(run: RunResult): string | undefined {
   if (run.stdout.trim().length > 0) return run.stdout;
-  if (LOOKS_LIKE_JAVA.test(run.stderr)) return run.stderr;
+  if (DECLARATION_LINE.test(run.stderr) && !CFR_FAILURE_MARKERS.test(run.stderr)) {
+    return run.stderr;
+  }
   return undefined;
 }
 
@@ -168,7 +189,7 @@ export async function decompileClass(
         if (e instanceof SpawnError) {
           return { provenance: "signature", reason: "no-jvm" };
         }
-        return { provenance: "signature", reason: "cfr-failed", detail: detailTail((e as Error).message) };
+        return { provenance: "signature", reason: "cfr-failed", detail: detailTail(errorMessage(e)) };
       }
 
       if (run.code !== 0) {
@@ -187,9 +208,17 @@ export async function decompileClass(
         };
       }
 
-      // Advisory validation: a parse that yields zero classes is still cached
-      // and returned as-is (degraded) — raw CFR output beats no output.
-      parseJavaSource(source, `${internalName}.java`);
+      // A parse that yields zero classes means the output is not Java source
+      // (e.g. CFR failure text that slipped through shape detection). Caching
+      // it would poison the cache permanently, so refuse and degrade instead.
+      const parsed = parseJavaSource(source, `${internalName}.java`);
+      if (parsed.classes.length === 0) {
+        return {
+          provenance: "signature",
+          reason: "cfr-failed",
+          detail: detailTail(run.stderr || "cfr output parsed to zero classes"),
+        };
+      }
 
       await writeCache(cacheFile, source);
       return { provenance: "decompiled", source, cached: false };
@@ -197,6 +226,6 @@ export async function decompileClass(
       await rm(workDir, { recursive: true, force: true });
     }
   } catch (e) {
-    return { provenance: "signature", reason: "cfr-failed", detail: detailTail((e as Error).message) };
+    return { provenance: "signature", reason: "cfr-failed", detail: detailTail(errorMessage(e)) };
   }
 }
