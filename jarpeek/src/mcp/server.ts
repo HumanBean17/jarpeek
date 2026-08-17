@@ -27,6 +27,24 @@ import { where } from "../core/query/where.js";
 import type { DeclKind, Visibility } from "../core/types.js";
 import { VERSION } from "../version.js";
 
+/** Every declaration kind, as a runtime-validated enum (mirrors DeclKind). */
+const KIND_ENUM = z.enum([
+  "class",
+  "interface",
+  "enum",
+  "record",
+  "annotation",
+  "object",
+  "method",
+  "constructor",
+  "field",
+  "property",
+  "enum-constant",
+] as const satisfies readonly DeclKind[]);
+
+/** Visibility names, as a runtime-validated enum (mirrors Visibility). */
+const VISIBILITY_ENUM = z.enum(["public", "protected", "package", "private"] as const satisfies readonly Visibility[]);
+
 /** What one tool call answers with: the core result as a text block. */
 type ToolPayload = CallToolResult;
 
@@ -98,16 +116,16 @@ export function createMcpServer(ctx: QueryContext): McpServer {
       description: "Declaration rows for one class — the frugal first look.",
       inputSchema: {
         fqn: z.string(),
-        kind: z.string().optional(),
-        visibility: z.string().optional(),
+        kind: KIND_ENUM.optional(),
+        visibility: VISIBILITY_ENUM.optional(),
       },
     },
     ({ fqn, kind, visibility }) =>
       run(ctx, async () =>
         ok(
           await outline(ctx, fqn, {
-            ...(kind !== undefined ? { kind: kind as DeclKind } : {}),
-            ...(visibility !== undefined ? { visibility: visibility as Visibility } : {}),
+            ...(kind !== undefined ? { kind } : {}),
+            ...(visibility !== undefined ? { visibility } : {}),
           }),
         ),
       ),
@@ -162,7 +180,7 @@ export function createMcpServer(ctx: QueryContext): McpServer {
       inputSchema: {
         query: z.string(),
         limit: z.number().int().positive().optional(),
-        kind: z.string().optional(),
+        kind: KIND_ENUM.optional(),
       },
     },
     ({ query, limit, kind }) =>
@@ -170,7 +188,7 @@ export function createMcpServer(ctx: QueryContext): McpServer {
         ok(
           await searchSymbols(ctx, query, {
             ...(limit !== undefined ? { limit } : {}),
-            ...(kind !== undefined ? { kind: kind as DeclKind } : {}),
+            ...(kind !== undefined ? { kind } : {}),
           }),
         ),
       ),

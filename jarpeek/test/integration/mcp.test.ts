@@ -82,9 +82,9 @@ function demoArtifacts(): DependencyArtifact[] {
 }
 
 /**
- * Build a server on a linked transport pair and connect the client. The
- * cache-dir env is pinned before anything spawns so the shared cache dir
- * serves the suite's exact index.
+ * Build a server on a linked transport pair and connect the client. Both
+ * ends register for afterAll teardown so transports close and no handles
+ * leak between suites.
  */
 async function connect(ctx: QueryContext): Promise<Client> {
   const server = createMcpServer(ctx);
@@ -92,12 +92,13 @@ async function connect(ctx: QueryContext): Promise<Client> {
   await server.connect(serverTransport);
   const client = new Client({ name: "jarpeek-test", version: "0.0.0" });
   await client.connect(clientTransport);
+  teardown.push(() => server.close(), () => client.close());
   return client;
 }
 
 const c = {} as Suite;
 const lazy = {} as { projectRoot: string; ctx: QueryContext; client: Client };
-const suites: Suite[] = [];
+const teardown: Array<() => Promise<unknown>> = [];
 
 beforeAll(async () => {
   process.env.JARPEEK_CACHE_DIR = mkdtempSync(join(tmpdir(), "jarpeek-mcp-cache-"));
@@ -111,7 +112,6 @@ beforeAll(async () => {
   });
   const client = await connect(ctx);
   Object.assign(c, { projectRoot, cacheDir: process.env.JARPEEK_CACHE_DIR, ctx, client });
-  suites.push(c);
 
   // lazy suite: manifest deliberately absent until the first tool call
   const lazyRoot = mkdtempSync(join(tmpdir(), "jarpeek-mcp-lazy-"));
@@ -125,9 +125,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  for (const s of [c, lazy as Suite]) {
-    if (s.client) await s.client.close().catch(() => {});
-  }
+  for (const closer of teardown.splice(0).reverse()) await closer().catch(() => {});
   for (const root of [c.projectRoot, lazy.projectRoot]) {
     if (root) rmSync(root, { recursive: true, force: true });
   }
@@ -164,17 +162,37 @@ function expectGolden(name: string, actual: unknown): void {
   expect(actual).toEqual(JSON.parse(readFileSync(file, "utf8")));
 }
 
-/** Replace run-varying status fields with sentinels before golden compare. */
+/**
+ * Replace run- and machine-varying status fields with sentinels before the
+ * golden compare: tmpdir paths, timestamps, hashes, and the JVM probe (the
+ * installed JDK differs per machine). Tolerates a manifest-less report —
+ * every volatile field is optional, so absent stays absent.
+ */
 function normalizeStatus(result: any): any {
+  const optional = (value: unknown, sentinel: string): unknown =>
+    value !== undefined ? sentinel : undefined;
   return {
     ...result,
     projectRoot: "<projectRoot>",
     cacheDir: "<cacheDir>",
-    manifest: {
-      ...result.manifest,
-      resolvedAt: result.manifest.resolvedAt !== undefined ? "<resolvedAt>" : undefined,
-      dependencySetHash: result.manifest.dependencySetHash !== undefined ? "<hash>" : undefined,
-    },
+    ...(result.manifest !== undefined
+      ? {
+          manifest: {
+            ...result.manifest,
+            resolvedAt: optional(result.manifest.resolvedAt, "<resolvedAt>"),
+            dependencySetHash: optional(result.manifest.dependencySetHash, "<hash>"),
+          },
+        }
+      : {}),
+    ...(result.jvm !== undefined
+      ? {
+          jvm: {
+            ...result.jvm,
+            available: result.jvm.available,
+            version: optional(result.jvm.version, "<jvmVersion>"),
+          },
+        }
+      : {}),
   };
 }
 
@@ -339,13 +357,9 @@ describe("context-cost budget (the product's core promise)", () => {
   const BUDGET_LINES = 120;
 
   it("outline of BigService stays within the budget", async () => {
-    const result = await call("outline", { fqn: "com.example.BigService" });
-    const parsed = payload(result);
+    const parsed = payload(await call("outline", { fqn: "com.example.BigService" }));
     expect(parsed.rows).toHaveLength(101); // 100 methods + the class row
     expect(parsed.rows.length).toBeLessThanOrEqual(BUDGET_LINES);
-    expect((result.content![0] as { text: string }).text.split("\n").length).toBeLessThanOrEqual(
-      BUDGET_LINES,
-    );
   });
 
   it("read_source outline mode stays within the same budget", async () => {

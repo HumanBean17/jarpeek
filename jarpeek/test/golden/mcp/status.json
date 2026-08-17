@@ -14,7 +14,7 @@
   },
   "jvm": {
     "available": true,
-    "version": "25.0.2"
+    "version": "<jvmVersion>"
   },
   "degraded": []
 }
