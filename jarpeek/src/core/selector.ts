@@ -7,8 +7,9 @@
  * can surface it verbatim), while matchDeclarations is generous on purpose:
  * written parameter types come from three producers with different spelling
  * conventions (Java sources use simple names, class files use fully
- * qualified ones, Kotlin adds spaces), so each selector param matches on
- * normalized equality or simple-name agreement. Overloads are never
+ * qualified ones, Kotlin adds spaces, nullability marks, and modifier
+ * prefixes), so each selector param matches on normalized equality or
+ * simple-name agreement after the written type is normalized. Overloads are never
  * silently picked — a bare name returns every record with that name and the
  * caller decides how to disambiguate.
  */
@@ -78,7 +79,9 @@ export function parseSelector(raw: string): Selector {
   let name = m[1]!;
   let receiver: string | undefined;
   // The last `.` separates receiver from member name; earlier dots stay in
-  // the receiver, which receiverMatches compares by simple name.
+  // the receiver, which receiverMatches compares against the record's
+  // normalized receiverType simple name — so `#a.b.C.run` targets a record
+  // whose receiverType simple name is `C`, however it was spelled.
   const dot = name.lastIndexOf(".");
   if (dot !== -1) {
     receiver = name.slice(0, dot);
@@ -152,14 +155,33 @@ function writtenParams(signature: string): string[] | null {
 }
 
 /**
- * One selector param against one written type. Whitespace is normalized on
- * both sides (Kotlin signatures carry spaces), then the match is normalized
- * equality or simple-name agreement in either direction — the selector may
- * spell `java.lang.String` where the source wrote `String`, or the reverse
- * for class-file signatures.
+ * Normalize a WRITTEN type for comparison: collapse whitespace, strip
+ * trailing nullability marks (`String?`, even `String??`), trailing Java
+ * varargs (`T...`), and leading Kotlin meaning-modifiers (`vararg`,
+ * `noinline`, `crossinline`) that say how a param is passed, not what it
+ * is. The selector side is never touched — its grammar stays strict.
+ */
+function normalizeWritten(type: string): string {
+  let t = type.replace(/\s+/g, "");
+  t = t.replace(/(\?)+$/, "");
+  t = t.replace(/\.{3}$/, "");
+  for (;;) {
+    const m = /^(?:vararg|noinline|crossinline)(?=[A-Za-z0-9_$])/.exec(t);
+    if (!m) break;
+    t = t.slice(m[0].length);
+  }
+  return t;
+}
+
+/**
+ * One selector param against one written type. The written side is
+ * normalized (whitespace, nullability, varargs, modifiers), then the match
+ * is normalized equality or simple-name agreement in either direction —
+ * the selector may spell `java.lang.String` where the source wrote
+ * `String`, or the reverse for class-file signatures.
  */
 function paramMatches(param: string, written: string): boolean {
-  const w = written.replace(/\s+/g, "");
+  const w = normalizeWritten(written);
   const p = param.replace(/\s+/g, "");
   if (p === "*") return true;
   if (w === p) return true;
@@ -170,7 +192,7 @@ function paramMatches(param: string, written: string): boolean {
 function receiverMatches(sel: Selector, rec: Declaration): boolean {
   if (sel.receiver === undefined) return true;
   if (rec.receiverType === undefined) return false;
-  return rec.receiverType.replace(/\s+/g, "").split(".").pop() === sel.receiver;
+  return normalizeWritten(rec.receiverType).split(".").pop() === sel.receiver;
 }
 
 /**

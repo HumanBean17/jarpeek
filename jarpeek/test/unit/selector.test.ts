@@ -141,6 +141,49 @@ describe("matchDeclarations", () => {
   });
 });
 
+describe("matchDeclarations written-type normalization", () => {
+  // Renderings below are the exact strings the producers emit, confirmed
+  // against the lexers: `fun f(String?)`, `fun g(vararg Int)`, receiver
+  // `Foo?`, Java `<T> void m(T...)`. Selectors stay strict — `?` is illegal
+  // — so matching must normalize the WRITTEN side instead.
+  const KT_RECORDS: Declaration[] = [
+    member("f", "fun f(String?)"),
+    member("g", "fun g(vararg Int)"),
+    member("h", "fun h(noinline T.() -> Unit)"),
+    member("m", "<T> void m(T...)"),
+    member("n", "void n(String...)"),
+    member("ext", "fun Foo?.ext(String?)", { receiverType: "Foo?" }),
+    member("deep", "fun deep(String??)"),
+  ];
+
+  const ktMatched = (raw: string): Declaration[] =>
+    matchDeclarations(KT_RECORDS, parseSelector(raw));
+
+  it.each<[string, string]>([
+    ["#f(String)", "fun f(String?)"],
+    ["#g(Int)", "fun g(vararg Int)"],
+    ["#m(T)", "<T> void m(T...)"],
+    ["#n(String)", "void n(String...)"],
+    ["#deep(String)", "fun deep(String??)"],
+  ])("%s matches the meaning-modified written form %s", (raw, sig) => {
+    expect(ktMatched(raw).map((r) => r.signature)).toEqual([sig]);
+  });
+
+  it("#Foo.ext matches a nullable Foo? receiver", () => {
+    expect(ktMatched("#Foo.ext").map((r) => r.receiverType)).toEqual(["Foo?"]);
+  });
+
+  it("modifiers and nullability never fabricate a type that was not written", () => {
+    // `#h(Unit)` — after stripping `noinline`, the written type is the
+    // function type `T.()->Unit`, not `Unit`; no false positive.
+    expect(ktMatched("#h(Unit)")).toEqual([]);
+  });
+
+  it("selectors stay strict: #f(String?) is a SelectorError, not a match", () => {
+    expect(() => parseSelector("#f(String?)")).toThrow(SelectorError);
+  });
+});
+
 describe("splitSelectorList", () => {
   it.each<[string, string[]]>([
     ["#a,#b,#c", ["#a", "#b", "#c"]],
