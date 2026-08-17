@@ -189,7 +189,7 @@ export async function outline(
   return {
     fqn,
     coordinates: winner.meta.coordinates,
-    provenance: winner.meta.provenance,
+    provenance: winner.meta.provenance ?? "signature",
     ...(stale ? { stale: true } : {}),
     rows,
     ...(alternatives.length > 0 ? { alternatives } : {}),

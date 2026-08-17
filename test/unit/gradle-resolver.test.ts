@@ -119,21 +119,24 @@ describe("resolveGradle: parsing the sentinel-wrapped dump", () => {
     expect(springTx.configuration).toBe("compile");
     expect(springTx.binaryJar).toBe(SPRING_TX_JAR);
     expect(springTx.sourcesJar).toBe(SPRING_TX_SOURCES);
-    expect(springTx.provenance).toBe("source");
-    expect(springTx.warnings).toEqual([]);
+    // the legacy per-artifact metadata fields are no longer set here
+    expect(springTx.provenance).toBeUndefined();
+    expect(springTx.warnings).toBeUndefined();
+    expect(springTx.classesDir).toBeUndefined();
+    expect(springTx.sourceSig).toBeUndefined();
 
     const slf4j = lookup(SLF4J);
     expect(slf4j.kind).toBe("external");
     expect(slf4j.configuration).toBe("compile");
     expect(slf4j.binaryJar).toBe(SLF4J_JAR);
     expect(slf4j.sourcesJar).toBeUndefined();
-    expect(slf4j.provenance).toBe("signature");
+    expect(slf4j.provenance).toBeUndefined();
 
     const junit = lookup(JUNIT);
     expect(junit.kind).toBe("external");
     expect(junit.configuration).toBe("test");
     expect(junit.binaryJar).toBe(JUNIT_JAR);
-    expect(junit.provenance).toBe("signature");
+    expect(junit.provenance).toBeUndefined();
 
     // module coordinates are namespaced per project root: the bare project
     // path (":app") would collide with another project's ":app" in the
@@ -142,8 +145,8 @@ describe("resolveGradle: parsing the sentinel-wrapped dump", () => {
     expect(app.coordinates).toBe(`module:${moduleNamespace(projectRoot)}:app`);
     expect(app.kind).toBe("module");
     expect(app.sourceDir).toBe(APP_DIR);
-    expect(app.provenance).toBe("source");
-    expect(app.warnings).toEqual([]);
+    expect(app.provenance).toBeUndefined();
+    expect(app.warnings).toBeUndefined();
 
     // invocation shape: bare gradle (no wrapper in scratch, probe passed),
     // pinned args, cwd, default timeout

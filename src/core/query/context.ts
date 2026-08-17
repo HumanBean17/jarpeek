@@ -87,7 +87,7 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
   async function addPersistedArtifactWarnings(): Promise<void> {
     const manifest = await readManifest(projectRoot);
     for (const artifact of manifest?.artifacts ?? []) {
-      for (const warning of artifact.warnings) addWarning(warning);
+      for (const warning of artifact.warnings ?? []) addWarning(warning);
     }
   }
 

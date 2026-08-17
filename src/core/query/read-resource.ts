@@ -171,7 +171,7 @@ export async function readResource(
   return {
     artifact: artifact.coordinates,
     entries,
-    provenance: artifact.provenance,
+    provenance: artifact.provenance ?? "signature",
     ...(stale ? { stale: true } : {}),
     degraded: await mergedDegraded(ctx, stale ? ["stale index served"] : []),
   };

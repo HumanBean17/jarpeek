@@ -260,8 +260,6 @@ function parseOutputs(outputs: string[], m2Dir: string, projectRoot: string, mod
               configuration: "compile+runtime+test",
               kind: "module",
               sourceDir: moduleDir,
-              provenance: "source",
-              warnings: [],
             });
           }
         }
@@ -276,8 +274,6 @@ function parseOutputs(outputs: string[], m2Dir: string, projectRoot: string, mod
         kind: "external",
         binaryJar: raw,
         ...(sourcesJar !== undefined ? { sourcesJar } : {}),
-        provenance: sourcesJar !== undefined ? "source" : "signature",
-        warnings: [],
       });
     }
   }

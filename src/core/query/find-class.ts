@@ -134,7 +134,7 @@ export async function findClass(
   const scope = manifestScope(manifest);
   const provenanceByCoordinates = new Map<string, Provenance>();
   for (const artifact of manifest?.artifacts ?? []) {
-    provenanceByCoordinates.set(artifact.coordinates, artifact.provenance);
+    provenanceByCoordinates.set(artifact.coordinates, artifact.provenance ?? "signature");
   }
 
   const { tiers, warnings: streamWarnings } = await collectCandidates(ctx, query, limit, order, scope);
@@ -145,7 +145,7 @@ export async function findClass(
   for (const fqn of new Set(unmapped.map((c) => c.fqn))) {
     for (const hit of await ctx.store.lookup(fqn)) {
       if (!provenanceByCoordinates.has(hit.meta.coordinates)) {
-        provenanceByCoordinates.set(hit.meta.coordinates, hit.meta.provenance);
+        provenanceByCoordinates.set(hit.meta.coordinates, hit.meta.provenance ?? "signature");
       }
     }
   }

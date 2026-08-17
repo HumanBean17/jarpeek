@@ -319,16 +319,17 @@ export class IndexStore {
       coordinates: typeof parsedMeta?.coordinates === "string" ? parsedMeta.coordinates : safe,
       kind: parsedMeta?.kind ?? "cache-scan",
       provenance: parsedMeta?.provenance ?? "signature",
-      warnings: Array.isArray(parsedMeta?.warnings) ? [...parsedMeta.warnings] : [],
+      warnings: parsedMeta?.warnings ?? [],
       indexedAt: typeof parsedMeta?.indexedAt === "string" ? parsedMeta.indexedAt : new Date(0).toISOString(),
     };
 
     const records: Declaration[] = [];
+    const shardWarnings = meta.warnings ?? [];
     const { lines, error } = await readShardLines(join(shardDir, "records.ndjson"));
     if (error !== undefined) {
       // vanished or unreadable mid-parse: serve the complete lines that
       // arrived, marked — a lookup never throws for a shard's sake
-      meta.warnings.push("unreadable shard");
+      shardWarnings.push("unreadable shard");
     }
     for (const line of lines) {
       if (line.trim().length === 0) {
@@ -338,9 +339,10 @@ export class IndexStore {
       if (record) {
         records.push(record);
       } else {
-        meta.warnings.push("corrupt record in shard");
+        shardWarnings.push("corrupt record in shard");
       }
     }
+    meta.warnings = shardWarnings;
     return { meta, records };
   }
 

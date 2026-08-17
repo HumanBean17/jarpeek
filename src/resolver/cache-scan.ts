@@ -188,8 +188,8 @@ function collectCoordinates(finds: Found[]): Map<string, Coordinate> {
  * Scan the m2 repository and the Gradle modules-2 cache for dependency jars,
  * pairing sources and deduplicating versions. Both roots are walked with a
  * shared budget of `maxEntries` files; m2 wins when the same coordinate
- * appears in both. Version ambiguity produces a per-artifact warning,
- * truncation a global one; a missing root is simply an empty walk.
+ * appears in both. Version ambiguity and truncation both produce warnings on
+ * the scan's result; a missing root is simply an empty walk.
  */
 export async function scanCaches(opts: ScanCachesOptions = {}): Promise<ScanCachesResult> {
   const m2Dir = opts.m2Dir ?? join(homedir(), ".m2", "repository");
@@ -221,26 +221,29 @@ export async function scanCaches(opts: ScanCachesOptions = {}): Promise<ScanCach
   }
 
   const artifacts: DependencyArtifact[] = [];
+  const warnings: string[] = [];
   for (const versions of byGA.values()) {
     versions.sort((a, b) => compareVersions(a.version, b.version));
     const kept = versions[versions.length - 1];
     const also = versions.slice(0, -1).map((v) => v.version);
-    const warnings =
-      also.length > 0 ? [`multiple-versions:${kept.group}:${kept.artifact} (kept ${kept.version}, also saw ${also.join(",")})`] : [];
+    if (also.length > 0) {
+      // version ambiguity is scan-level, not per-artifact: the artifact set
+      // the scan returns is one entry per g:a either way
+      warnings.push(
+        `multiple-versions:${kept.group}:${kept.artifact} (kept ${kept.version}, also saw ${also.join(",")})`,
+      );
+    }
     artifacts.push({
       coordinates: `${kept.group}:${kept.artifact}:${kept.version}`,
       kind: "cache-scan",
       ...(kept.binaryJar !== undefined ? { binaryJar: kept.binaryJar } : {}),
       ...(kept.sourcesJar !== undefined ? { sourcesJar: kept.sourcesJar } : {}),
-      provenance: kept.sourcesJar !== undefined ? "source" : "signature",
-      warnings,
     });
   }
 
   // stable output order: coordinates sorted
   artifacts.sort((a, b) => (a.coordinates < b.coordinates ? -1 : a.coordinates > b.coordinates ? 1 : 0));
 
-  const warnings: string[] = [];
   if (truncatedAt !== undefined) warnings.push(`cache-scan-truncated:${truncatedAt}`);
 
   return { artifacts, warnings };

@@ -83,7 +83,7 @@ export async function handleMiss(
     if ((JDK_NAMESPACES as readonly string[]).some((ns) => fqn.startsWith(ns))) {
       const jdkIndexed = (manifestBeforeJdk?.artifacts ?? []).some((artifact) => artifact.kind === "jdk");
       if (!jdkIndexed) {
-        const resolve = opts.resolvers?.jdk ?? ((o = {}) => resolveJdk({ ...o, cacheDir: ctx.cacheDir }));
+        const resolve = opts.resolvers?.jdk ?? ((o = {}) => resolveJdk(o));
         const jdk = await resolve();
         if (jdk.artifact !== null) {
           // re-index the full set so the manifest keeps listing every artifact
@@ -95,7 +95,12 @@ export async function handleMiss(
       }
       const hit = await retryLookup(ctx, fqn);
       if (hit !== undefined) {
-        return { found: true, via: "jdk", coordinates: hit.meta.coordinates, provenance: hit.meta.provenance };
+        return {
+          found: true,
+          via: "jdk",
+          coordinates: hit.meta.coordinates,
+          provenance: hit.meta.provenance ?? "signature",
+        };
       }
     }
 
@@ -118,7 +123,12 @@ export async function handleMiss(
       }
       const hit = await retryLookup(ctx, fqn);
       if (hit !== undefined) {
-        return { found: true, via: "re-resolve", coordinates: hit.meta.coordinates, provenance: hit.meta.provenance };
+        return {
+          found: true,
+          via: "re-resolve",
+          coordinates: hit.meta.coordinates,
+          provenance: hit.meta.provenance ?? "signature",
+        };
       }
     }
   }

@@ -51,9 +51,9 @@ export interface DependencyArtifact {
   sourcesJar?: string;
   sourceDir?: string;
   classesDir?: string;
-  provenance: Provenance;
+  provenance?: Provenance;
   noDecompile?: boolean;
-  warnings: string[];
+  warnings?: string[];
   /**
    * Fingerprint of the sourceDir contents at index time (module artifacts):
    * hash over the walked source files' (relpath, size, mtimeMs) triples. A

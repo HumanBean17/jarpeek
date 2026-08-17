@@ -71,7 +71,7 @@ export async function searchSymbols(
   const scope = manifestScope(manifest);
   const provenanceByCoordinates = new Map<string, Provenance>();
   for (const artifact of manifest?.artifacts ?? []) {
-    provenanceByCoordinates.set(artifact.coordinates, artifact.provenance);
+    provenanceByCoordinates.set(artifact.coordinates, artifact.provenance ?? "signature");
   }
 
   /** Tier 0/1: collected fully. Tier 2 lands in `fuzzy`, bounded below. */

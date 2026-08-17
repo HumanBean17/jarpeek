@@ -188,7 +188,7 @@ export async function indexArtifacts(
     const finalArtifact: DependencyArtifact = {
       ...artifact,
       provenance: result.provenance,
-      warnings: [...artifact.warnings, ...result.warnings],
+      warnings: [...(artifact.warnings ?? []), ...result.warnings],
       ...(sourceSig !== null && sourceSig !== undefined ? { sourceSig } : {}),
     };
     // always written, even with zero records: an empty shard replaces the

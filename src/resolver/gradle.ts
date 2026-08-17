@@ -125,8 +125,6 @@ function mapArtifacts(document: DumpDocument, projectRoot: string): DependencyAr
           coordinates,
           kind: "module",
           sourceDir: dependency.path,
-          provenance: "source",
-          warnings: [],
         });
         continue;
       }
@@ -138,8 +136,6 @@ function mapArtifacts(document: DumpDocument, projectRoot: string): DependencyAr
         kind: "external",
         binaryJar: dependency.path,
         ...(sourcesJar !== undefined ? { sourcesJar } : {}),
-        provenance: sourcesJar !== undefined ? "source" : "signature",
-        warnings: [],
       });
     }
   }
