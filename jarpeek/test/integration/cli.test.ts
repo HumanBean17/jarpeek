@@ -11,7 +11,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -444,13 +444,24 @@ describe("prime over the CLI transport", () => {
     const run = cli(c, ["prime"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("find-class");
+    expect(run.stdout).toContain("full content: jarpeek prime --export");
     expect(run.stderr).toBe("");
   });
 
-  it("an override in the project root wins", () => {
-    const run = cli(c, ["prime"]);
-    expect(run.code).toBe(0);
-    // suite project has no override; the override path itself is unit-tested
-    expect(run.stdout).toContain("full content: jarpeek prime --export");
+  it("a .jarpeek/PRIME.md override is served verbatim over the transport", () => {
+    const root = mkdtempSync(join(tmpdir(), "jarpeek-cli-prime-"));
+    try {
+      mkdirSync(join(root, ".jarpeek"));
+      writeFileSync(join(root, ".jarpeek", "PRIME.md"), "CUSTOM");
+      const run = spawnSync(
+        "npx",
+        ["tsx", "src/cli/index.ts", "--project", root, "prime"],
+        { cwd: PKG_ROOT, encoding: "utf8", timeout: 60_000 },
+      );
+      expect(run.status).toBe(0);
+      expect(run.stdout).toBe("CUSTOM\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

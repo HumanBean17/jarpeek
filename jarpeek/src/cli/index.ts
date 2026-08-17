@@ -438,7 +438,10 @@ command("prime", "the jarpeek cheatsheet for agents (this file)")
       exportContent: cmd.export === true,
       hookJson: cmd.hookJson === true,
     });
-    process.stdout.write(inv.json ? `${renderJson(result)}\n` : `${result.text}\n`);
+    // both cheatsheets (and a user override) may end in newlines; one terminator
+    process.stdout.write(
+      inv.json ? `${renderJson(result)}\n` : `${result.text.replace(/\n+$/, "")}\n`,
+    );
   });
 
 // wired by Task 22 (init)

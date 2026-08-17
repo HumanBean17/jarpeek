@@ -142,11 +142,14 @@ describe("prime() selection", () => {
 
   it("auto-detects mcp via JARPEEK_PRIME_MODE, cli otherwise", () => {
     const root = tmpProject();
-    vi.stubEnv("JARPEEK_PRIME_MODE", "mcp");
-    expect(prime(root).text).toBe(defaultPrimeContent("mcp"));
-    vi.stubEnv("JARPEEK_PRIME_MODE", undefined); // deletes the key
-    expect(prime(root)).toEqual({ text: defaultPrimeContent("cli"), source: "default" });
-    vi.unstubAllEnvs();
+    try {
+      vi.stubEnv("JARPEEK_PRIME_MODE", "mcp");
+      expect(prime(root).text).toBe(defaultPrimeContent("mcp"));
+      vi.stubEnv("JARPEEK_PRIME_MODE", undefined); // deletes the key
+      expect(prime(root)).toEqual({ text: defaultPrimeContent("cli"), source: "default" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 
