@@ -6,7 +6,7 @@
     "jarpeek": "dist/cli/index.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.12.0"
   },
   "files": [
     "dist",
@@ -18,7 +18,8 @@
     "build": "tsc",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "dev": "tsx src/cli/index.ts"
+    "dev": "tsx src/cli/index.ts",
+    "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
     "@clack/prompts": "^1.7.0",
