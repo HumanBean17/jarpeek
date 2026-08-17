@@ -130,6 +130,50 @@ describe("scanCaches", () => {
     expect(Number(truncated!.split(":")[1])).toBe(4);
   });
 
+  it("carries m2's skipped-file visits into the shared budget across walks", async () => {
+    const { m2, gradle } = scratch();
+    // 2 coordinates × (jar + .sha1) = 4 m2 files visited, only 2 matched
+    for (let i = 1; i <= 2; i++) {
+      const dir = join(m2, `com/s${i}`, `s${i}`, "1.0");
+      jar(join(dir, `s${i}-1.0.jar`));
+      writeFileSync(join(dir, `s${i}-1.0.jar.sha1`), "abc");
+    }
+    // 6 gradle jars: matched-count arithmetic leaves budget 6 (no trip);
+    // visited-count leaves 4, tripping at the 5th gradle file → 4 + 5 = 9
+    for (let i = 1; i <= 6; i++) {
+      jar(join(gradle, `com.g/g${i}/1.0/a${i}b2c3/g${i}-1.0.jar`));
+    }
+
+    const { artifacts, warnings } = await scanCaches({ m2Dir: m2, gradleDir: gradle, maxEntries: 8 });
+
+    expect(warnings).toEqual(["cache-scan-truncated:9"]);
+    const gradleCoords = artifacts.filter((a) => a.coordinates.startsWith("com.g:"));
+    expect(gradleCoords.length).toBeLessThanOrEqual(4);
+    expect(artifacts.length).toBeLessThanOrEqual(6);
+  });
+
+  it("carries leftover m2 visit budget into the gradle walk", async () => {
+    const { m2, gradle } = scratch();
+    // 2 coordinates × (jar + .sha1) = 4 m2 files visited, 2 matched
+    for (let i = 1; i <= 2; i++) {
+      const dir = join(m2, `com/s${i}`, `s${i}`, "1.0");
+      jar(join(dir, `s${i}-1.0.jar`));
+      writeFileSync(join(dir, `s${i}-1.0.jar.sha1`), "abc");
+    }
+    jar(join(gradle, "com.g/only/1.0/aaaa/only-1.0.jar"));
+
+    // old arithmetic (budget 20000-2) fits everything; correct accounting
+    // (budget 20000-4) fits too — this pins that neither walk trips
+    const { artifacts, warnings } = await scanCaches({ m2Dir: m2, gradleDir: gradle, maxEntries: 20000 });
+
+    expect(warnings).toEqual([]);
+    expect(artifacts.map((a) => a.coordinates).sort()).toEqual([
+      "com.g:only:1.0",
+      "com.s1:s1:1.0",
+      "com.s2:s2:1.0",
+    ]);
+  });
+
   it("sorts versions numerically at each dotted segment before falling back lexicographic", async () => {
     const { m2, gradle } = scratch();
     jar(join(m2, "org/n/nat/1.10.0/nat-1.10.0.jar"));

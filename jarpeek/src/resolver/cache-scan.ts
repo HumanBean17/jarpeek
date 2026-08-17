@@ -118,7 +118,9 @@ interface Coordinate {
 
 interface WalkOutcome {
   found: Found[];
-  /** Files visited when the budget ran out; undefined when the walk completed. */
+  /** Total files visited, matched or skipped — the budget's real spend. */
+  visited: number;
+  /** Set to the visit count when the budget ran out; undefined when completed. */
   truncatedAt?: number;
 }
 
@@ -150,13 +152,13 @@ function walk(root: string, maxEntries: number, match: (path: string, name: stri
       }
       if (entry.isSymbolicLink()) continue;
       visited++;
-      if (visited > maxEntries) return { found, truncatedAt: visited };
+      if (visited > maxEntries) return { found, visited, truncatedAt: visited };
       if (isSkipped(entry.name)) continue;
       const hit = match(path, entry.name);
       if (hit) found.push(hit);
     }
   }
-  return { found };
+  return { found, visited };
 }
 
 /**
@@ -194,18 +196,19 @@ export async function scanCaches(opts: ScanCachesOptions = {}): Promise<ScanCach
   const gradleDir = opts.gradleDir ?? join(homedir(), ".gradle", "caches", "modules-2", "files-2.1");
   const maxEntries = opts.maxEntries ?? DEFAULT_MAX_ENTRIES;
 
-  // m2 first: its finds are inserted first, so collectCoordinates keeps them
+  // m2 first: its finds are inserted first, so collectCoordinates keeps them.
+  // The budget is spent on files visited (matched or skipped), not matched.
   const m2Walk = walk(m2Dir, maxEntries, (path, name) => matchM2(m2Dir, path, name));
-  let visited = m2Walk.truncatedAt ?? m2Walk.found.length;
   let truncatedAt: number | undefined = m2Walk.truncatedAt;
   let gradleFound: Found[] = [];
   if (truncatedAt === undefined) {
-    // the gradle walk gets whatever budget the m2 walk left over
-    const gradleWalk = walk(gradleDir, Math.max(maxEntries - visited, 0), (path, name) =>
+    // the gradle walk gets whatever budget the m2 walk actually spent
+    const gradleWalk = walk(gradleDir, Math.max(maxEntries - m2Walk.visited, 0), (path, name) =>
       matchGradle(gradleDir, path, name),
     );
     gradleFound = gradleWalk.found;
-    truncatedAt = gradleWalk.truncatedAt === undefined ? undefined : visited + gradleWalk.truncatedAt;
+    truncatedAt =
+      gradleWalk.truncatedAt === undefined ? undefined : m2Walk.visited + gradleWalk.truncatedAt;
   }
 
   const byCoords = collectCoordinates([...m2Walk.found, ...gradleFound]);
