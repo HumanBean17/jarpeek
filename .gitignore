@@ -11,5 +11,5 @@
 .jarpeek/
 
 # jarpeek build artifacts
-jarpeek/node_modules/
-jarpeek/dist/
+node_modules/
+dist/
