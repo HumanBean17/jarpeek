@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openContext, type QueryContext } from "../../src/core/query/context.js";
 import { readMember } from "../../src/core/query/read-member.js";
-import { readResource } from "../../src/core/query/read-resource.js";
+import { readResource, truncateUtf8 } from "../../src/core/query/read-resource.js";
 import { searchSymbols } from "../../src/core/query/search-symbols.js";
 import { status } from "../../src/core/query/status.js";
 import { where } from "../../src/core/query/where.js";
@@ -256,6 +256,18 @@ describe("readResource", () => {
 
   it("unknown artifact query throws", async () => {
     await expect(readResource(c.ctx, "no-such-artifact", "*")).rejects.toThrow(/unknown artifact/);
+  });
+
+  it("text truncation backs off to a UTF-8 codepoint boundary", () => {
+    // é is 2 bytes (0xC3 0xA9); a raw 3-byte cut would split the second é
+    const buf = Buffer.from("é".repeat(4), "utf8");
+    expect(buf.length).toBe(8);
+    const cut = truncateUtf8(buf, 3);
+    expect(cut).toBe("é");
+    expect(Buffer.byteLength(cut, "utf8")).toBe(2);
+    // whole-buffer and exactly-at-limit cases pass through
+    expect(truncateUtf8(Buffer.from("abc"), 10)).toBe("abc");
+    expect(truncateUtf8(Buffer.from("abc"), 3)).toBe("abc");
   });
 });
 

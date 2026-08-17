@@ -39,6 +39,10 @@ function countFiles(dir: string): number {
  * write outside it.
  */
 async function unpackSources(ctx: QueryContext, jar: string, safeDir: string): Promise<number> {
+  if (!existsSync(jar)) {
+    // a vanished jar is a named error, not a raw ENOENT from statSync
+    throw new Error(`sources jar ${jar} is missing on disk (manifest is stale; re-resolve)`);
+  }
   const marker = join(safeDir, UNPACK_MARKER);
   const jarMtime = statSync(jar).mtimeMs;
   if (existsSync(marker) && statSync(marker).mtimeMs > jarMtime) {
@@ -79,7 +83,7 @@ export async function where(ctx: QueryContext, coordinates: string): Promise<Whe
   // JDK sources are not unpacked: src.zip is browsable in place and the
   // extracted module tree already is a directory
   if (artifact.kind === "jdk") {
-    if (artifact.sourcesJar !== undefined) {
+    if (artifact.sourcesJar !== undefined && existsSync(artifact.sourcesJar)) {
       const entries = (await listZipEntries(artifact.sourcesJar)).filter((e) => !e.isDirectory).length;
       return {
         coordinates: artifact.coordinates,
@@ -88,7 +92,7 @@ export async function where(ctx: QueryContext, coordinates: string): Promise<Whe
         note: `jdk src.zip (${artifact.sourcesJar})`,
       };
     }
-    if (artifact.classesDir !== undefined) {
+    if (artifact.classesDir !== undefined && existsSync(artifact.classesDir)) {
       return {
         coordinates: artifact.coordinates,
         dir: dirname(artifact.classesDir),
@@ -98,14 +102,14 @@ export async function where(ctx: QueryContext, coordinates: string): Promise<Whe
     }
   }
 
-  if (artifact.sourcesJar !== undefined) {
+  if (artifact.sourcesJar !== undefined && existsSync(artifact.sourcesJar)) {
     const safe = encodeURIComponent(artifact.coordinates);
     const dir = join(ctx.cacheDir, "v1", "unpacked", safe);
     const fileCount = await unpackSources(ctx, artifact.sourcesJar, dir);
     return { coordinates: artifact.coordinates, dir, fileCount };
   }
 
-  if (artifact.binaryJar !== undefined) {
+  if (artifact.binaryJar !== undefined && existsSync(artifact.binaryJar)) {
     const entries = (await listZipEntries(artifact.binaryJar)).filter((e) => !e.isDirectory).length;
     return {
       coordinates: artifact.coordinates,
@@ -115,7 +119,7 @@ export async function where(ctx: QueryContext, coordinates: string): Promise<Whe
     };
   }
 
-  if (artifact.classesDir !== undefined) {
+  if (artifact.classesDir !== undefined && existsSync(artifact.classesDir)) {
     return {
       coordinates: artifact.coordinates,
       dir: dirname(artifact.classesDir),
@@ -124,5 +128,7 @@ export async function where(ctx: QueryContext, coordinates: string): Promise<Whe
     };
   }
 
-  throw new Error(`no source location for ${artifact.coordinates}`);
+  throw new Error(
+    `no source location for ${artifact.coordinates} (indexed paths are missing on disk; re-resolve)`,
+  );
 }

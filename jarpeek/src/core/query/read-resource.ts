@@ -97,6 +97,20 @@ function isBinaryPath(path: string): boolean {
   return BINARY_EXTENSIONS.has(path.slice(dot).toLowerCase());
 }
 
+/**
+ * First `limit` bytes of `buf` as text, cut at a UTF-8 codepoint boundary: a
+ * raw byte cut can split a multi-byte character and end the content on a
+ * replacement character. Exported for tests.
+ */
+export function truncateUtf8(buf: Buffer, limit: number): string {
+  let end = Math.min(limit, buf.length);
+  // 0b10xxxxxx are continuation bytes — back off until `end` starts a character
+  while (end > 0 && end < buf.length && (buf[end]! & 0xc0) === 0x80) {
+    end--;
+  }
+  return buf.subarray(0, end).toString("utf8");
+}
+
 function entry(path: string, buf: Buffer): ResourceEntry {
   const size = buf.length;
   if (isBinaryPath(path) || buf.subarray(0, NUL_SNIFF_BYTES).includes(0)) {
@@ -106,7 +120,7 @@ function entry(path: string, buf: Buffer): ResourceEntry {
     return {
       path,
       size,
-      content: buf.subarray(0, TEXT_LIMIT_BYTES).toString("utf8"),
+      content: truncateUtf8(buf, TEXT_LIMIT_BYTES),
       truncated: true,
       note: TRUNCATION_NOTE,
     };

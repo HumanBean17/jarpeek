@@ -17,6 +17,7 @@ import type { ClassHit, Provenance } from "./types.js";
 import type { QueryContext } from "./query/context.js";
 import { findClass } from "./query/find-class.js";
 import { LookupMissError, orderedLookup, type ArtifactHit } from "./query/outline.js";
+import { resolveNow } from "./query/resolve-cmd.js";
 
 /** Namespaces owned by the JDK pseudo-artifact. */
 const JDK_NAMESPACES = [
@@ -72,16 +73,21 @@ export async function handleMiss(
       return { found: true, via: "fuzzy-candidates", hits: candidates.hits };
     }
 
+    // Snapshot staleness BEFORE the JDK step: indexing the JDK rewrites the
+    // manifest with a freshly computed dependencySetHash, and that must not
+    // erase the fact that the artifact set itself was stale.
+    const manifestBeforeJdk = await ctx.manifest();
+    const staleBeforeJdk = manifestBeforeJdk !== null && (await isStale(ctx.projectRoot, manifestBeforeJdk));
+
     // 2. JDK namespaces: index the JDK pseudo-artifact if it is missing, retry once
     if ((JDK_NAMESPACES as readonly string[]).some((ns) => fqn.startsWith(ns))) {
-      const manifest = await ctx.manifest();
-      const jdkIndexed = (manifest?.artifacts ?? []).some((artifact) => artifact.kind === "jdk");
+      const jdkIndexed = (manifestBeforeJdk?.artifacts ?? []).some((artifact) => artifact.kind === "jdk");
       if (!jdkIndexed) {
         const resolve = opts.resolvers?.jdk ?? ((o = {}) => resolveJdk({ ...o, cacheDir: ctx.cacheDir }));
         const jdk = await resolve();
         if (jdk.artifact !== null) {
           // re-index the full set so the manifest keeps listing every artifact
-          await indexArtifacts(ctx.projectRoot, [...(manifest?.artifacts ?? []), jdk.artifact], {
+          await indexArtifacts(ctx.projectRoot, [...(manifestBeforeJdk?.artifacts ?? []), jdk.artifact], {
             store: ctx.store,
             onProgress: opts.onProgress,
           });
@@ -93,10 +99,23 @@ export async function handleMiss(
       }
     }
 
-    // 3. staleness: the build files moved since the last resolve — redo it, retry once
-    const manifest = await ctx.manifest();
-    if (manifest !== null && (await isStale(ctx.projectRoot, manifest))) {
-      await ctx.ensureReady();
+    // 3. staleness: the SNAPSHOT decides, not the manifest the JDK step may
+    // have re-stamped fresh. Still stale → the context's own re-resolve;
+    // masked fresh → only a forced resolveNow over the real dependency set
+    // can heal it. Either way, retry once before giving up.
+    if (staleBeforeJdk) {
+      const manifestNow = await ctx.manifest();
+      const stillStale = manifestNow !== null && (await isStale(ctx.projectRoot, manifestNow));
+      try {
+        if (stillStale) {
+          await ctx.ensureReady();
+        } else {
+          await resolveNow(ctx, { resolvers: opts.resolvers, onProgress: opts.onProgress });
+        }
+      } catch {
+        // a failed forced re-resolve leaves the served index as-is; the retry
+        // and the negative answer still follow
+      }
       const hit = await retryLookup(ctx, fqn);
       if (hit !== undefined) {
         return { found: true, via: "re-resolve", coordinates: hit.meta.coordinates, provenance: hit.meta.provenance };

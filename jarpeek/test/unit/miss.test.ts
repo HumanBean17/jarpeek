@@ -1,12 +1,21 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { handleMiss } from "../../src/core/miss.js";
+import { openContext, type QueryContext } from "../../src/core/query/context.js";
 import { LookupMissError } from "../../src/core/query/outline.js";
-import type { QueryContext } from "../../src/core/query/context.js";
 import type { Declaration, DependencyArtifact } from "../../src/core/types.js";
-import type { Manifest } from "../../src/index/manifest.js";
+import { computeDependencySetHash, writeManifest, type Manifest } from "../../src/index/manifest.js";
+
+const DEMO_SOURCES_JAR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "fixtures",
+  "jars",
+  "demo-lib-1.0.0-sources.jar",
+);
 
 interface ShardHit {
   safe: string;
@@ -221,5 +230,145 @@ describe("handleMiss step 4: negative", () => {
     if (result.found) throw new Error("unreachable");
     expect(result.via).toBe("negative");
     expect(result.searchedArtifacts).toEqual(["com.example:demo-lib:1.0.0"]);
+  });
+});
+
+describe("handleMiss staleness snapshot (fix round 1)", () => {
+  it("stale manifest + JDK absent + failed jdk retry still reaches the re-resolve step", async () => {
+    let ensureReadyCalls = 0;
+    let jdkResolves = 0;
+    const stub: StubCtx = {
+      projectRoot: stubRoot(),
+      cacheDir: "/tmp/irrelevant",
+      store: { lookup: async () => [], forEachRecord: noRecords },
+      manifest: async () => manifestOf([artifact("com.example:demo-lib:1.0.0")], "gone-stale"),
+      ensureReady: async () => {
+        ensureReadyCalls++;
+        return { bootstrapped: true, stale: false };
+      },
+      bootstrapWarnings: () => [],
+    };
+
+    const result = await handleMiss(asCtx(stub), new LookupMissError("java.util.Gone"), {
+      resolvers: {
+        jdk: async () => {
+          jdkResolves++;
+          return { artifact: null, warnings: [] };
+        },
+      },
+    });
+
+    expect(result.found).toBe(false);
+    if (result.found) throw new Error("unreachable");
+    expect(result.via).toBe("negative");
+    expect(jdkResolves).toBe(1);
+    // one ensureReady from step 1's findClass, at least one from step 3's
+    // re-resolve — the negative answer comes only after that retry
+    expect(ensureReadyCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("fresh manifest + JDK absent: step 2 success skips step 3 entirely", async () => {
+    const projectRoot = stubRoot();
+    let ensureReadyCalls = 0;
+    const freshHash = await computeDependencySetHash(projectRoot);
+    const fake: Declaration = {
+      fqn: "java.util.Fresh",
+      file: "java.base/java/util/Fresh.java",
+      selector: "Fresh",
+      kind: "class",
+      visibility: "public",
+      static: false,
+      deprecated: false,
+      signature: "public class Fresh",
+    };
+    const stub: StubCtx = {
+      projectRoot,
+      cacheDir: "/tmp/irrelevant",
+      store: {
+        lookup: async (fqn) =>
+          fqn === "java.util.Fresh"
+            ? [{ safe: "jdk%3A25", meta: artifact("jdk:25", "jdk"), records: [fake] }]
+            : [],
+        forEachRecord: noRecords,
+      },
+      manifest: async () => manifestOf([], freshHash),
+      ensureReady: async () => {
+        ensureReadyCalls++;
+        return { bootstrapped: false, stale: false };
+      },
+      bootstrapWarnings: () => [],
+    };
+
+    const result = await handleMiss(asCtx(stub), new LookupMissError("java.util.Fresh"), {
+      resolvers: { jdk: async () => ({ artifact: null, warnings: [] }) },
+    });
+    expect(result).toMatchObject({ found: true, via: "jdk" });
+    // only step 1's findClass ensureReady ran — step 3 was skipped
+    expect(ensureReadyCalls).toBe(1);
+  });
+
+  it("step 2's JDK indexing cannot mask a pre-existing staleness (forced re-resolve still runs)", async () => {
+    // real context + real manifest: a failed resolve left a stale manifest
+    // without the JDK; step 2 then indexes the JDK over that stale artifact
+    // set, which re-stamps the manifest fresh — step 3 must re-resolve anyway
+    const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-miss-mask-p-"));
+    const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-miss-mask-c-"));
+    roots.push(projectRoot, cacheDir);
+    writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+    const classesDir = mkdtempSync(join(tmpdir(), "jarpeek-miss-mask-jdk-"));
+    roots.push(classesDir);
+
+    const demo: DependencyArtifact = {
+      coordinates: "com.example:demo-lib:1.0.0",
+      kind: "external",
+      sourcesJar: DEMO_SOURCES_JAR,
+      provenance: "source",
+      warnings: [],
+    };
+    await writeManifest(projectRoot, {
+      version: 1,
+      resolvedAt: new Date(0).toISOString(),
+      dependencySetHash: "deliberately-stale",
+      artifacts: [demo],
+    });
+
+    let gradleCalls = 0;
+    let jdkResolves = 0;
+    const resolvers = {
+      gradle: async () => {
+        gradleCalls++;
+        throw new Error("gradle exploded");
+      },
+      jdk: async () => {
+        jdkResolves++;
+        return {
+          artifact: {
+            coordinates: "jdk:fake",
+            kind: "jdk" as const,
+            provenance: "signature" as const,
+            classesDir,
+            noDecompile: true,
+            warnings: [],
+          },
+          warnings: [],
+        };
+      },
+      includeJdk: false as const,
+    };
+    const ctx = openContext(projectRoot, { resolvers, cacheDir, onProgress: () => {} });
+
+    const result = await handleMiss(ctx, new LookupMissError("java.util.Absent"), { resolvers });
+
+    expect(result.found).toBe(false);
+    if (result.found) throw new Error("unreachable");
+    expect(result.via).toBe("negative");
+    expect(jdkResolves).toBe(1); // step 2 resolved the JDK over the stale set
+    // call 1: step 1's ensureReady re-resolve attempt (gradle threw);
+    // call 2: step 3's forced re-resolve — this is the regression assertion:
+    // it must happen even though step 2 re-stamped the manifest fresh
+    expect(gradleCalls).toBe(2);
+    // step 4 reports the manifest as it now stands (demo + the JDK step 2 added)
+    expect(result.searchedArtifacts).toContain("com.example:demo-lib:1.0.0");
+    expect(result.searchedArtifacts).toContain("jdk:fake");
   });
 });
