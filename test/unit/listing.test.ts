@@ -268,3 +268,90 @@ describe("ListingService.listing", () => {
     });
   });
 });
+
+describe("ListingService.listing explicit backing", () => {
+  it("backing: 'sources' lists the sources jar of a both-backings artifact", async () => {
+    const service = new ListingService();
+    const spec = artifact({
+      coordinates: "com.example:demo-lib:1.0.0",
+      binaryJar: DEMO_JAR,
+      sourcesJar: SOURCES_JAR,
+    });
+    const listing = await service.listing(spec, { backing: "sources" });
+    expect(listing.source).toBe("sources");
+    expect(fqns(listing)).toContain("com.example.Demo");
+    expect(listing.classes.find((c) => c.fqn === "com.example.Demo")!.entry).toBe(
+      "com/example/Demo.java",
+    );
+  });
+
+  it("backing: 'binary' lists the binary jar even when sourceDir outranks nothing", async () => {
+    const listing = await new ListingService().listing(
+      artifact({ coordinates: "com.example:demo-lib:1.0.0", binaryJar: DEMO_JAR }),
+      { backing: "binary" },
+    );
+    expect(listing.source).toBe("binary");
+    expect(fqns(listing)).toContain("com.example.Demo$Worker");
+  });
+
+  it("an explicit backing that does not exist is unreadable, and a requested sourceDir lists its walk", async () => {
+    const dir = tempDir();
+    try {
+      mkdirSync(join(dir, "com/example"), { recursive: true });
+      writeFileSync(join(dir, "com/example/Demo.java"), "package com.example;\npublic class Demo {}\n");
+      const service = new ListingService();
+      const spec = artifact({
+        coordinates: "test:backings:1",
+        binaryJar: DEMO_JAR,
+        sourceDir: dir,
+      });
+      const fromDir = await service.listing(spec, { backing: "sourceDir" });
+      expect(fromDir.source).toBe("sourceDir");
+      expect(fqns(fromDir)).toEqual(["com.example.Demo"]);
+
+      const missing = await service.listing(
+        artifact({ coordinates: "test:backings:2", binaryJar: DEMO_JAR }),
+        { backing: "sources" },
+      );
+      expect(missing.unreadable).toBe("no jar or source dir");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the default path's cache identity is untouched: default and explicit backings cache apart", async () => {
+    const dir = tempDir();
+    try {
+      const jar = join(dir, "demo.jar");
+      copyFileSync(DEMO_JAR, jar);
+      let calls = 0;
+      const service = new ListingService({
+        listZip: async (path) => {
+          calls++;
+          return listZipEntries(path);
+        },
+      });
+      const spec = artifact({ coordinates: "test:split:1", binaryJar: jar, sourcesJar: SOURCES_JAR });
+      const def1 = await service.listing(spec);
+      expect(calls).toBe(1);
+      // repeat default: cached, no new list
+      await service.listing(spec);
+      expect(calls).toBe(1);
+      // explicit sources: a separate cache lane, listed once
+      const src1 = await service.listing(spec, { backing: "sources" });
+      expect(src1.source).toBe("sources");
+      expect(calls).toBe(2);
+      await service.listing(spec, { backing: "sources" });
+      expect(calls).toBe(2);
+      // and the default lane is still warm
+      await service.listing(spec);
+      expect(calls).toBe(2);
+      expect(def1.source).toBe("binary");
+      service.invalidate("test:split:1");
+      await service.listing(spec);
+      expect(calls).toBe(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

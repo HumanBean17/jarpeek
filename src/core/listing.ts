@@ -39,6 +39,16 @@ export interface ListingServiceOptions {
   stat?: (path: string) => { mtimeMs: number; size: number };
 }
 
+export interface ListingOptions {
+  /**
+   * List this backing instead of the preferred one — locate's winner parse
+   * asks for `sources`/`sourceDir` explicitly (the spec's provenance ladder
+   * serves source text when a sources backing has the file). Default keeps
+   * the binary → sources → sourceDir preference.
+   */
+  backing?: ListingSource;
+}
+
 /**
  * Anonymous and local classes compile to digit simple names (`Outer$1`),
  * and synthetic lambda shapes surface the same way. None are navigation
@@ -107,10 +117,14 @@ export class ListingService {
    * List an artifact's backing, in preference order binaryJar → sourcesJar →
    * sourceDir. The first backing that stats wins even if it later fails to
    * read: a corrupt binary jar must surface as unreadable, not silently fall
-   * through to a stale sources jar.
+   * through to a stale sources jar. `opts.backing` pins one backing instead
+   * (an explicitly requested missing/unreadable backing answers unreadable).
    */
-  async listing(artifact: DependencyArtifact): Promise<ArtifactListing> {
-    const backing = this.pickBacking(artifact);
+  async listing(artifact: DependencyArtifact, opts: ListingOptions = {}): Promise<ArtifactListing> {
+    const backing = this.pickBacking(artifact, opts.backing);
+    // the default lane keeps its historical cache key (plain coordinates) so
+    // its identity is untouched; explicit backings cache under coord:backing
+    const key = opts.backing === undefined ? artifact.coordinates : `${artifact.coordinates}:${opts.backing}`;
     if (backing.stamp === "") {
       // no candidate backing stated: the discriminator is meaningless, keep "binary"
       const none: ArtifactListing = {
@@ -121,28 +135,33 @@ export class ListingService {
         stamp: "",
         unreadable: NO_BACKING_UNREADABLE,
       };
-      this.cache.set(artifact.coordinates, { stamp: "", listing: none });
+      this.cache.set(key, { stamp: "", listing: none });
       return none;
     }
-    const cached = this.cache.get(artifact.coordinates);
+    const cached = this.cache.get(key);
     if (cached && cached.stamp === backing.stamp) return cached.listing;
 
     const listing =
       backing.source === "sourceDir"
         ? this.listingFromSourceDir(artifact, backing)
         : await this.listingFromZip(artifact, backing);
-    this.cache.set(artifact.coordinates, { stamp: backing.stamp, listing });
+    this.cache.set(key, { stamp: backing.stamp, listing });
     return listing;
   }
 
-  /** First existing backing with its stamp; a stat failure means "not there" for selection purposes. */
-  private pickBacking(artifact: DependencyArtifact): Backing {
+  /**
+   * First existing backing with its stamp; a stat failure means "not there"
+   * for selection purposes. A `pin` skips the preference walk and goes
+   * straight to that backing's path.
+   */
+  private pickBacking(artifact: DependencyArtifact, pin?: ListingSource): Backing {
     const candidates: readonly (readonly [ListingSource, string | undefined])[] = [
       ["binary", artifact.binaryJar],
       ["sources", artifact.sourcesJar],
       ["sourceDir", artifact.sourceDir],
     ];
-    for (const [source, path] of candidates) {
+    const chosen = pin === undefined ? candidates : candidates.filter(([source]) => source === pin);
+    for (const [source, path] of chosen) {
       if (path === undefined) continue;
       try {
         const { mtimeMs, size } = this.stat(path);

@@ -23,6 +23,7 @@ import type { DependencyArtifact } from "../../src/core/types.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
 const JARS = join(FIXTURES, "jars");
+const DEMO_BINARY_JAR = join(JARS, "demo-lib-1.0.0.jar");
 const DEMO_SOURCES_JAR = join(JARS, "demo-lib-1.0.0-sources.jar");
 const NOSOURCES_JAR = join(JARS, "nosources-lib-1.0.0.jar");
 
@@ -346,6 +347,48 @@ describe("readMember / readSource from listings", () => {
     expect(err).toBeInstanceOf(LookupMissError);
     expect((err as Error).name).toBe("LookupMissError");
     expect((err as LookupMissError).fqn).toBe("com.example.Missing");
+  });
+});
+
+describe("both-backings artifacts (the real Gradle/Maven shape)", () => {
+  // binaryJar + sourcesJar of the same classes: hit-testing keeps binary
+  // coverage, but the winner PARSES from the sources jar per the spec's
+  // provenance ladder — outline/readSource serve source text with line
+  // numbers, never bytecode/decompile output
+  let ctx: QueryContext;
+  beforeAll(async () => {
+    ctx = await contextWith([
+      {
+        coordinates: "com.example:demo-lib:1.0.0",
+        kind: "external",
+        binaryJar: DEMO_BINARY_JAR,
+        sourcesJar: DEMO_SOURCES_JAR,
+      },
+    ]);
+  });
+
+  it("outline returns provenance source with line numbers from the sources jar", async () => {
+    const result = await outline(ctx, "com.example.Demo");
+    expect(result.coordinates).toBe("com.example:demo-lib:1.0.0");
+    expect(result.provenance).toBe("source");
+    const run = result.rows.find((r) => r.selector === "run" && r.kind === "method")!;
+    expect(run.lineStart).toBe(19); // the source file's line, not a decompile's
+    expect(result.rows.some((r) => r.selector === "Worker" && r.kind === "class")).toBe(true);
+  });
+
+  it("readSource --full serves the sources jar entry verbatim", async () => {
+    const result = await readSource(ctx, "com.example.Demo", { mode: "full" });
+    expect(result.provenance).toBe("source");
+    expect(result.file).toBe("com/example/Demo.java");
+    expect(result.lineCount).toBeGreaterThan(50);
+    expect(result.content).toContain('private static final String NAME = "demo";');
+  });
+
+  it("readMember slices carry the source file's line spans", async () => {
+    const result = await readMember(ctx, "com.example.Demo", "#run(String,int)");
+    expect(result.provenance).toBe("source");
+    expect(result.members[0]!.startLine).toBe(11);
+    expect(result.members[0]!.javadoc).toBeDefined();
   });
 });
 

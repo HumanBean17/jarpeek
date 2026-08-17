@@ -197,39 +197,108 @@ async function binaryLocated(
 
 /** Locate `fqn` in one listed artifact, or null when the listing does not declare it. */
 async function locateInListing(
+  deps: LocateDeps,
   artifact: DependencyArtifact,
   listing: ArtifactListing,
   fqn: string,
   includeNested: boolean,
   scan: Scan,
 ): Promise<LocatedClass | null> {
+  // the winner PARSES from the first source-ish backing that carries the
+  // entry — the spec's provenance ladder, so a both-jars artifact serves
+  // source text, never bytecode/decompile output. A source hit also ANSWERS
+  // the hit test (a sources jar can declare a class the binary lacks);
+  // otherwise the preferred listing's own backing serves.
+  const parse = await parseBackingFor(deps, artifact, fqn, includeNested, scan);
+  if (parse !== null) return parse;
+  const hit = findHit(listing, fqn);
+  if (hit === null) return null;
+  // nothing source-ish yields the entry: fall back to the hit's own backing
   if (listing.source === "sourceDir") {
-    const relpath = findSourceDirHit(listing, fqn);
-    if (relpath === null) return null;
     const root = artifact.sourceDir!;
     return sourceLocated(
       artifact,
-      relpath,
+      hit.name,
       // readFileSync throws sync on a vanished file; the async wrapper keeps
       // sourceLocated's single try/catch honest for both backings
-      async () => readFileSync(join(root, relpath), "utf8"),
+      async () => readFileSync(join(root, hit.name), "utf8"),
       fqn,
       includeNested,
       scan,
     );
   }
+  const zipHit = findZipHit(listing, fqn);
+  return zipHit === null
+    ? null
+    : listing.source === "binary"
+      ? binaryLocated(artifact, listing, zipHit, fqn, includeNested, scan)
+      : sourceLocated(
+          artifact,
+          zipHit.name,
+          () => readTextEntry(artifact.sourcesJar!, zipHit),
+          fqn,
+          includeNested,
+          scan,
+        );
+}
+
+/** Hit test over either listing kind: the entry name (relpath) or null. */
+function findHit(listing: ArtifactListing, fqn: string): { name: string } | null {
+  if (listing.source === "sourceDir") {
+    const relpath = findSourceDirHit(listing, fqn);
+    return relpath === null ? null : { name: relpath };
+  }
   const hit = findZipHit(listing, fqn);
-  if (hit === null) return null;
-  return listing.source === "binary"
-    ? binaryLocated(artifact, listing, hit, fqn, includeNested, scan)
-    : sourceLocated(
-        artifact,
-        hit.name,
-        () => readTextEntry(artifact.sourcesJar!, hit),
-        fqn,
-        includeNested,
-        scan,
-      );
+  return hit === null ? null : { name: hit.name };
+}
+
+/**
+ * The first SOURCE-ish backing (sourceDir, then sourcesJar) that yields the
+ * dotted `fqn`'s entry, parsed — or null when neither does (binary callers
+ * fall back to their own backing). An unreadable requested backing counts as
+ * not yielding: the binary hit still answers.
+ */
+async function parseBackingFor(
+  deps: LocateDeps,
+  artifact: DependencyArtifact,
+  fqn: string,
+  includeNested: boolean,
+  scan: Scan,
+): Promise<LocatedClass | null> {
+  if (artifact.sourceDir !== undefined) {
+    const listing = await deps.listings.listing(artifact, { backing: "sourceDir" });
+    if (listing.unreadable === undefined) {
+      const relpath = findSourceDirHit(listing, fqn);
+      if (relpath !== null) {
+        const root = artifact.sourceDir;
+        return sourceLocated(
+          artifact,
+          relpath,
+          async () => readFileSync(join(root, relpath), "utf8"),
+          fqn,
+          includeNested,
+          scan,
+        );
+      }
+    }
+  }
+  if (artifact.sourcesJar !== undefined) {
+    const listing = await deps.listings.listing(artifact, { backing: "sources" });
+    if (listing.unreadable === undefined) {
+      const hit = findZipHit(listing, fqn);
+      if (hit !== null) {
+        return sourceLocated(
+          artifact,
+          hit.name,
+          () => readTextEntry(artifact.sourcesJar!, hit),
+          fqn,
+          includeNested,
+          scan,
+        );
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -259,7 +328,7 @@ export async function locateClass(
       continue;
     }
     if (winner === null) {
-      winner = await locateInListing(artifact, listing, fqn, includeNested, scan);
+      winner = await locateInListing(deps, artifact, listing, fqn, includeNested, scan);
     } else if (declaresFqn(listing, fqn)) {
       alternatives.push({ coordinates: artifact.coordinates });
     }

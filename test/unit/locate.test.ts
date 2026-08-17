@@ -246,6 +246,67 @@ describe("locateClass", () => {
     expect(result.alternatives).toEqual([{ coordinates: "test:second:1" }]);
   });
 
+  it("a both-backings artifact parses from the SOURCES jar (provenance ladder), hit-tested via binary", async () => {
+    // every real Gradle/Maven artifact carries both jars; the spec's
+    // provenance ladder says source wins when the sources jar has the file
+    const d = deps([
+      artifact({
+        coordinates: "com.example:demo-lib:1.0.0",
+        binaryJar: DEMO_JAR,
+        sourcesJar: SOURCES_JAR,
+      }),
+    ]);
+    const result = await locateClass(d, "com.example.Demo");
+    expect(result.winner.provenance).toBe("source");
+    expect(result.winner.entry).toBe("com/example/Demo.java");
+    const classRow = result.winner.records.find((r) => r.fqn === "com.example.Demo" && r.kind === "class")!;
+    expect(classRow.lineStart).toBeGreaterThan(0); // source rows carry line ranges
+    expect(result.winner.records.some((r) => r.selector === "run" && r.kind === "method")).toBe(true);
+    // nested Worker arrives from the parsed source text (family filter), not sibling entries
+    const worker = result.winner.records.filter((r) => r.fqn === "com.example.Demo.Worker");
+    expect(worker).toHaveLength(1);
+    expect(worker[0]!.kind).toBe("class");
+    // Demo.Worker has no own .java entry (it lives inside Demo.java), so the
+    // sources backing cannot yield it and the parse falls back to the
+    // binary entry — the ladder serves what exists, never fabricates
+    const nested = await locateClass(d, "com.example.Demo.Worker");
+    expect(nested.winner.entry).toBe("com/example/Demo$Worker.class");
+    expect(nested.winner.provenance).toBe("signature");
+    expect(nested.winner.records.some((r) => r.fqn === "com.example.Demo.Worker" && r.kind === "class")).toBe(true);
+  });
+
+  it("a both-backings artifact falls back to binary when the sources jar lacks the entry", async () => {
+    const dir = tempDir();
+    try {
+      // a sources jar carrying only Outer.java; Hidden exists solely in the
+      // binary backing, so its parse falls back to the class entry
+      const sourcesOnly = join(dir, "outer-sources.jar");
+      writeFileSync(
+        sourcesOnly,
+        craftZip([
+          { name: "com/example/Outer.java", data: "package com.example;\npublic class Outer {}\n" },
+        ]),
+      );
+      const d = deps([
+        artifact({
+          coordinates: "com.example:nosources-lib:1.0.0",
+          binaryJar: NOSOURCES_JAR,
+          sourcesJar: sourcesOnly,
+        }),
+      ]);
+      const result = await locateClass(d, "com.example.nosources.Hidden");
+      expect(result.winner.provenance).toBe("signature");
+      expect(result.winner.entry).toBe("com/example/nosources/Hidden.class");
+      expect(result.winner.records.some((r) => r.selector === "secret")).toBe(true);
+      // and Outer still parses from the sources jar
+      const outer = await locateClass(d, "com.example.Outer");
+      expect(outer.winner.provenance).toBe("source");
+      expect(outer.winner.entry).toBe("com/example/Outer.java");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("throws LookupMissError when no artifact declares the fqn", async () => {
     const miss = await locateClass(deps([DEMO_SOURCES]), "com.example.Nope").catch((e) => e);
     expect(miss).toBeInstanceOf(LookupMissError);
