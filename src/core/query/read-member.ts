@@ -4,15 +4,16 @@
  * Where read_source serves a whole file, read_member serves exactly the
  * declarations an agent asked for — javadoc included — so a batch of
  * `#name(T1,T2)` selectors costs a handful of lines, not a class body. The
- * content ladder is read_source's: module sources, sources jar (JDK src.zip
- * included), then a whole-class decompile whose listing is re-lexed so line
- * numbers and javadoc ranges refer to the decompiled text. When no real
- * source exists (no JVM to decompile, JDK classes where decompilation is out
- * of scope, a failed decompile) every served selector still yields its
- * signature as a pseudo-member plus a miss entry naming the reason — the
- * call degrades, it never fails. Malformed selectors, by contrast, are a
- * usage error: parseSelector throws for the whole call and the miss protocol
- * does not apply.
+ * content ladder is read_source's (listing-located, one file): module
+ * sources, sources jar (JDK src.zip included), then a whole-class decompile
+ * whose listing is re-lexed so line numbers and javadoc ranges refer to the
+ * decompiled text. When no real source exists (no JVM to decompile, JDK
+ * classes where decompilation is out of scope, a failed decompile) every
+ * served selector still yields its signature as a pseudo-member plus a miss
+ * entry naming the reason — the call degrades, it never fails. Malformed
+ * selectors, by contrast, are a usage error: parseSelector throws for the
+ * whole call and the miss protocol does not apply. No options: decompile
+ * injection lives at the cfr layer's own tests.
  */
 import { parseJavaSource } from "../../parse/java-lexer.js";
 import { sliceLines } from "../../util/lines.js";

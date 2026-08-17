@@ -6,10 +6,10 @@
     "resolvedAt": "<resolvedAt>",
     "dependencySetHash": "<hash>",
     "stale": false,
-    "artifactCount": 2
+    "artifactCount": 3
   },
   "index": {
-    "artifactCount": 2,
+    "artifactCount": 3,
     "fqnCount": 9
   },
   "jvm": {

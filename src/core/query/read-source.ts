@@ -1,32 +1,25 @@
 /**
  * readSource: source text for one class, in the size the caller asked for.
  *
- * `outline` (default) reuses the outline rows. `full` resolves the winner
- * artifact's best source — module sourceDir file, sources-jar entry (JDK
+ * `outline` (default) reuses the outline rows. `full` resolves the located
+ * winner's best source — module sourceDir file, sources-jar entry (JDK
  * src.zip included), or a whole-class CFR decompile for binary-only
- * artifacts — and `lines` slices that content. When no real source can be
- * produced (JDK classes where decompilation is out of scope, or a decompile
- * that failed) the signature rows render as text under provenance
+ * artifacts — and `lines` slices that content. The located entry names the
+ * bytes for every rung: no re-listing, no suffix search. When no real source
+ * can be produced (JDK classes where decompilation is out of scope, or a
+ * decompile that failed) the signature rows render as text under provenance
  * "signature" with a header note saying why. Lookup misses throw
  * LookupMissError like outline does.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Declaration, DependencyArtifact, Provenance } from "../types.js";
-import { createDecompiler, type DecompileResult } from "../../decompile/cfr.js";
+import type { DecompileResult } from "../../decompile/cfr.js";
 import { listZipEntries, readTextEntry } from "../../parse/zip.js";
 import { sliceLines, splitLines } from "../../util/lines.js";
 import type { QueryContext } from "./context.js";
-import {
-  isClassKind,
-  mergedDegraded,
-  orderedLookup,
-  outline,
-  servedStale,
-  type ArtifactHit,
-  type OrderedLookup,
-  type OutlineResult,
-} from "./outline.js";
+import { locateClass, type LocateResult } from "./locate.js";
+import { mergedDegraded, outline, servedStale, type OutlineResult } from "./outline.js";
 
 export type ReadSourceMode = "outline" | "full" | "lines";
 
@@ -86,40 +79,26 @@ export interface ResolvedContent {
   signatureNote?: string;
 }
 
-/**
- * Process-wide decompile memo: successes are keyed (coordinates, class), so
- * repeat reads of a binary-only class cost one CFR run per process. Lives
- * here until the context owns one.
- */
-const decompiler = createDecompiler();
-
 const JDK_NOTE = "signatures only (jdk: decompilation is out of scope)";
 
 /**
- * Served when a module artifact's current file is shorter than the indexed
- * line ranges claim: the slices would be taken from the wrong lines, so the
- * answer still arrives but never unmarked. (The staleness signature is the
- * primary guard; this is the belt for a stale-served manifest.)
- */
-export const MODULE_SOURCE_CHANGED_WARNING =
-  "module source changed since index; line ranges may be misaligned (run resolve)";
-
-/**
- * The winner's best whole-file source text, with the provenance it came from.
+ * The located winner's best whole-file source text, with the provenance it
+ * came from. Records and entry are parsed from the very content this ladder
+ * serves (or, on the decompile rungs, from the same class entry), so no
+ * misalignment check exists — misalignment is impossible by construction.
  * Exported for readMember, which reuses the whole resolution ladder.
  */
 export async function resolveContent(ctx: QueryContext, fqn: string): Promise<ResolvedContent> {
   await ctx.ensureReady();
-  const { winner, alternatives, degraded: lookupDegraded }: OrderedLookup =
-    await orderedLookup(ctx, fqn);
-  const meta = winner.meta;
-  const classRecord = winner.records.find((record) => isClassKind(record.kind));
-  const internalName = fqn.replaceAll(".", "/");
-  const entryPath = classRecord?.file ?? `${internalName}.java`;
+  const { winner, alternatives, degraded: locateDegraded }: LocateResult =
+    await locateClass(ctx, fqn, { includeNested: false });
+  const meta = winner.artifact;
+  // the internal name the decompiler keys on: the located entry minus .class
+  const internalName = winner.entry.replace(/\.class$/, "");
   const stale = await servedStale(ctx);
   const degraded = await mergedDegraded(ctx, [
     ...(stale ? ["stale index served"] : []),
-    ...lookupDegraded,
+    ...locateDegraded,
   ]);
 
   const resolved = (file: string, provenance: Provenance, content: string): ResolvedContent => ({
@@ -135,7 +114,7 @@ export async function resolveContent(ctx: QueryContext, fqn: string): Promise<Re
   });
 
   const signatureFallback = (note: string, extra: Partial<ResolvedContent> = {}): ResolvedContent => ({
-    ...resolved(classRecord?.file ?? `${internalName}.java`, "signature", [
+    ...resolved(winner.entry, "signature", [
       note,
       ...winner.records.map((record) => record.signature),
     ].join("\n")),
@@ -143,31 +122,22 @@ export async function resolveContent(ctx: QueryContext, fqn: string): Promise<Re
     ...extra,
   });
 
-  // 1. module sourceDir: the record's file is projectRoot-relative
+  // 1. module sourceDir: the located entry is the sourceDir-relative path
   if (meta.sourceDir) {
     try {
-      const content = readFileSync(join(ctx.projectRoot, entryPath), "utf8");
-      // the indexed lineEnd values describe the file AT INDEX TIME; a current
-      // file too short to hold them means the ranges no longer align
-      const maxIndexedLineEnd = winner.records.reduce((max, r) => Math.max(max, r.lineEnd ?? 0), 0);
-      if (maxIndexedLineEnd > 0 && splitLines(content).length < maxIndexedLineEnd) {
-        degraded.push(MODULE_SOURCE_CHANGED_WARNING);
-      }
-      return resolved(entryPath, "source", content);
+      return resolved(winner.entry, "source", readFileSync(join(meta.sourceDir, winner.entry), "utf8"));
     } catch {
       // unreadable path — fall through to the next source
     }
   }
 
-  // 2. sources jar (external sources or the JDK's src.zip — same zip reader)
+  // 2. sources jar: the EXACT located entry (external sources or the JDK's
+  // src.zip — same zip reader; locate already searched, no suffix logic here)
   if (meta.sourcesJar) {
     try {
-      const entries = await listZipEntries(meta.sourcesJar);
-      const entry =
-        entries.find((e) => e.name === entryPath) ??
-        entries.find((e) => e.name.endsWith(`/${entryPath}`));
-      if (entry) {
-        return resolved(entry.name, "source", await readTextEntry(meta.sourcesJar, entry));
+      const zipEntry = (await listZipEntries(meta.sourcesJar)).find((e) => e.name === winner.entry);
+      if (zipEntry !== undefined) {
+        return resolved(winner.entry, "source", await readTextEntry(meta.sourcesJar, zipEntry));
       }
     } catch {
       // unreadable archive or entry — fall through
@@ -176,7 +146,7 @@ export async function resolveContent(ctx: QueryContext, fqn: string): Promise<Re
 
   // 3. binary jar: whole-class decompile (skipped where decompilation is out of scope)
   if (meta.binaryJar && !meta.noDecompile) {
-    const result = await decompiler(meta.coordinates, meta.binaryJar, internalName);
+    const result = await ctx.decompiler(meta.coordinates, meta.binaryJar, internalName);
     if (result.provenance === "decompiled") {
       return resolved(`${internalName}.java (decompiled)`, "decompiled", result.source);
     }

@@ -194,6 +194,35 @@ describe("locateClass", () => {
     expect(result.degraded).toEqual([]);
   });
 
+  it("a DOTTED nested query hits a binary listing's `Outer$Inner` entry (canonical fqn rule)", async () => {
+    const dir = tempDir();
+    try {
+      // the query layer speaks dotted fqns; listings keep `$` internally, so
+      // the dotted query must match the ClassEntry via $→. equivalence
+      const jar = join(dir, "dotted.jar");
+      writeFileSync(
+        jar,
+        craftZip([
+          { name: "a/b/Outer.class", data: craftClassFile("a/b/Outer", "dispatch") },
+          { name: "a/b/Outer$Inner.class", data: craftClassFile("a/b/Outer$Inner", "describe") },
+        ]),
+      );
+      const d = deps([artifact({ coordinates: "test:dotted:1", binaryJar: jar })]);
+      const result = await locateClass(d, "a.b.Outer.Inner");
+      expect(result.winner.entry).toBe("a/b/Outer$Inner.class");
+      expect(result.winner.records.some((r) => r.fqn === "a.b.Outer.Inner" && r.kind === "class")).toBe(true);
+      // the class-file reader maps $ to ., so the own row matches the dotted query
+      expect(result.winner.records.some((r) => r.selector === "describe" && r.kind === "method")).toBe(true);
+      expect(result.degraded).toEqual([]);
+
+      // the `$`-spelled query means the same class after normalization
+      const dollar = await locateClass(d, "a.b.Outer$Inner");
+      expect(dollar.winner.entry).toBe("a/b/Outer$Inner.class");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("locates a class in a binary jar as signature provenance without line numbers", async () => {
     const d = deps([
       artifact({ coordinates: "com.example:nosources-lib:1.0.0", binaryJar: NOSOURCES_JAR }),

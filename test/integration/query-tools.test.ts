@@ -31,22 +31,23 @@ const c = {} as Suite;
 const noJvm = {} as Suite;
 const ambiguous = {} as Suite;
 
+/**
+ * One backing per artifact (the fixture-manifest rule): demo-lib declares
+ * its SOURCES jar so locate parses source records; nosources-lib is
+ * binary-only. (A both-jars artifact lists binary-first and would answer
+ * from bytecode.)
+ */
 function demoArtifacts(): DependencyArtifact[] {
   return [
     {
       coordinates: "com.example:demo-lib:1.0.0",
       kind: "external",
-      binaryJar: DEMO_JAR,
       sourcesJar: DEMO_SOURCES_JAR,
-      provenance: "source",
-      warnings: [],
     },
     {
       coordinates: "com.example:nosources-lib:1.0.0",
       kind: "external",
       binaryJar: NOSOURCES_JAR,
-      provenance: "signature",
-      warnings: [],
     },
   ];
 }
@@ -67,7 +68,7 @@ const suites: Suite[] = [];
 
 beforeAll(() => {
   Object.assign(c, openSuite(demoArtifacts));
-  // separate cache dir so the decompile disk cache is empty for the no-jvm scenario
+  // separate context so the decompile memo is cold for the no-jvm scenario
   Object.assign(noJvm, openSuite(demoArtifacts));
   Object.assign(
     ambiguous,
@@ -77,8 +78,6 @@ beforeAll(() => {
         coordinates: "com.other:demo-lib:2",
         kind: "external",
         binaryJar: NOSOURCES_JAR,
-        provenance: "signature",
-        warnings: [],
       },
     ]),
   );
@@ -189,38 +188,50 @@ describe("readMember", () => {
   });
 
   it("noDecompile jdk artifact serves signature rows with the jdk miss reason", async () => {
-    await c.ctx.store.writeArtifact(
+    // listing-world port: a jdk-kind artifact whose binary jar carries the
+    // class and whose noDecompile flag skips the decompile rung
+    const jdkSuite = openSuite(() => [
       {
         coordinates: "jdk:fake",
-        kind: "jdk",
-        provenance: "signature",
+        kind: "jdk" as const,
+        binaryJar: NOSOURCES_JAR,
         noDecompile: true,
-        warnings: [],
       },
-      [
-        {
-          fqn: "jdk.fake.Fake",
-          file: "java.base/jdk/fake/Fake.class",
-          selector: "size",
-          kind: "method",
-          visibility: "public",
-          static: false,
-          deprecated: false,
-          signature: "public int size()",
-        },
-      ],
-    );
-    const result = await readMember(c.ctx, "jdk.fake.Fake", "#size()");
+    ]);
+    suites.push(jdkSuite);
+    const result = await readMember(jdkSuite.ctx, "com.example.nosources.Hidden", "#secret()");
     expect(result.provenance).toBe("signature");
-    expect(result.members[0]!.lines).toEqual(["public int size()"]);
+    expect(result.members[0]!.lines).toEqual([result.members[0]!.signature]);
     expect(result.members[0]!.startLine).toBe(0);
-    expect(result.misses).toEqual([{ selector: "#size()", reason: "jdk: decompilation out of scope" }]);
+    expect(result.misses).toEqual([{ selector: "#secret()", reason: "jdk: decompilation out of scope" }]);
   });
 });
 
 describe("readResource", () => {
+  // the resource half reads the artifact's binary jar directly (readResource
+  // does not go through locate), so this describe uses its own suite where
+  // demo-lib carries the binary jar
+  const res = {} as Suite;
+
+  beforeAll(() => {
+    Object.assign(
+      res,
+      openSuite(() => [
+        {
+          coordinates: "com.example:demo-lib:1.0.0",
+          kind: "external",
+          binaryJar: DEMO_JAR,
+          sourcesJar: DEMO_SOURCES_JAR,
+          provenance: "source",
+        },
+        { coordinates: "com.example:nosources-lib:1.0.0", kind: "external", binaryJar: NOSOURCES_JAR },
+      ]),
+    );
+    suites.push(res);
+  });
+
   it("text entry content from the binary jar", async () => {
-    const result = await readResource(c.ctx, "com.example:demo-lib:1.0.0", "config/*");
+    const result = await readResource(res.ctx, "com.example:demo-lib:1.0.0", "config/*");
     expect(result.artifact).toBe("com.example:demo-lib:1.0.0");
     expect(result.provenance).toBe("source");
     expect(result.entries).toHaveLength(1);
@@ -231,14 +242,14 @@ describe("readResource", () => {
   });
 
   it("META-INF/services entries are text", async () => {
-    const result = await readResource(c.ctx, "com.example:demo-lib:1.0.0", "META-INF/services/*");
+    const result = await readResource(res.ctx, "com.example:demo-lib:1.0.0", "META-INF/services/*");
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0]!.path).toBe("META-INF/services/com.example.Demo");
     expect(result.entries[0]!.content).toBe("com.example.Demo\n");
   });
 
   it("class entries are binary with a note and no content; artifact-id query resolves", async () => {
-    const result = await readResource(c.ctx, "demo-lib", "**/*.class");
+    const result = await readResource(res.ctx, "demo-lib", "**/*.class");
     expect(result.entries.length).toBe(9);
     for (const entry of result.entries) {
       expect(entry.binary).toBe(true);
@@ -249,13 +260,13 @@ describe("readResource", () => {
   });
 
   it("png resource is binary even though the fixture is tiny", async () => {
-    const result = await readResource(c.ctx, "demo-lib", "logo.png");
+    const result = await readResource(res.ctx, "demo-lib", "logo.png");
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0]!.binary).toBe(true);
   });
 
   it("glob matching nothing yields empty entries, not an error", async () => {
-    const result = await readResource(c.ctx, "com.example:demo-lib:1.0.0", "no/such/**");
+    const result = await readResource(res.ctx, "com.example:demo-lib:1.0.0", "no/such/**");
     expect(result.entries).toEqual([]);
   });
 
@@ -268,7 +279,7 @@ describe("readResource", () => {
   });
 
   it("unknown artifact query throws", async () => {
-    await expect(readResource(c.ctx, "no-such-artifact", "*")).rejects.toThrow(/unknown artifact/);
+    await expect(readResource(res.ctx, "no-such-artifact", "*")).rejects.toThrow(/unknown artifact/);
   });
 
   it("text truncation backs off to a UTF-8 codepoint boundary", () => {
@@ -392,9 +403,14 @@ describe("read_resource / where honesty parity", () => {
     suites.push({ projectRoot, cacheDir, ctx: undefined as unknown as QueryContext });
     try {
       writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+      // the resource-half shape: demo-lib with its binary jar carries the
+      // config entry this test reads
       let impl: () => Promise<{ ok: boolean; artifacts: DependencyArtifact[] }> = async () => ({
         ok: true,
-        artifacts: demoArtifacts(),
+        artifacts: [
+          { coordinates: "com.example:demo-lib:1.0.0", kind: "external", binaryJar: DEMO_JAR },
+          { coordinates: "com.example:nosources-lib:1.0.0", kind: "external", binaryJar: NOSOURCES_JAR },
+        ],
       });
       const ctx = openContext(projectRoot, {
         resolvers: { gradle: async () => impl(), includeJdk: false },

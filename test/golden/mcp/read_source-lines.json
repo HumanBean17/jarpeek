@@ -4,6 +4,11 @@
   "coordinates": "com.example:demo-lib:1.0.0",
   "file": "com/example/Demo.java",
   "provenance": "source",
+  "alternatives": [
+    {
+      "coordinates": "com.example:demo-lib-bin:1.0.0"
+    }
+  ],
   "degraded": [],
   "lines": [
     "",

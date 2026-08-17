@@ -39,22 +39,28 @@ interface Suite {
   ctx: QueryContext;
 }
 
+/**
+ * One backing per artifact (the fixture-manifest rule): demo-lib declares
+ * its SOURCES jar so locate parses source records (the outline/read parity
+ * cases assert source-lexer signatures); demo-lib-bin carries the binary
+ * jar for the resource-half case; nosources-lib is binary-only.
+ */
 function demoArtifacts(): DependencyArtifact[] {
   return [
     {
       coordinates: "com.example:demo-lib:1.0.0",
       kind: "external",
-      binaryJar: DEMO_JAR,
       sourcesJar: DEMO_SOURCES_JAR,
-      provenance: "source",
-      warnings: [],
+    },
+    {
+      coordinates: "com.example:demo-lib-bin:1.0.0",
+      kind: "external",
+      binaryJar: DEMO_JAR,
     },
     {
       coordinates: "com.example:nosources-lib:1.0.0",
       kind: "external",
       binaryJar: NOSOURCES_JAR,
-      provenance: "signature",
-      warnings: [],
     },
   ];
 }
@@ -316,27 +322,27 @@ describe("read-source", () => {
 
 describe("read-resource", () => {
   it("prints text entry content", () => {
-    const run = cli(c, ["read-resource", "com.example:demo-lib:1.0.0", "config/*"]);
+    const run = cli(c, ["read-resource", "com.example:demo-lib-bin:1.0.0", "config/*"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("config/app.properties");
     expect(run.stdout).toContain("key=value");
   });
 
   it("binary entries print a note without content", () => {
-    const run = cli(c, ["read-resource", "demo-lib", "logo.png"]);
+    const run = cli(c, ["read-resource", "demo-lib-bin", "logo.png"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("binary entry — content omitted");
   });
 
   it("glob matching nothing prints an empty listing and exits 0", () => {
-    const run = cli(c, ["read-resource", "demo-lib", "no/such/**"]);
+    const run = cli(c, ["read-resource", "demo-lib-bin", "no/such/**"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("no matching entries");
   });
 
   it("--json deep-equals the in-process readResource result", async () => {
-    const expected = await readResource(c.ctx, "com.example:demo-lib:1.0.0", "config/*");
-    expect(jsonRun(c, ["read-resource", "com.example:demo-lib:1.0.0", "config/*"])).toEqual(expected);
+    const expected = await readResource(c.ctx, "com.example:demo-lib-bin:1.0.0", "config/*");
+    expect(jsonRun(c, ["read-resource", "com.example:demo-lib-bin:1.0.0", "config/*"])).toEqual(expected);
   });
 
   it("unknown artifact exits 1 with the message on stderr", () => {

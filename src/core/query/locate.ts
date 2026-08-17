@@ -65,15 +65,21 @@ const SOURCE_EXTS = [".java", ".kt"] as const;
 const internalName = (fqn: string): string => fqn.replaceAll(".", "/");
 
 /**
- * The zip entry backing `fqn` in a jar listing, or null when the artifact
- * does not declare it. Binary hits are exact `internal + ".class"` names;
- * source hits try `.java` then `.kt` exactly, else a UNIQUE `"/" + candidate`
- * suffix (relocated source roots) — two or more suffix matches are ambiguous
- * and count as a miss rather than a coin flip.
+ * The zip entry backing the DOTTED `fqn` in a jar listing, or null when the
+ * artifact does not declare it. The query layer speaks dotted fqns
+ * (`a.b.Outer.Inner`); listing fqns keep the `$`, so a binary hit is the
+ * entry whose name maps `$`→`.` onto the query. Source hits try `.java`
+ * then `.kt` exactly, else a UNIQUE `"/" + candidate` suffix (relocated
+ * source roots) — two or more suffix matches are ambiguous and count as a
+ * miss rather than a coin flip.
  */
 function findZipHit(listing: ArtifactListing, fqn: string): ZipEntry | null {
   if (listing.source === "binary") {
-    return listing.entries.find((e) => e.name === `${internalName(fqn)}.class`) ?? null;
+    // a ClassEntry names the entry; the real ZipEntry (offsets, sizes) is
+    // found by that name — readZipEntry needs the whole record, not a name
+    const dotted = fqn.replaceAll("$", ".");
+    const entryName = listing.classes.find((c) => c.fqn.replaceAll("$", ".") === dotted)?.entry;
+    return entryName === undefined ? null : (listing.entries.find((e) => e.name === entryName) ?? null);
   }
   for (const ext of SOURCE_EXTS) {
     const candidate = `${internalName(fqn)}${ext}`;
@@ -238,6 +244,9 @@ export async function locateClass(
   opts: LocateOptions = {},
 ): Promise<LocateResult> {
   const includeNested = opts.includeNested ?? true;
+  // canonical query-layer form: dotted. A `$`-spelled query (`a.b.Outer$Inner`)
+  // means the same class as its dotted spelling; all matching below is dotted.
+  fqn = fqn.replaceAll("$", ".");
   const artifacts = (await deps.manifest())?.artifacts ?? [];
   const unreadable: string[] = [];
   const scan: Scan = { failed: 0 };

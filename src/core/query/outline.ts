@@ -2,14 +2,19 @@
  * Outline: the frugal first look at a class — its declaration rows without
  * any source text.
  *
- * Lookup misses are protocol, not errors to print: `LookupMissError` carries
- * the fqn so the miss layer (Task 18) can suggest alternatives. Shards
- * declaring the same fqn are ordered by the manifest's artifacts position —
- * first occurrence is the winner, the rest become `alternatives`.
+ * Lookup is listing-backed (Task 5): `locateClass` walks the manifest's
+ * artifacts in order, and the first whose backing declares the fqn is parsed
+ * from exactly one file — its own row, members, and directly nested class
+ * rows come out of that parse. Later hits become `alternatives`; the store's
+ * manifest ordering/shaping helpers stay exported until Tasks 8-9 retire
+ * their last importers. Lookup misses are protocol, not errors to print:
+ * `LookupMissError` carries the fqn so the miss layer can suggest
+ * alternatives.
  */
-import type { Declaration, DeclKind, DependencyArtifact, Provenance, Visibility } from "../types.js";
+import type { Declaration, DeclKind, Provenance, Visibility } from "../types.js";
 import { isStale, type Manifest } from "../../index/manifest.js";
 import type { QueryContext } from "./context.js";
+import { locateClass } from "./locate.js";
 
 /** Declaration kinds that name a type (vs members of one). */
 export const CLASS_KINDS: readonly DeclKind[] = [
@@ -24,26 +29,12 @@ export const CLASS_KINDS: readonly DeclKind[] = [
 export const isClassKind = (kind: DeclKind): boolean =>
   (CLASS_KINDS as readonly string[]).includes(kind);
 
-/** Thrown by outline/readSource when no indexed artifact declares `fqn`. */
+/** Thrown by outline/readSource when no listed artifact declares `fqn`. */
 export class LookupMissError extends Error {
   constructor(public readonly fqn: string) {
     super(`no indexed class for ${fqn}`);
     this.name = "LookupMissError";
   }
-}
-
-export interface ArtifactHit {
-  safe: string;
-  meta: DependencyArtifact;
-  /** Only the records declaring the queried fqn (a shard holds the whole artifact). */
-  records: Declaration[];
-}
-
-export interface OrderedLookup {
-  winner: ArtifactHit;
-  alternatives: Array<{ coordinates: string }>;
-  /** Set when the winner came from shards the manifest no longer lists. */
-  degraded: string[];
 }
 
 export interface OutlineOptions {
@@ -62,12 +53,10 @@ export interface OutlineResult {
   degraded: string[];
 }
 
-const UNORDERED = Number.MAX_SAFE_INTEGER;
-
-/** Warning carried when a lookup had to be answered from out-of-manifest shards. */
-export const OUT_OF_MANIFEST_WARNING = "artifact no longer in dependency set";
-
-/** coordinates → position in the manifest's artifacts array; first occurrence wins. */
+/**
+ * coordinates → position in the manifest's artifacts array; first occurrence
+ * wins. (Store-era helper kept until Task 8 deletes its last importer.)
+ */
 export function manifestOrder(manifest: Manifest | null): Map<string, number> {
   const order = new Map<string, number>();
   (manifest?.artifacts ?? []).forEach((artifact, index) => {
@@ -79,47 +68,12 @@ export function manifestOrder(manifest: Manifest | null): Map<string, number> {
 /**
  * The manifest's artifact coordinates as a membership filter, or null only
  * when no manifest exists — the cache store is user-global and never pruned,
- * so with a manifest present queries serve only its artifacts. A manifest
- * that lists ZERO artifacts still scopes: it says the resolved set is empty,
- * so foreign shards are excluded (and any fallback serving is flagged), not
- * silently treated as fair game.
+ * so with a manifest present queries serve only its artifacts. (Store-era
+ * helper kept until Task 8 deletes its last importer.)
  */
 export function manifestScope(manifest: Manifest | null): Set<string> | null {
   if (manifest === null) return null;
   return new Set(manifest.artifacts.map((artifact) => artifact.coordinates));
-}
-
-/**
- * All shards declaring `fqn`, ordered by manifest artifacts position. When a
- * manifest scopes the index, shards it does not list are excluded — unless
- * they are the ONLY answer, in which case they are served with the
- * `OUT_OF_MANIFEST_WARNING` degradation (the jars still answer; the flag says
- * the dependency set moved on). Empty → LookupMissError.
- */
-export async function orderedLookup(ctx: QueryContext, fqn: string): Promise<OrderedLookup> {
-  const hits = await ctx.store.lookup(fqn);
-  if (hits.length === 0) {
-    throw new LookupMissError(fqn);
-  }
-  const manifest = await ctx.manifest();
-  const order = manifestOrder(manifest);
-  const scope = manifestScope(manifest);
-  const scoped = scope === null ? hits : hits.filter((hit) => scope.has(hit.meta.coordinates));
-  const served = scoped.length > 0 ? scoped : hits;
-  const ranked = served
-    .map((hit, index) => ({ hit, index }))
-    .sort(
-      (a, b) =>
-        (order.get(a.hit.meta.coordinates) ?? UNORDERED) -
-          (order.get(b.hit.meta.coordinates) ?? UNORDERED) ||
-        a.index - b.index,
-    )
-    .map(({ hit }) => ({ ...hit, records: hit.records.filter((record) => record.fqn === fqn) }));
-  return {
-    winner: ranked[0]!,
-    alternatives: ranked.slice(1).map((hit) => ({ coordinates: hit.meta.coordinates })),
-    degraded: scoped.length === 0 ? [OUT_OF_MANIFEST_WARNING] : [],
-  };
 }
 
 /** True when the served manifest no longer matches the build files / artifact paths. */
@@ -134,43 +88,8 @@ export async function mergedDegraded(ctx: QueryContext, extra: string[]): Promis
 }
 
 /**
- * Class-level rows of the artifact's directly nested classes (`fqn` is their
- * prefix). Nested lookups obey the same manifest scope as the winner lookup:
- * a stale shard's declarations never leak into a newer winner's outline
- * unflagged — when no in-scope shard declares the nested class, the
- * out-of-manifest shard serves it with the `OUT_OF_MANIFEST_WARNING`.
- */
-async function nestedClassRows(
-  winner: ArtifactHit,
-  ctx: QueryContext,
-  fqn: string,
-  scope: Set<string> | null,
-): Promise<{ rows: Declaration[]; degraded: string[] }> {
-  const prefix = `${fqn}.`;
-  const nestedFqns: string[] = [];
-  for (const other of (await ctx.store.readDirectory()).keys()) {
-    if (other.startsWith(prefix) && !other.slice(prefix.length).includes(".")) {
-      nestedFqns.push(other);
-    }
-  }
-  const rows: Declaration[] = [];
-  let outOfManifest = false;
-  for (const nestedFqn of nestedFqns) {
-    const shards = await ctx.store.lookup(nestedFqn);
-    if (shards.length === 0) continue;
-    const scoped = scope === null ? shards : shards.filter((hit) => scope.has(hit.meta.coordinates));
-    if (scoped.length === 0) outOfManifest = true;
-    const pool = scoped.length > 0 ? scoped : shards;
-    const shard = pool.find((hit) => hit.safe === winner.safe) ?? pool[0]!;
-    rows.push(...shard.records.filter((record) => record.fqn === nestedFqn && isClassKind(record.kind)));
-  }
-  return { rows, degraded: outOfManifest ? [OUT_OF_MANIFEST_WARNING] : [] };
-}
-
-/**
- * Declaration rows for `fqn`: the winner's own records (its class row plus
- * members) plus its directly nested class rows, filtered by kind/visibility
- * when given.
+ * Declaration rows for `fqn`: the located winner's records (class row,
+ * members, nested class rows) filtered by kind/visibility when given.
  */
 export async function outline(
   ctx: QueryContext,
@@ -178,9 +97,8 @@ export async function outline(
   opts: OutlineOptions = {},
 ): Promise<OutlineResult> {
   await ctx.ensureReady();
-  const { winner, alternatives, degraded: lookupDegraded } = await orderedLookup(ctx, fqn);
-  const nested = await nestedClassRows(winner, ctx, fqn, manifestScope(await ctx.manifest()));
-  const rows = [...winner.records, ...nested.rows].filter(
+  const { winner, alternatives, degraded: locateDegraded } = await locateClass(ctx, fqn);
+  const rows = winner.records.filter(
     (row) =>
       (opts.kind === undefined || row.kind === opts.kind) &&
       (opts.visibility === undefined || row.visibility === opts.visibility),
@@ -188,15 +106,14 @@ export async function outline(
   const stale = await servedStale(ctx);
   return {
     fqn,
-    coordinates: winner.meta.coordinates,
-    provenance: winner.meta.provenance ?? "signature",
+    coordinates: winner.artifact.coordinates,
+    provenance: winner.provenance,
     ...(stale ? { stale: true } : {}),
     rows,
     ...(alternatives.length > 0 ? { alternatives } : {}),
     degraded: await mergedDegraded(ctx, [
       ...(stale ? ["stale index served"] : []),
-      ...lookupDegraded,
-      ...nested.degraded,
+      ...locateDegraded,
     ]),
   };
 }

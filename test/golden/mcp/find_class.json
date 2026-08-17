@@ -6,6 +6,13 @@
       "version": "1.0.0",
       "kind": "class",
       "provenance": "source"
+    },
+    {
+      "fqn": "com.example.Demo",
+      "coordinates": "com.example:demo-lib-bin:1.0.0",
+      "version": "1.0.0",
+      "kind": "class",
+      "provenance": "signature"
     }
   ],
   "degraded": []

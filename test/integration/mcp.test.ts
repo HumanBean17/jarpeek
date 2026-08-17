@@ -61,22 +61,30 @@ interface Suite {
   client: Client;
 }
 
+/**
+ * One backing per artifact (the fixture-manifest rule): demo-lib declares
+ * its SOURCES jar so locate parses source records; nosources-lib is
+ * binary-only; demo-lib-bin carries the binary jar for the resource-half
+ * cases (read_resource reads the runtime jar directly, not through locate).
+ * (A both-jars artifact lists binary-first and would answer from bytecode →
+ * decompile.)
+ */
 function demoArtifacts(): DependencyArtifact[] {
   return [
     {
       coordinates: "com.example:demo-lib:1.0.0",
       kind: "external",
-      binaryJar: DEMO_JAR,
       sourcesJar: DEMO_SOURCES_JAR,
-      provenance: "source",
-      warnings: [],
+    },
+    {
+      coordinates: "com.example:demo-lib-bin:1.0.0",
+      kind: "external",
+      binaryJar: DEMO_JAR,
     },
     {
       coordinates: "com.example:nosources-lib:1.0.0",
       kind: "external",
       binaryJar: NOSOURCES_JAR,
-      provenance: "signature",
-      warnings: [],
     },
   ];
 }
@@ -314,7 +322,7 @@ describe("read_source", () => {
 describe("read_resource + search_symbols + where", () => {
   it("read_resource serves text entries", async () => {
     const parsed = payload(
-      await call("read_resource", { artifact: "com.example:demo-lib:1.0.0", glob: "config/*" }),
+      await call("read_resource", { artifact: "com.example:demo-lib-bin:1.0.0", glob: "config/*" }),
     );
     expect(parsed.entries.map((e: any) => e.path)).toContain("config/app.properties");
   });

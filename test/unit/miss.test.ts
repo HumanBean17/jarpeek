@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { handleMiss } from "../../src/core/miss.js";
 import { openContext, type QueryContext } from "../../src/core/query/context.js";
 import { LookupMissError } from "../../src/core/query/outline.js";
-import type { Declaration, DependencyArtifact } from "../../src/core/types.js";
+import { ListingService } from "../../src/core/listing.js";
+import type { DependencyArtifact } from "../../src/core/types.js";
 import { computeDependencySetHash, writeManifest, type Manifest } from "../../src/index/manifest.js";
 
 const DEMO_SOURCES_JAR = join(
@@ -17,24 +18,68 @@ const DEMO_SOURCES_JAR = join(
   "demo-lib-1.0.0-sources.jar",
 );
 
+/**
+ * Stored single-entry zip whose one source entry declares `fqn` — the JDK
+ * step's retry needs locateClass to actually FIND the class, so the stub
+ * JDK artifact points at a jar carrying the queried entry.
+ */
+function sourcesJarFor(fqn: string): string {
+  const u16 = (v: number): Buffer => {
+    const b = Buffer.alloc(2);
+    b.writeUInt16LE(v);
+    return b;
+  };
+  const u32 = (v: number): Buffer => {
+    const b = Buffer.alloc(4);
+    b.writeUInt32LE(v);
+    return b;
+  };
+  const entryName = `${fqn.replaceAll(".", "/")}.java`;
+  const payload = Buffer.from(`package ${fqn.slice(0, fqn.lastIndexOf("."))};\npublic class ${fqn.slice(fqn.lastIndexOf(".") + 1)} {}\n`);
+  const nameBytes = Buffer.from(entryName, "utf8");
+  const lfh = Buffer.concat([
+    u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0), u32(0),
+    u32(payload.length), u32(payload.length), u16(nameBytes.length), u16(0), nameBytes,
+  ]);
+  const cdh = Buffer.concat([
+    u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0), u32(0),
+    u32(payload.length), u32(payload.length), u16(nameBytes.length), u16(0), u16(0),
+    u16(0), u16(0), u32(0), u32(0), nameBytes,
+  ]);
+  const zip = Buffer.concat([
+    lfh, payload, cdh,
+    Buffer.concat([
+      u32(0x06054b50), u16(0), u16(0), u16(1), u16(1), u32(cdh.length), u32(lfh.length + payload.length), u16(0),
+    ]),
+  ]);
+  const dir = mkdtempSync(join(tmpdir(), "jarpeek-miss-jdkjar-"));
+  roots.push(dir);
+  const jar = join(dir, "jdk-sources.jar");
+  writeFileSync(jar, zip);
+  return jar;
+}
+
 interface ShardHit {
   safe: string;
   meta: DependencyArtifact;
-  records: Declaration[];
+  records: unknown[];
 }
 
 /**
- * Duck-typed QueryContext: only the methods handleMiss (and the findClass /
- * orderedLookup it calls) consume. Tests wire lookup/forEachRecord/manifest
- * per scenario.
+ * Duck-typed QueryContext: only the members handleMiss consumes — findClass
+ * still reads store.forEachRecord (Task 8 swaps it to listings), retryLookup
+ * reads listings.listing via locateClass. Tests wire store/listings/manifest
+ * per scenario; the default listings service has nothing to list (every
+ * retry misses), so scenarios that expect a hit hand it a real jar artifact.
  */
 interface StubCtx {
   projectRoot: string;
   cacheDir: string;
   store: {
     lookup(fqn: string): Promise<ShardHit[]>;
-    forEachRecord(fn: (rec: Declaration, safe: string) => void | Promise<void>): Promise<string[]>;
+    forEachRecord(fn: (rec: never, safe: string) => void | Promise<void>): Promise<string[]>;
   };
+  listings: ListingService;
   manifest(): Promise<Manifest | null>;
   ensureReady(): Promise<{ bootstrapped: boolean; stale: boolean }>;
   bootstrapWarnings(): string[];
@@ -61,6 +106,7 @@ function artifact(coordinates: string, kind: DependencyArtifact["kind"] = "exter
 }
 
 const noRecords = async (): Promise<string[]> => [];
+const noListings = new ListingService();
 
 describe("handleMiss step 1: fuzzy candidates", () => {
   it("a class-lookup miss with findClass hits returns them via fuzzy-candidates", async () => {
@@ -84,6 +130,7 @@ describe("handleMiss step 1: fuzzy candidates", () => {
           return [];
         },
       },
+      listings: noListings,
       manifest: async () => manifestOf([artifact("com.example:other:1")]),
       ensureReady: async () => ({ bootstrapped: false, stale: false }),
       bootstrapWarnings: async () => [],
@@ -98,27 +145,20 @@ describe("handleMiss step 1: fuzzy candidates", () => {
 
 describe("handleMiss step 2: JDK namespace routing", () => {
   it("java.* miss retries the lookup and reports via jdk when the JDK artifact is indexed", async () => {
-    const fakeMiss: Declaration = {
-      fqn: "java.util.FakeMiss",
-      file: "java.base/java/util/FakeMiss.java",
-      selector: "FakeMiss",
-      kind: "class",
-      visibility: "public",
-      static: false,
-      deprecated: false,
-      signature: "public class FakeMiss",
+    // locateClass answers the retry: the JDK artifact carries a sources jar
+    // with the queried fqn's entry
+    const jdk = {
+      ...artifact("jdk:25", "jdk"),
+      sourcesJar: sourcesJarFor("java.util.FakeMiss"),
     };
-    const jdk = { ...artifact("jdk:25", "jdk"), sourcesJar: "/jdk/lib/src.zip" };
     const stub: StubCtx = {
       projectRoot: stubRoot(),
       cacheDir: "/tmp/irrelevant",
       store: {
-        lookup: async (fqn) =>
-          fqn === "java.util.FakeMiss"
-            ? [{ safe: "jdk%3A25", meta: jdk, records: [fakeMiss] }]
-            : [],
+        lookup: async () => [],
         forEachRecord: noRecords,
       },
+      listings: new ListingService(),
       manifest: async () => manifestOf([jdk]),
       ensureReady: async () => ({ bootstrapped: false, stale: false }),
       bootstrapWarnings: async () => [],
@@ -141,6 +181,7 @@ describe("handleMiss step 2: JDK namespace routing", () => {
         projectRoot: stubRoot(),
         cacheDir: "/tmp/irrelevant",
         store: { lookup: async () => [], forEachRecord: noRecords },
+        listings: noListings,
         manifest: async () => manifestOf([]),
         ensureReady: async () => ({ bootstrapped: false, stale: false }),
         bootstrapWarnings: async () => [],
@@ -156,42 +197,36 @@ describe("handleMiss step 2: JDK namespace routing", () => {
 
 describe("handleMiss step 3: staleness re-resolve", () => {
   it("stale manifest triggers ensureReady then a retry, reported via re-resolve", async () => {
-    const late: Declaration = {
-      fqn: "com.example.Late",
-      file: "com/example/Late.java",
-      selector: "Late",
-      kind: "class",
-      visibility: "public",
-      static: false,
-      deprecated: false,
-      signature: "public class Late",
-    };
+    const late = { ...artifact("com.example:late:1"), sourcesJar: DEMO_SOURCES_JAR };
     let ensureReadyCalls = 0;
+    // the manifest flips from the stale no-hit set to a hit-bearing set once
+    // ensureReady "re-resolved": retryLookup's locateClass sees the new one
+    let resolved = false;
     const stub: StubCtx = {
       projectRoot: stubRoot(),
       cacheDir: "/tmp/irrelevant",
       store: {
-        lookup: async (fqn) =>
-          ensureReadyCalls > 0 && fqn === "com.example.Late"
-            ? [{ safe: "com.example%3Alate%3A1", meta: artifact("com.example:late:1"), records: [late] }]
-            : [],
+        lookup: async () => [],
         forEachRecord: noRecords,
       },
-      manifest: async () => manifestOf([artifact("com.example:late:1")], "deliberately-stale-hash"),
+      listings: new ListingService(),
+      manifest: async () => manifestOf(resolved ? [late] : [artifact("com.example:gone:1")], "deliberately-stale-hash"),
       ensureReady: async () => {
         ensureReadyCalls++;
+        resolved = true;
         return { bootstrapped: true, stale: false };
       },
       bootstrapWarnings: async () => [],
     };
 
-    const result = await handleMiss(asCtx(stub), new LookupMissError("com.example.Late"));
+    const result = await handleMiss(asCtx(stub), new LookupMissError("com.example.Demo"));
     expect(result).toEqual({
       found: true,
       via: "re-resolve",
       coordinates: "com.example:late:1",
       provenance: "source",
     });
+    expect(ensureReadyCalls).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -201,6 +236,7 @@ describe("handleMiss step 4: negative", () => {
       projectRoot: stubRoot(),
       cacheDir: "/tmp/irrelevant",
       store: { lookup: async () => [], forEachRecord: noRecords },
+      listings: noListings,
       manifest: async () =>
         manifestOf([artifact("com.example:demo-lib:1.0.0"), artifact("com.example:nosources-lib:1.0.0")]),
       ensureReady: async () => ({ bootstrapped: false, stale: false }),
@@ -222,6 +258,7 @@ describe("handleMiss step 4: negative", () => {
       projectRoot: stubRoot(),
       cacheDir: "/tmp/irrelevant",
       store: { lookup: async () => [], forEachRecord: noRecords },
+      listings: noListings,
       manifest: async () => manifestOf([artifact("com.example:demo-lib:1.0.0")]),
       ensureReady: async () => ({ bootstrapped: false, stale: false }),
       bootstrapWarnings: async () => [],
@@ -242,6 +279,7 @@ describe("handleMiss staleness snapshot (fix round 1)", () => {
       projectRoot: stubRoot(),
       cacheDir: "/tmp/irrelevant",
       store: { lookup: async () => [], forEachRecord: noRecords },
+      listings: noListings,
       manifest: async () => manifestOf([artifact("com.example:demo-lib:1.0.0")], "gone-stale"),
       ensureReady: async () => {
         ensureReadyCalls++;
@@ -272,27 +310,18 @@ describe("handleMiss staleness snapshot (fix round 1)", () => {
     const projectRoot = stubRoot();
     let ensureReadyCalls = 0;
     const freshHash = await computeDependencySetHash(projectRoot);
-    const fake: Declaration = {
-      fqn: "java.util.Fresh",
-      file: "java.base/java/util/Fresh.java",
-      selector: "Fresh",
-      kind: "class",
-      visibility: "public",
-      static: false,
-      deprecated: false,
-      signature: "public class Fresh",
-    };
+    // the JDK artifact is already manifest-listed and carries a sources jar
+    // with the queried entry, so step 2's retry locates the class and skips step 3
+    const jdk = { ...artifact("jdk:25", "jdk"), sourcesJar: sourcesJarFor("java.util.Fresh") };
     const stub: StubCtx = {
       projectRoot,
       cacheDir: "/tmp/irrelevant",
       store: {
-        lookup: async (fqn) =>
-          fqn === "java.util.Fresh"
-            ? [{ safe: "jdk%3A25", meta: artifact("jdk:25", "jdk"), records: [fake] }]
-            : [],
+        lookup: async () => [],
         forEachRecord: noRecords,
       },
-      manifest: async () => manifestOf([], freshHash),
+      listings: new ListingService(),
+      manifest: async () => manifestOf([jdk], freshHash),
       ensureReady: async () => {
         ensureReadyCalls++;
         return { bootstrapped: false, stale: false };

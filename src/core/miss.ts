@@ -16,7 +16,8 @@ import type { ResolveDependenciesOptions } from "../resolver/index.js";
 import type { ClassHit, Provenance } from "./types.js";
 import type { QueryContext } from "./query/context.js";
 import { findClass } from "./query/find-class.js";
-import { LookupMissError, orderedLookup, type ArtifactHit } from "./query/outline.js";
+import { locateClass, type LocatedClass } from "./query/locate.js";
+import { LookupMissError } from "./query/outline.js";
 import { resolveNow } from "./query/resolve-cmd.js";
 
 /** Namespaces owned by the JDK pseudo-artifact. */
@@ -45,9 +46,9 @@ const NEGATIVE_NOTE = "not found in indexed artifacts; remote artifact search is
 const CACHE_SCAN_NOTE = "cache-scan: resolution degraded to local machine caches";
 
 /** One retry of the original class lookup; a repeat miss returns undefined. */
-async function retryLookup(ctx: QueryContext, fqn: string): Promise<ArtifactHit | undefined> {
+async function retryLookup(ctx: QueryContext, fqn: string): Promise<LocatedClass | undefined> {
   try {
-    return (await orderedLookup(ctx, fqn)).winner;
+    return (await locateClass(ctx, fqn, { includeNested: false })).winner;
   } catch (e) {
     if (e instanceof LookupMissError) return undefined;
     throw e;
@@ -98,8 +99,8 @@ export async function handleMiss(
         return {
           found: true,
           via: "jdk",
-          coordinates: hit.meta.coordinates,
-          provenance: hit.meta.provenance ?? "signature",
+          coordinates: hit.artifact.coordinates,
+          provenance: hit.provenance,
         };
       }
     }
@@ -126,8 +127,8 @@ export async function handleMiss(
         return {
           found: true,
           via: "re-resolve",
-          coordinates: hit.meta.coordinates,
-          provenance: hit.meta.provenance ?? "signature",
+          coordinates: hit.artifact.coordinates,
+          provenance: hit.provenance,
         };
       }
     }

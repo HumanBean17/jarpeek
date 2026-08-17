@@ -122,13 +122,14 @@ describe("warning channel lifecycle", () => {
   });
 });
 
-describe("manifestScope with a zero-artifact manifest", () => {
-  it("scopes to empty: foreign shards are no hits and any fallback serving is flagged", async () => {
+describe("zero-artifact manifest scoping", () => {
+  it("scopes to empty: store-era foreign shards are no hits, and outline never serves them", async () => {
     const { projectRoot, cacheDir } = freshProject();
     const ctx: QueryContext = openContext(projectRoot, { cacheDir, onProgress: () => {} });
 
     // a foreign shard lands in the user-global store (another project's
-    // artifact, written directly)
+    // artifact, written directly) — find_class still reads the store until
+    // Task 8, but the store is scoped by the manifest
     await ctx.store.writeArtifact(
       {
         coordinates: "com.foreign:lib:1",
@@ -159,13 +160,14 @@ describe("manifestScope with a zero-artifact manifest", () => {
     });
 
     const { findClass } = await import("../../src/core/query/find-class.js");
-    const { outline, OUT_OF_MANIFEST_WARNING } = await import("../../src/core/query/outline.js");
+    const { outline, LookupMissError } = await import("../../src/core/query/outline.js");
 
     const found = await findClass(ctx, "Spy");
     expect(found.hits).toEqual([]);
 
-    const served = await outline(ctx, "com.foreign.Spy");
-    expect(served.coordinates).toBe("com.foreign:lib:1");
-    expect(served.degraded).toContain(OUT_OF_MANIFEST_WARNING);
+    // the listing-backed lookup has no fallback tier: with an empty manifest
+    // there is nothing to locate, so the miss protocol applies
+    const err = await outline(ctx, "com.foreign.Spy").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LookupMissError);
   });
 });
