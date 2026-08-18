@@ -1,5 +1,8 @@
 # jarpeek
 
+[![npm](https://img.shields.io/npm/v/jarpeek)](https://www.npmjs.com/package/jarpeek)
+[![CI](https://github.com/HumanBean17/jarpeek/actions/workflows/ci.yml/badge.svg)](https://github.com/HumanBean17/jarpeek/actions/workflows/ci.yml)
+
 Context-frugal navigation into JVM dependency sources, for AI agents.
 
 ## Why
@@ -12,44 +15,36 @@ agent the same navigation a human has in an IDE — find the class, see its
 members, read exactly the method body asked for — at a fraction of the
 token cost.
 
-jarpeek 0.1 tried to serve that with an eager index, and the index was
-the problem: the first query on a real project parsed declarations from
-~100,000 files across 350 artifacts — a 30-minute freeze while the agent
-waited, 350 lines of stderr spam, and a fat derived cache on disk that
-went stale the moment the build moved. 0.2.0 is lazy instead:
+## How it works
 
-- **One bounded resolve.** The first query on a fresh project (or after
-  the build files change, or a recorded jar vanishes) runs one
-  Gradle/Maven resolve — announced by a single stderr line — and writes
-  a manifest of the on-disk jars. That is all the up-front work there
-  is: jarpeek never indexes.
-- **Listings in memory.** Every query reads the manifest and opens jars
-  through in-memory zip listings. The manifest is the only derived
-  state on disk.
+- **Lazy, no index.** The first query on a fresh project (or after the
+  build files change) runs one bounded Gradle/Maven resolve and writes a
+  manifest of the on-disk jars. That is all the up-front work there is;
+  every later query reads the manifest and opens only the jar entries it
+  needs.
 - **One-file parses.** A class lookup parses just the winning artifact's
-  entry for that class — one source entry or class file (outline adds its
-  directly nested classes) — never the jar around it.
+  entry for that class — one source entry or class file, never the jar
+  around it.
 - **Skeleton outlines.** `outline` renders a Java-shaped skeleton —
-  package, imports, javadoc, members as code lines at nesting levels —
-  with `--minimal`/`--full` presets and per-section toggles (`--table`
-  keeps the legacy tabular view); `read-source` serves the whole file,
-  `read-member` returns only the requested method spans.
+  package, imports, javadoc, members as code lines — with
+  `--minimal`/`--full` presets and per-section toggles; `read-source`
+  serves the whole file, `read-member` returns only the requested method
+  spans.
 - **Provenance on everything.** Every answer says whether it is `source`,
-  `decompiled`, or `signature`, computed for that answer — so the agent
-  knows what it is reading.
+  `decompiled`, or `signature` — so the agent knows what it is reading.
 - **Misses are answers.** Unknown classes return suggestions and searched
   artifacts with exit code 0, never a stack trace.
-- **Quiet by contract.** stderr is capped at three lines per invocation
-  (one bootstrap notice plus at most two warning lines); stdout stays
-  parseable. The only exception: while a resolve is actually running,
-  one heartbeat line per 30s — a cold-cache first run downloads for
-  minutes and silence reads as a hang.
+- **Quiet by contract.** stderr is capped at three lines per invocation;
+  stdout stays parseable.
 
 jarpeek resolves through the project's own build (Gradle, then Maven,
 then local machine caches as an explicit last resort), appends the local
 JDK when it ships sources, and decompiles on demand with a bundled CFR.
 It speaks MCP (a stdio subprocess, for harnesses that support it) and a
 plain CLI (for everything else).
+
+The design rationale — why lazy instead of an index, the resolve cascade,
+the degradation rules — is in the [design notes](docs/design.md).
 
 ## Install
 
@@ -96,20 +91,16 @@ Artifact arguments take full `g:a:v` coordinates or a unique artifact id
 ### Resolution is lazy
 
 Nothing needs to be primed by hand. The first query on a fresh project —
-or the first query after the build files change or a recorded jar
-vanishes — auto-resolves: one bounded Gradle/Maven pass, one stderr
-notice line (plus a 30s heartbeat while it runs), and the manifest is
-rewritten. jarpeek never indexes; later
-queries read the manifest and open only the jar entries they need.
+or after the build files change or a recorded jar vanishes —
+auto-resolves: one bounded Gradle/Maven pass, one stderr notice line
+(plus a 30s heartbeat while it runs), and the manifest is rewritten.
 
-A resolve that fails never fails the query. With a manifest on disk it
-is served flagged `stale` with a warning; without one the query answers
-as a miss (an empty searched set) and re-resolution backs off for
-60 seconds so a broken build is not re-run per query — `jarpeek resolve`
-re-runs the cascade on demand and reports the failure. Queries never
-adopt the cache-scan heuristic set — the explicit `resolve` command
-keeps the full gradle → maven → cache-scan cascade and is the only
-writer of a flagged cache-scan manifest.
+A resolve that fails never fails the query: with a manifest on disk it is
+served flagged `stale` with a warning; without one the query answers as a
+miss, and re-resolution backs off for 60 seconds so a broken build is not
+re-run per query. `jarpeek resolve` re-runs the cascade on demand and
+reports the failure. The full cascade and degradation rules are in the
+[design notes](docs/design.md).
 
 ### CLI
 
@@ -130,8 +121,7 @@ jarpeek status
 jarpeek where com.example:demo-lib:1.0.0
 ```
 
-`search-symbols` without `--artifact` is a usage error — the global
-member scan is gone by design.
+`search-symbols` without `--artifact` is a usage error.
 
 Also: `jarpeek init` (wire harnesses), `jarpeek prime` (print the agent
 cheatsheet; `--full`, `--mcp`, `--export`, `--hook-json`), `jarpeek mcp`
@@ -139,8 +129,7 @@ cheatsheet; `--full`, `--mcp`, `--export`, `--hook-json`), `jarpeek mcp`
 
 Diagnostics — the one bootstrap notice, resolve heartbeats, warnings,
 degradations — go to stderr (warnings under a three-line cap); stdout
-stays parseable. Unknown classes
-exit 0 with suggestions.
+stays parseable. Unknown classes exit 0 with suggestions.
 
 ## Provenance
 
@@ -163,16 +152,11 @@ answer rather than stored anywhere:
 class fully would yield — computed per hit from the artifact's backings
 and JVM availability.
 
-Degradations are reported, never hidden, and the answer still arrives: a
-failed re-resolve serves the existing manifest flagged `stale`; a
-resolution that degrades all the way to the cache scan is never adopted
-by queries (served stale with a manifest, answered as a miss without
-one). Each is a `warning: ...` line on stderr (a `degraded[]` field in
-JSON), aggregated so an invocation never exceeds the three-line warning
-budget. A Maven reactor where some modules resolve and one fails keeps
-the resolved set and names the failed modules in the same channel.
-Search results are scoped to the project's resolved dependency set, and
-`search_symbols` further to the one named artifact.
+Degradations are reported, never hidden, and the answer still arrives:
+each is a `warning: ...` line on stderr (a `degraded[]` field in JSON),
+aggregated under the three-line warning budget. Search results are scoped
+to the project's resolved dependency set, and `search_symbols` further to
+the one named artifact.
 
 ## Configuration
 
@@ -185,8 +169,28 @@ Search results are scoped to the project's resolved dependency set, and
 
 `.jarpeek/` is per-machine state (the manifest, prime config) — gitignore
 it (`init` adds it). The manifest is the only derived state jarpeek ever
-writes to disk; old 0.1 caches are unused and safe to delete (see
-[Migrating](#migrating-from-01x)).
+writes to disk; 0.1-era caches are unused and safe to delete (see the
+[design notes](docs/design.md#migrating-from-01x)).
+
+## Limitations
+
+- No type hierarchy, find-usages, or call-graph navigation — declaration
+  lookup and source reads only.
+- Member-name search is scoped to one artifact (`search_symbols` requires
+  its `artifact` argument).
+- JDK classes need `$JAVA_HOME/lib/src.zip` — there is no jimage
+  fallback. Without it, JDK classes are unavailable.
+- Source-jar FQNs are derived from entry paths: a jar whose entries
+  mismatch its declared packages can misreport a class's location.
+- No generated-source awareness (protobuf, Dagger): generated classes
+  appear only if they land in the resolved artifacts.
+- No remote artifact search (Maven Central by coordinates): on a miss,
+  jarpeek reports what it searched and stops rather than fetching.
+- Maven SNAPSHOT dependencies resolved to timestamped jars
+  (`artifact-1.0-20240501.123456-3.jar`) are not recognized by the Maven
+  resolver's m2-layout matching and are skipped.
+- Decompilation quality is CFR's; `signature` is the floor when no JVM is
+  available.
 
 ## Development
 
@@ -203,7 +207,8 @@ the build script.
 
 ### Releasing
 
-CI runs on pushes to `main` and on PRs; releases are tag-driven. To cut one:
+CI runs on pushes to `main` and on PRs; releases are tag-driven. To cut
+one:
 
 ```
 npm version minor        # bump commit + v* tag (patch | minor | major)
@@ -219,37 +224,6 @@ One-time setup: on npmjs.com, list this repository and `release.yml` as a
 trusted publisher for the `jarpeek` package.
 
 [tp]: https://docs.npmjs.com/trusted-publishers/
-
-## Limitations
-
-- No type hierarchy, find-usages, or call-graph navigation — declaration
-  lookup and source reads only.
-- Global member-name search is gone by design: `search_symbols` is
-  scoped to one artifact (the `artifact` argument is required).
-- JDK classes need `$JAVA_HOME/lib/src.zip` — there is no jimage
-  fallback. Without it, JDK classes are unavailable.
-- Source-jar FQNs are derived from entry paths: a jar whose entries
-  mismatch its declared packages can misreport a class's location.
-- No generated-source awareness (protobuf, Dagger): generated classes
-  appear only if they land in the resolved artifacts.
-- Remote artifact search (Maven Central by coordinates) is a planned
-  extension, not a feature: on a miss, jarpeek reports what it searched
-  and stops rather than fetching.
-- Maven SNAPSHOT dependencies resolved to timestamped jars
-  (`artifact-1.0-20240501.123456-3.jar`) are not recognized by the Maven
-  resolver's m2-layout matching and are skipped.
-- Decompilation quality is CFR's; `signature` is the floor when no JVM is
-  available.
-
-## Migrating from 0.1.x
-
-0.2.0 is breaking: the eager index and its cache are gone. A v1
-`.jarpeek` manifest is not read — the first query re-resolves and
-rewrites it automatically. Old caches are unused and safe to delete:
-
-```
-rm -rf ~/Library/Caches/jarpeek   # macOS; %LOCALAPPDATA%/jarpeek on Windows, ~/.cache/jarpeek elsewhere
-```
 
 ## Credits
 
