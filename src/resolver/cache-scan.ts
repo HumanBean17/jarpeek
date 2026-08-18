@@ -25,6 +25,13 @@ export interface ScanCachesResult {
   warnings: string[];
 }
 
+/**
+ * Cache-root env overrides, consulted only when no explicit dir is passed:
+ * `JARPEEK_M2_DIR` / `JARPEEK_GRADLE_CACHE_DIR` steer the scan away from the
+ * real machine caches (the `JARPEEK_HOME` pattern) — how the end-to-end
+ * output-budget tests pin the scan to a fake m2 tree without touching `~`.
+ */
+
 const DEFAULT_MAX_ENTRIES = 20_000;
 
 /** Files that never yield artifacts regardless of layout match. */
@@ -192,8 +199,11 @@ function collectCoordinates(finds: Found[]): Map<string, Coordinate> {
  * the scan's result; a missing root is simply an empty walk.
  */
 export async function scanCaches(opts: ScanCachesOptions = {}): Promise<ScanCachesResult> {
-  const m2Dir = opts.m2Dir ?? join(homedir(), ".m2", "repository");
-  const gradleDir = opts.gradleDir ?? join(homedir(), ".gradle", "caches", "modules-2", "files-2.1");
+  const m2Dir = opts.m2Dir ?? process.env.JARPEEK_M2_DIR ?? join(homedir(), ".m2", "repository");
+  const gradleDir =
+    opts.gradleDir ??
+    process.env.JARPEEK_GRADLE_CACHE_DIR ??
+    join(homedir(), ".gradle", "caches", "modules-2", "files-2.1");
   const maxEntries = opts.maxEntries ?? DEFAULT_MAX_ENTRIES;
 
   // m2 first: its finds are inserted first, so collectCoordinates keeps them.

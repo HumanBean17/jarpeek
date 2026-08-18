@@ -6,6 +6,8 @@
  * appear or vanish under a running jarpeek. The probe is module-memoized:
  * every caller awaits the same `java -version` run.
  */
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { runWithTimeout, type RunResult } from "./exec.js";
 
 /** The probe's answer: `version` absent when `-version` printed no parseable line. */
@@ -27,9 +29,25 @@ export function extractJvmVersion(run: Pick<RunResult, "stdout" | "stderr">): st
 /** `java -version` probes once per process; the answer cannot change under us. */
 let jvmProbe: Promise<JvmProbe> | undefined;
 
+/**
+ * The `java` to run: `$JAVA_HOME/bin/java` when JAVA_HOME points at a real
+ * install (a JDK may not be on PATH at all), else the PATH `java`. Env-only
+ * — when neither resolves the spawn itself fails and the caller degrades to
+ * `no-jvm`, which is the honest answer. Shared by the probe and the CFR
+ * adapter so both answer about the same JVM.
+ */
+export function javaCommand(): string {
+  const home = process.env.JAVA_HOME;
+  if (home !== undefined && home !== "") {
+    const exe = join(home, "bin", process.platform === "win32" ? "java.exe" : "java");
+    if (existsSync(exe)) return exe;
+  }
+  return "java";
+}
+
 /** Probe the JVM once (memoized per process); a failed spawn answers unavailable. */
 export function probeJvmOnce(): Promise<JvmProbe> {
-  return (jvmProbe ??= runWithTimeout("java", ["-version"], { timeoutMs: 15_000 })
+  return (jvmProbe ??= runWithTimeout(javaCommand(), ["-version"], { timeoutMs: 15_000 })
     .then((run): JvmProbe => {
       const version = extractJvmVersion(run);
       return version === undefined ? { available: true } : { available: true, version };

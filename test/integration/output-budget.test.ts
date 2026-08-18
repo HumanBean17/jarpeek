@@ -160,6 +160,69 @@ describe("resolve: one line of stdout", () => {
   });
 });
 
+describe("resolve caps its warning lines: first 5, then one aggregate", () => {
+  // the v1 line-spew's last hiding place: a cache-scan resolve on a real dev
+  // machine pushes one `multiple-versions:...` warning per ambiguous g:a, so
+  // `resolve` could print dozens of stdout lines. The renderer, not the
+  // resolver, pays the budget: warnings are content to --json and chatter to
+  // a human, and the cap lives only in the human path.
+  const projectRoot = freshProject();
+  const m2 = mkdtempSync(join(tmpdir(), "jarpeek-budget-m2-"));
+  // the scan-root env override (the JARPEEK_HOME pattern) pins the cache scan
+  // to the fake m2 tree — the real ~/.m2 would make the warning count a fact
+  // about this machine, not about the command
+  const pin = { JAVA_HOME: "", JARPEEK_M2_DIR: m2, JARPEEK_GRADLE_CACHE_DIR: m2 };
+
+  beforeAll(() => {
+    // a build.gradle marker with NO gradlew: gradle is detected, fails
+    // (`no-wrapper-no-gradle`, a degraded entry on stderr), and the cascade
+    // falls through to the cache scan pinned at the fake m2. 12 groups × 2
+    // versions = 12 `multiple-versions` warnings (each group's sources jar
+    // pairs with its kept binary, so no extra warning fires) +
+    // `degraded-to-cache-scan` + the JDK resolver's `no JAVA_HOME` = 14
+    // distinct warnings through the real command — 5 printed, 9 aggregated.
+    for (let g = 1; g <= 12; g++) {
+      for (const v of ["1.0.0", "2.0.0"]) {
+        const dir = join(m2, "com", `g${g}`, "lib", v);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, `lib-${v}.jar`), "");
+        if (v === "2.0.0") writeFileSync(join(dir, `lib-${v}-sources.jar`), "");
+      }
+    }
+    roots.push(m2);
+  });
+
+  it("prints 14 warnings as 5 lines plus ONE '+9 more' aggregate", () => {
+    const run = cli(projectRoot, ["resolve"], pin);
+    expect(run.code).toBe(0);
+    const out = lines(run.stdout);
+    // 1 summary + 5 warnings + 1 aggregate — the exact line contract
+    expect(out).toHaveLength(7);
+    expect(out[0]).toMatch(/^resolved \d+ artifacts? in \d+ms \(14 warnings\)$/);
+    expect(out[1]).toBe("degraded-to-cache-scan");
+    expect(out.slice(2, 6).every((line) => line.startsWith("multiple-versions:"))).toBe(true);
+    expect(out[6]).toBe("+9 more (see: jarpeek status)");
+    // the hidden warnings never print verbatim: the walk visits g9..g6, so
+    // the groups past the cap (g5..g1, g12..g10) stay behind the aggregate
+    const printed = out.filter((line) => line.startsWith("multiple-versions:")).length;
+    expect(printed).toBe(4);
+    for (const g of ["g1", "g5", "g10", "g12"]) {
+      expect(run.stdout).not.toContain(`multiple-versions:com.${g}:lib`);
+    }
+    expectWithinBudget(run);
+  });
+
+  it("--json keeps the FULL warnings array (the cap is presentation-only)", () => {
+    const run = cli(projectRoot, ["--json", "resolve"], pin);
+    expect(run.code).toBe(0);
+    const parsed = JSON.parse(run.stdout) as { warnings: string[]; viaCacheScan: boolean };
+    expect(parsed.viaCacheScan).toBe(true);
+    expect(parsed.warnings).toHaveLength(14);
+    expect(parsed.warnings[0]).toBe("degraded-to-cache-scan");
+    expect(parsed.warnings.filter((w) => w.startsWith("multiple-versions:"))).toHaveLength(12);
+  });
+});
+
 describe("more than two warnings collapse into one aggregate line", () => {
   const projectRoot = freshProject();
 

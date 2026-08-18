@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { parseJavaSource } from "../parse/java-lexer.js";
 import { listZipEntries, readZipEntry } from "../parse/zip.js";
 import { runWithTimeout, SpawnError, type RunResult } from "../util/exec.js";
+import { javaCommand } from "../util/jvm.js";
 
 /** Version of the vendored CFR jar (vendor/cfr.jar). */
 export const CFR_VERSION = "0.152";
@@ -51,21 +52,6 @@ export interface DecompileOptions {
 }
 
 let resolvedJarPath: string | undefined;
-
-/**
- * The `java` to run: `$JAVA_HOME/bin/java` when JAVA_HOME points at a real
- * install (a JDK may not be on PATH at all), else the PATH `java`. Env-only
- * — when neither resolves the spawn itself fails and the caller degrades to
- * `no-jvm`, which is the honest answer.
- */
-export function javaCommand(): string {
-  const home = process.env.JAVA_HOME;
-  if (home !== undefined && home !== "") {
-    const exe = join(home, "bin", process.platform === "win32" ? "java.exe" : "java");
-    if (existsSync(exe)) return exe;
-  }
-  return "java";
-}
 
 /**
  * Absolute path to the vendored CFR jar. The package root is found by walking

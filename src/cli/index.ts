@@ -217,11 +217,21 @@ function renderSearchSymbols(result: SymbolResult): string {
   ]);
 }
 
+/** Warnings a human `resolve` prints before collapsing the rest into one line. */
+const RESOLVE_WARNING_LINES = 5;
+
 function renderResolve(result: ResolveNowResult): string {
   const warnings = result.warnings.length > 0 ? ` (${result.warnings.length} warnings)` : "";
-  return [`resolved ${result.artifactCount} artifacts in ${result.durationMs}ms${warnings}`, ...result.warnings].join(
-    "\n",
-  );
+  // the cap is presentation-only: --json prints the full array, a human gets
+  // the first few and a pointer — a cache-scan resolve can carry one warning
+  // per ambiguous g:a, and v1's line-spew must not come back through stdout
+  const shown = result.warnings.slice(0, RESOLVE_WARNING_LINES);
+  const rest = result.warnings.length - shown.length;
+  return [
+    `resolved ${result.artifactCount} artifacts in ${result.durationMs}ms${warnings}`,
+    ...shown,
+    ...(rest > 0 ? [`+${rest} more (see: jarpeek status)`] : []),
+  ].join("\n");
 }
 
 function renderStatus(result: StatusResult): string {

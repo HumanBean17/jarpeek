@@ -4,11 +4,17 @@
  *
  * What is unit-observable here is the version-line extraction (extracted as
  * a pure helper for exactly that reason) and the memo's contract: settled
- * answers, same shape every call, never a rejection. The PATH-less spawn
- * negative lives in query-core's readMember no-JVM case; status's golden
- * normalizes the probe's machine variance.
+ * answers, same shape every call, never a rejection. The JAVA_HOME case runs
+ * in a child process (the memo is per-process); the PATH-less spawn negative
+ * lives in query-core's readMember no-JVM case; status's golden normalizes
+ * the probe's machine variance.
  */
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { extractJvmVersion, probeJvmOnce } from "../../src/util/jvm.js";
 
 describe("extractJvmVersion", () => {
@@ -58,4 +64,51 @@ describe("probeJvmOnce", () => {
     // not by a probe test.
     await expect(probeJvmOnce()).resolves.toMatchObject({ available: expect.any(Boolean) });
   });
+
+  it("probes $JAVA_HOME/bin/java like CFR does when PATH has no java", () => {
+    // the memo is per-process, so the JAVA_HOME case runs in a child: a fake
+    // JDK home whose bin/java prints a version line to stderr and exits 0,
+    // over a PATH holding only node itself (npx would be unreachable with a
+    // fully empty PATH). The probe must resolve the stub — the find-class
+    // provenance promise depends on probing the same java CFR will spawn,
+    // and a JDK need not be on PATH at all.
+    const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const jdkHome = mkdtempSync(join(tmpdir(), "jarpeek-jvm-home-"));
+    const nodeBin = mkdtempSync(join(tmpdir(), "jarpeek-jvm-nodebin-"));
+    try {
+      mkdirBin(jdkHome);
+      writeFileSync(join(nodeBin, "node"), `#!/bin/sh\nexec ${process.execPath} "$@"\n`);
+      chmodSync(join(nodeBin, "node"), 0o755);
+      const run = spawnSync(
+        process.execPath,
+        [
+          join(pkgRoot, "node_modules", "tsx", "dist", "cli.mjs"),
+          "-e",
+          'import("./src/util/jvm.js").then(async (m) => process.stdout.write(JSON.stringify(await m.probeJvmOnce())))',
+        ],
+        {
+          cwd: pkgRoot,
+          encoding: "utf8",
+          timeout: 60_000,
+          env: { ...process.env, JAVA_HOME: jdkHome, PATH: nodeBin },
+        },
+      );
+      expect(run.status, `stderr: ${run.stderr}`).toBe(0);
+      expect(JSON.parse(run.stdout)).toEqual({ available: true, version: "25.0.2" });
+    } finally {
+      rmSync(jdkHome, { recursive: true, force: true });
+      rmSync(nodeBin, { recursive: true, force: true });
+    }
+  });
+
+  /** A fake JDK home: `bin/java` that prints the modern version line to stderr. */
+  function mkdirBin(jdkHome: string): void {
+    const bin = join(jdkHome, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      join(bin, "java"),
+      '#!/bin/sh\necho \'openjdk version "25.0.2" 2026-01-20\' >&2\nexit 0\n',
+    );
+    chmodSync(join(bin, "java"), 0o755);
+  }
 });
