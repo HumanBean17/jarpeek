@@ -2,12 +2,12 @@
  * CLI transport integration tests: every subcommand as a real subprocess.
  *
  * The suite bootstraps a tmp project in-process (openContext + injected
- * gradle resolver writing the manifest/index through the real flow), so the
- * spawned CLI finds a fresh manifest and never needs resolver injection
- * across the process boundary — both sides serve the identical index, which
- * is what makes the --json parity assertions exact. `resolve` gets its own
- * project with a fake `gradlew` that prints the sentinel dump, exercising
- * the real resolver cascade end to end.
+ * gradle resolver writing the manifest through the real resolve-only flow),
+ * so the spawned CLI finds a fresh manifest and never needs resolver
+ * injection across the process boundary — both sides serve the identical
+ * artifact set, which is what makes the --json parity assertions exact.
+ * `resolve` gets its own project with a fake `gradlew` that prints the
+ * sentinel dump, exercising the real resolver cascade end to end.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -78,7 +78,6 @@ function openSuite(artifacts: () => DependencyArtifact[] | null): Suite {
       ? {}
       : { resolvers: { gradle: async () => ({ ok: true, artifacts: injected }), includeJdk: false } }),
     cacheDir,
-    onProgress: () => {},
   });
   return { projectRoot, cacheDir, ctx };
 }
@@ -395,11 +394,21 @@ describe("resolve", () => {
     writeFakeGradlew(resolveSuite.projectRoot, DEMO_JAR, DEMO_SOURCES_JAR);
   });
 
-  it("re-resolves via the real cascade and prints indexed artifacts", () => {
+  it("re-resolves via the real cascade and prints exactly one resolved line", () => {
     const run = cli(resolveSuite, ["resolve"]);
     expect(run.code).toBe(0);
-    expect(run.stdout).toContain("com.example:demo-lib:1.0.0");
-    expect(run.stdout).toContain("resolve");
+    // one line of payload: the resolve-only command reports counts, not a table
+    expect(run.stdout.trim().split("\n")).toHaveLength(1);
+    expect(run.stdout).toMatch(/^resolved \d+ artifacts? in \d+ms\n$/);
+    // the manifest it wrote names the resolved artifact
+    const manifest = JSON.parse(
+      readFileSync(join(resolveSuite.projectRoot, ".jarpeek", "manifest.json"), "utf8"),
+    );
+    expect(manifest.artifacts.map((a: { coordinates: string }) => a.coordinates)).toContain(
+      "com.example:demo-lib:1.0.0",
+    );
+    // no per-artifact indexing progress ever reaches stderr
+    expect(run.stderr).not.toContain("[jarpeek] indexing");
   });
 
   it("--json parity with in-process resolveNow except wall-clock timing", async () => {
@@ -413,8 +422,16 @@ describe("resolve", () => {
     };
     const { durationMs: _actualMs, ...actualRest } = actual;
     expect(actualRest).toEqual(expectedRest);
-    expect(actual.indexed).toContain("com.example:demo-lib:1.0.0");
+    // demo-lib plus possibly the JDK pseudo-artifact (JAVA_HOME is an
+    // environment fact); what is pinned is the parity above and the count
+    // being at least the one artifact the fake gradlew reports
+    expect(actual.artifactCount).toBeGreaterThanOrEqual(1);
+    expect(actual.viaCacheScan).toBe(false);
     expect(actual.durationMs).toBeGreaterThanOrEqual(0);
+    // the forced resolve rewrote the v2 manifest
+    expect(readFileSync(join(resolveSuite.projectRoot, ".jarpeek", "manifest.json"), "utf8")).toContain(
+      '"version":2',
+    );
   });
 });
 

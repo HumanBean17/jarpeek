@@ -1,35 +1,46 @@
 /**
- * resolveNow: force a resolve+index pass, freshness be damned. Where the
- * context's `ensureReady` short-circuits on a fresh manifest, this always
- * re-runs the resolver cascade and rewrites the index — the `resolve`
- * command's backing, and the manual escape hatch when an agent knows the
- * build changed under a manifest that still hashes clean.
+ * resolveNow: force a resolve pass and rewrite the manifest, freshness be
+ * damned. Where the context's `ensureReady` short-circuits on a fresh
+ * manifest — and refuses to adopt a cache-scan result — this always re-runs
+ * the full gradle → maven → cache-scan cascade and writes whatever it got,
+ * flagged, so the explicit `resolve` command is the escape hatch when an
+ * agent knows the build changed under a manifest that still hashes clean,
+ * and the only writer of a heuristic manifest there is.
+ *
+ * Resolution only: no indexing runs here (or anywhere else), so the result
+ * reports counts and wall-clock, not per-artifact progress.
  */
-import { indexArtifacts, type IndexResult } from "../../index/indexer.js";
-import { resolveDependencies, type ResolveDependenciesOptions } from "../../resolver/index.js";
+import {
+  computeDependencySetHash,
+  writeManifest,
+} from "../../index/manifest.js";
+import { resolveDependencies } from "../../resolver/index.js";
 import type { QueryContext } from "./context.js";
 
-export interface ResolveNowOptions {
-  /** Injectable resolvers; defaults are the real cascade. */
-  resolvers?: ResolveDependenciesOptions;
-  onProgress?: (msg: string) => void;
-}
-
-export type ResolveNowResult = IndexResult & {
+export interface ResolveNowResult {
+  artifactCount: number;
+  durationMs: number;
   warnings: string[];
   degraded: Array<{ from: "gradle" | "maven"; reason: string }>;
-};
+  /** True when no build system answered and the manifest holds the cache scan's heuristic set. */
+  viaCacheScan: boolean;
+}
 
-/** Re-resolve and re-index unconditionally, into the context's store. */
-export async function resolveNow(ctx: QueryContext, opts: ResolveNowOptions = {}): Promise<ResolveNowResult> {
-  const resolution = await resolveDependencies(ctx.projectRoot, opts.resolvers);
-  const result = await indexArtifacts(ctx.projectRoot, resolution.artifacts, {
-    store: ctx.store,
-    onProgress: opts.onProgress,
+/** Re-resolve and rewrite the v2 manifest unconditionally. */
+export async function resolveNow(ctx: QueryContext): Promise<ResolveNowResult> {
+  const startedAt = Date.now();
+  const resolution = await resolveDependencies(ctx.projectRoot, ctx.resolvers);
+  await writeManifest(ctx.projectRoot, {
+    version: 2,
+    resolvedAt: new Date().toISOString(),
+    dependencySetHash: await computeDependencySetHash(ctx.projectRoot),
+    artifacts: resolution.artifacts,
   });
   return {
-    ...result,
-    warnings: [...new Set([...resolution.warnings, ...result.warnings])],
+    artifactCount: resolution.artifacts.length,
+    durationMs: Date.now() - startedAt,
+    warnings: [...new Set(resolution.warnings)],
     degraded: resolution.degraded,
+    viaCacheScan: resolution.viaCacheScan,
   };
 }

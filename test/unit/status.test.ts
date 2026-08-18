@@ -42,12 +42,12 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<{ ctx: Quer
   const root = freshRoot();
   writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
   await writeManifest(root, {
-    version: 1,
+    version: 2,
     resolvedAt: "2026-08-17T00:00:00.000Z",
     dependencySetHash: await computeDependencySetHash(root),
     artifacts,
   });
-  return { ctx: openContext(root, { cacheDir: freshRoot(), onProgress: () => {} }), root };
+  return { ctx: openContext(root, { cacheDir: freshRoot(), onNotice: () => {} }), root };
 }
 
 const JVM = { available: true, version: "25.0.2" };
@@ -106,7 +106,7 @@ describe("status on a manifest-less project", () => {
   it("reports present false, artifactCount 0, and never throws", async () => {
     const root = freshRoot();
     writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
-    const ctx = openContext(root, { cacheDir: freshRoot(), onProgress: () => {} });
+    const ctx = openContext(root, { cacheDir: freshRoot(), onNotice: () => {} });
     const result = await status(ctx, { jvm: () => Promise.resolve({ available: false }) });
     expect(result.manifest.present).toBe(false);
     expect(result.manifest.artifactCount).toBe(0);

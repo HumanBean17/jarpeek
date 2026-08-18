@@ -126,12 +126,12 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
   const projectRoot = freshRoot();
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
   await writeManifest(projectRoot, {
-    version: 1,
+    version: 2,
     resolvedAt: "",
     dependencySetHash: await computeDependencySetHash(projectRoot),
     artifacts,
   });
-  return openContext(projectRoot, { cacheDir: freshRoot(), onProgress: () => {} });
+  return openContext(projectRoot, { cacheDir: freshRoot(), onNotice: () => {} });
 }
 
 async function demoSource(): Promise<string> {

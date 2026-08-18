@@ -53,17 +53,17 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
   const projectRoot = freshRoot();
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
   await writeManifest(projectRoot, {
-    version: 1,
+    version: 2,
     resolvedAt: "",
     dependencySetHash: await computeDependencySetHash(projectRoot),
     artifacts,
   });
-  return openContext(projectRoot, { cacheDir: freshRoot(), onProgress: () => {} });
+  return openContext(projectRoot, { cacheDir: freshRoot(), onNotice: () => {} });
 }
 
 /** Hand-built LocateDeps: a real ListingService over the given artifacts plus a manifest literal. */
 function deps(artifacts: DependencyArtifact[]): LocateDeps {
-  const manifest: Manifest = { version: 1, resolvedAt: "", dependencySetHash: "", artifacts };
+  const manifest: Manifest = { version: 2, resolvedAt: "", dependencySetHash: "", artifacts };
   return { listings: new ListingService(), manifest: async () => manifest };
 }
 

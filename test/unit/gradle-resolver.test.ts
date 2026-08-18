@@ -123,7 +123,6 @@ describe("resolveGradle: parsing the sentinel-wrapped dump", () => {
     expect(springTx.provenance).toBeUndefined();
     expect(springTx.warnings).toBeUndefined();
     expect(springTx.classesDir).toBeUndefined();
-    expect(springTx.sourceSig).toBeUndefined();
 
     const slf4j = lookup(SLF4J);
     expect(slf4j.kind).toBe("external");

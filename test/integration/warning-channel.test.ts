@@ -3,7 +3,7 @@
  * only honest if (a) they describe the LAST bootstrap rather than the
  * accumulation of every bootstrap this process ever ran, and (b) a fresh
  * process serving an existing manifest still surfaces the per-artifact
- * warnings indexing persisted into it.
+ * warnings resolution persisted into it.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
@@ -45,6 +45,7 @@ describe("warning channel lifecycle", () => {
     ];
     let impl: () => Promise<{ ok: boolean; artifacts: DependencyArtifact[]; reason?: string }> =
       async () => ({ ok: false, artifacts: [], reason: "network down" });
+    let clock = 2_000_000;
     const ctx = openContext(projectRoot, {
       resolvers: {
         gradle: async () => impl(),
@@ -52,16 +53,18 @@ describe("warning channel lifecycle", () => {
         includeJdk: false,
       },
       cacheDir,
-      onProgress: () => {},
+      now: () => clock,
     });
 
     await ctx.ensureReady();
     const afterFailure = await ctx.bootstrapWarnings();
     expect(afterFailure.some((w) => w.startsWith("gradle: network down"))).toBe(true);
-    expect(afterFailure).toContain("degraded-to-cache-scan");
+    expect(afterFailure).toContain("resolution failed: degraded to cache-scan; run jarpeek resolve");
 
     // the build heals; the build file moved, so the next query re-bootstraps
+    // — but only once the failed-bootstrap backoff window has passed
     impl = async () => ({ ok: true, artifacts: goodArtifacts });
+    clock += 61_000;
     const gradle = join(projectRoot, "build.gradle");
     writeFileSync(gradle, "plugins { id 'java' }\n// healed\n");
     const future = new Date(Date.now() + 60_000);
@@ -94,7 +97,6 @@ describe("warning channel lifecycle", () => {
         includeJdk: false,
       },
       cacheDir,
-      onProgress: () => {},
     });
     await first.ensureReady();
     expect(calls).toBe(1);
@@ -114,7 +116,6 @@ describe("warning channel lifecycle", () => {
         includeJdk: false,
       },
       cacheDir,
-      onProgress: () => {},
     });
     await second.ensureReady();
     expect(calls).toBe(1); // served fresh: no resolver ran
@@ -122,38 +123,63 @@ describe("warning channel lifecycle", () => {
   });
 });
 
-describe("zero-artifact manifest scoping", () => {
-  it("scopes to empty: store-era foreign shards are no hits, and outline never serves them", async () => {
+describe("cache-scan guard (manifest present)", () => {
+  it("serves the manifest stale with the exact warning instead of adopting the scan", async () => {
     const { projectRoot, cacheDir } = freshProject();
-    const ctx: QueryContext = openContext(projectRoot, { cacheDir, onProgress: () => {} });
-
-    // a foreign shard lands in the user-global store (another project's
-    // artifact, written directly) — find_class still reads the store until
-    // Task 8, but the store is scoped by the manifest
-    await ctx.store.writeArtifact(
-      {
-        coordinates: "com.foreign:lib:1",
-        kind: "external",
-        provenance: "signature",
-        warnings: [],
-      },
-      [
+    await writeManifest(projectRoot, {
+      version: 2,
+      resolvedAt: new Date().toISOString(),
+      // a hash that no longer matches: the manifest is stale, so the next
+      // query re-resolves — which is the only way the guard can engage
+      dependencySetHash: "not-the-current-hash",
+      artifacts: [
         {
-          fqn: "com.foreign.Spy",
-          file: "com/foreign/Spy.class",
-          selector: "Spy",
-          kind: "class",
-          visibility: "public",
-          static: false,
-          deprecated: false,
-          signature: "public class Spy",
+          coordinates: "com.example:demo-lib:1.0.0",
+          kind: "external",
+          sourcesJar: DEMO_SOURCES_JAR,
+          provenance: "source",
+          warnings: [],
         },
       ],
+    });
+    const ctx: QueryContext = openContext(projectRoot, {
+      resolvers: {
+        gradle: async () => ({ ok: false, artifacts: [], reason: "network down" }),
+        maven: async () => ({ ok: false, artifacts: [], reason: "no pom" }),
+        cacheScan: async () => ({
+          artifacts: [
+            {
+              coordinates: "com.heuristic:guess:9",
+              kind: "cache-scan",
+              binaryJar: DEMO_SOURCES_JAR,
+            },
+          ],
+          warnings: [],
+        }),
+        includeJdk: false,
+      },
+      cacheDir,
+    });
+
+    const result = await ctx.ensureReady();
+    expect(result).toEqual({ bootstrapped: false, stale: true });
+    expect(await ctx.bootstrapWarnings()).toContain(
+      "stale index served (resolution degraded to cache scan)",
     );
+    // the heuristic artifact set never reaches the manifest
+    const manifest = await ctx.manifest();
+    expect(manifest?.artifacts.map((a) => a.coordinates)).toEqual(["com.example:demo-lib:1.0.0"]);
+  });
+});
+
+describe("zero-artifact manifest scoping", () => {
+  it("scopes to empty: outline never serves foreign listings", async () => {
+    const { projectRoot, cacheDir } = freshProject();
+    const ctx: QueryContext = openContext(projectRoot, { cacheDir });
 
     // the manifest EXISTS and declares zero artifacts (a resolved-empty set)
     await writeManifest(projectRoot, {
-      version: 1,
+      version: 2,
       resolvedAt: new Date().toISOString(),
       dependencySetHash: await computeDependencySetHash(projectRoot),
       artifacts: [],

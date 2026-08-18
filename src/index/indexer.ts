@@ -21,7 +21,7 @@ import {
 import { listZipEntries, readTextEntry, readZipEntry } from "../parse/zip.js";
 import { ensureCacheDir } from "../util/cache-dir.js";
 import { IndexStore } from "./store.js";
-import { computeDependencySetHash, computeSourceDirSignature, writeManifest } from "./manifest.js";
+import { computeDependencySetHash, writeManifest } from "./manifest.js";
 import { isSourceEntry, walkFiles } from "./walk.js";
 
 export interface IndexerOptions {
@@ -178,18 +178,10 @@ export async function indexArtifacts(
     }
 
     warnings.push(...result.warnings);
-    // fingerprint the module tree at index time so a later sibling-file edit
-    // flips staleness (module line ranges describe files that can change
-    // without any build file moving); null = tree unwalkable, nothing recorded
-    const sourceSig =
-      artifact.sourceDir !== undefined && existsSync(artifact.sourceDir)
-        ? await computeSourceDirSignature(artifact.sourceDir)
-        : undefined;
     const finalArtifact: DependencyArtifact = {
       ...artifact,
       provenance: result.provenance,
       warnings: [...(artifact.warnings ?? []), ...result.warnings],
-      ...(sourceSig !== null && sourceSig !== undefined ? { sourceSig } : {}),
     };
     // always written, even with zero records: an empty shard replaces the
     // previous one instead of leaving stale records serving as fresh forever
@@ -200,7 +192,7 @@ export async function indexArtifacts(
   }
 
   await writeManifest(projectRoot, {
-    version: 1,
+    version: 2,
     resolvedAt: new Date().toISOString(),
     dependencySetHash: await computeDependencySetHash(projectRoot),
     artifacts: manifestArtifacts,

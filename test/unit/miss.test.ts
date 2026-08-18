@@ -41,12 +41,12 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
   const projectRoot = freshRoot();
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
   await writeManifest(projectRoot, {
-    version: 1,
+    version: 2,
     resolvedAt: "",
     dependencySetHash: await computeDependencySetHash(projectRoot),
     artifacts,
   });
-  return openContext(projectRoot, { cacheDir: freshRoot(), onProgress: () => {} });
+  return openContext(projectRoot, { cacheDir: freshRoot(), onNotice: () => {} });
 }
 
 const DEMO_SOURCES: DependencyArtifact = {
@@ -100,12 +100,13 @@ describe("handleMiss negative", () => {
     expect(result).toMatchObject({ found: false, via: "negative" });
   });
 
-  it("a cache-scan bootstrap appends the cache-scan note to the searched set", async () => {
+  it("a cache-scan bootstrap (no manifest) answers a bare negative: nothing was searched", async () => {
     // the real degradation path: every detected build system fails and the
     // resolver cascade falls back to the local caches — injected gradle +
-    // maven failures and a fake cacheScan serving the fixture artifact, so
-    // bootstrapWarnings carries "degraded-to-cache-scan" and the negative
-    // answer must say so instead of presenting the heuristic set as resolved
+    // maven failures and a fake cacheScan serving the fixture artifact.
+    // Resolve-only semantics: queries never adopt a heuristic artifact set,
+    // so with no manifest the bootstrap FAILS and the miss reports an empty
+    // searched set instead of presenting the cache scan as resolved
     const projectRoot = freshRoot();
     writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
     const ctx = openContext(projectRoot, {
@@ -116,17 +117,18 @@ describe("handleMiss negative", () => {
         includeJdk: false,
       },
       cacheDir: freshRoot(),
-      onProgress: () => {},
+      onNotice: () => {},
     });
     await ctx.ensureReady();
-    expect(await ctx.bootstrapWarnings()).toContain("degraded-to-cache-scan");
+    expect(await ctx.bootstrapWarnings()).toContain(
+      "resolution failed: degraded to cache-scan; run jarpeek resolve",
+    );
 
     const result = await handleMiss(ctx, new LookupMissError("com.example.Nowhere"));
     expect(result.found).toBe(false);
     if (result.found) throw new Error("unreachable");
     expect(result.via).toBe("negative");
-    // the cache-scan artifact set IS the searched set, flagged with the note
-    expect(result.searchedArtifacts).toContain("com.example:demo-lib:1.0.0");
-    expect(result.searchedArtifacts.some((s) => s.includes("cache-scan"))).toBe(true);
+    // no manifest was written for the heuristic set: nothing was searched
+    expect(result.searchedArtifacts).toEqual([]);
   });
 });

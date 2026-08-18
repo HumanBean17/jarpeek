@@ -54,13 +54,6 @@ export interface DependencyArtifact {
   provenance?: Provenance;
   noDecompile?: boolean;
   warnings?: string[];
-  /**
-   * Fingerprint of the sourceDir contents at index time (module artifacts):
-   * hash over the walked source files' (relpath, size, mtimeMs) triples. A
-   * mismatch means the indexed line ranges no longer describe the files on
-   * disk. Absent on artifacts without a source dir and in older manifests.
-   */
-  sourceSig?: string;
 }
 
 export interface ClassHit {

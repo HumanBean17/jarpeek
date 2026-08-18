@@ -219,15 +219,8 @@ export function createMcpServer(ctx: QueryContext): McpServer {
 
   server.registerTool(
     "resolve",
-    { description: "Force a resolve + index pass.", inputSchema: {} },
-    () =>
-      run(ctx, async () =>
-        ok(
-          await resolveNow(ctx, {
-            onProgress: (msg) => process.stderr.write(`[jarpeek] ${msg}\n`),
-          }),
-        ),
-      ),
+    { description: "Re-resolve dependencies and rewrite the manifest.", inputSchema: {} },
+    () => run(ctx, async () => ok(await resolveNow(ctx))),
   );
 
   server.registerTool("status", { description: "Manifest and JVM report.", inputSchema: {} }, () =>
@@ -250,7 +243,7 @@ export function createMcpServer(ctx: QueryContext): McpServer {
  */
 export async function startMcpServer(projectRoot?: string): Promise<void> {
   const ctx = openContext(projectRoot ?? process.cwd(), {
-    onProgress: (msg) => process.stderr.write(`[jarpeek] ${msg}\n`),
+    onNotice: (msg) => process.stderr.write(`[jarpeek] ${msg}...\n`),
   });
   const server = createMcpServer(ctx);
   await server.connect(new StdioServerTransport());

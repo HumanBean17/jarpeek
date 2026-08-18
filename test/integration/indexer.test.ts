@@ -295,12 +295,12 @@ describe("indexArtifacts", () => {
     expect(pruned).toEqual([]);
   });
 
-  it("the manifest records a source signature for every module artifact", async () => {
+  it("the manifest records no source signature anymore (v2: artifact list only)", async () => {
     const manifest = await readManifest(ctx.projectRoot);
-    const byCoordinates = new Map(manifest!.artifacts.map((a) => [a.coordinates, a]));
-    expect(byCoordinates.get("com.example:mod:1.0")!.sourceSig).toEqual(expect.any(String));
-    // artifacts without a source dir have nothing to fingerprint
-    expect(byCoordinates.get("com.example:demo-lib:1.0.0")!.sourceSig).toBeUndefined();
+    expect(manifest!.version).toBe(2);
+    for (const artifact of manifest!.artifacts) {
+      expect((artifact as Record<string, unknown>).sourceSig).toBeUndefined();
+    }
   });
 
   it("Kotlin facade classes flow through as regular class records", async () => {
@@ -388,7 +388,7 @@ describe("indexArtifacts", () => {
   it("manifest is written with the dependency-set hash and updated warnings", async () => {
     const manifest = await readManifest(ctx.projectRoot);
     expect(manifest).not.toBeNull();
-    expect(manifest!.version).toBe(1);
+    expect(manifest!.version).toBe(2);
     expect(manifest!.dependencySetHash).toBe(await computeDependencySetHash(ctx.projectRoot));
     expect(manifest!.artifacts.map((a) => a.coordinates)).toEqual([
       "com.example:demo-lib:1.0.0",

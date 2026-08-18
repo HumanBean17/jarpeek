@@ -168,7 +168,7 @@ function artifact(
 
 /** Hand-built LocateDeps: a real ListingService over the given artifacts plus a manifest literal. */
 function deps(artifacts: DependencyArtifact[]): LocateDeps {
-  const manifest: Manifest = { version: 1, resolvedAt: "", dependencySetHash: "", artifacts };
+  const manifest: Manifest = { version: 2, resolvedAt: "", dependencySetHash: "", artifacts };
   return { listings: new ListingService(), manifest: async () => manifest };
 }
 

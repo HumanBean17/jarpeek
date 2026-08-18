@@ -38,12 +38,12 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
   const root = freshRoot();
   writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
   await writeManifest(root, {
-    version: 1,
+    version: 2,
     resolvedAt: "2026-08-17T00:00:00.000Z",
     dependencySetHash: await computeDependencySetHash(root),
     artifacts,
   });
-  return openContext(root, { cacheDir: freshRoot(), onProgress: () => {} });
+  return openContext(root, { cacheDir: freshRoot(), onNotice: () => {} });
 }
 
 describe("readResource provenance is computed", () => {

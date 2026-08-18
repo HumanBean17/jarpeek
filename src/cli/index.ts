@@ -52,10 +52,10 @@ interface Invocation {
   project: string;
 }
 
-/** Context with bootstrap progress lines routed to stderr. */
+/** Context with the bootstrap's one notice line routed to stderr. */
 function ctxFor(inv: Invocation): QueryContext {
   return openContext(inv.project, {
-    onProgress: (msg) => process.stderr.write(`[jarpeek] ${msg}\n`),
+    onNotice: (msg) => process.stderr.write(`[jarpeek] ${msg}...\n`),
   });
 }
 
@@ -201,14 +201,10 @@ function renderSearchSymbols(result: SymbolResult): string {
 }
 
 function renderResolve(result: ResolveNowResult): string {
-  return [
-    renderTable([
-      ["STATUS", "COORDINATES", "REASON"],
-      ...result.indexed.map((coordinates): string[] => ["indexed", coordinates, ""]),
-      ...result.skipped.map((skip): string[] => ["skipped", skip.coordinates, clipCell(skip.reason)]),
-    ]),
-    `resolve: indexed ${result.indexed.length}, skipped ${result.skipped.length} in ${result.durationMs}ms`,
-  ].join("\n");
+  const warnings = result.warnings.length > 0 ? ` (${result.warnings.length} warnings)` : "";
+  return [`resolved ${result.artifactCount} artifacts in ${result.durationMs}ms${warnings}`, ...result.warnings].join(
+    "\n",
+  );
 }
 
 function renderStatus(result: StatusResult): string {
@@ -270,7 +266,6 @@ function renderInit(result: InitResult): string {
     ...result.wired.map(
       (entry) => `wired ${entry.harness} (${entry.mode}): ${entry.targets.join(", ")}`,
     ),
-    `indexed: ${result.indexed ? "yes" : "no"}`,
     ...result.notes.map((note) => `note: ${note}`),
   ].join("\n");
 }
@@ -416,15 +411,14 @@ command("search-symbols", "find declarations by member name in one artifact")
     });
   });
 
-command("resolve", "force a resolve + index pass").action(async () => {
+command("resolve", "force a dependency resolve pass").action(async () => {
   const inv = invocation();
   const ctx = ctxFor(inv);
-  const result = await resolveNow(ctx, {
-    onProgress: (msg) => process.stderr.write(`[jarpeek] ${msg}\n`),
-  });
+  const result = await resolveNow(ctx);
   emit(result, inv, () => renderResolve(result));
-  if (result.warnings.length > 0) warn(...result.warnings);
-  for (const entry of result.degraded) warn(`${entry.from}: ${entry.reason}`);
+  if (result.degraded.length > 0) {
+    for (const entry of result.degraded) warn(`${entry.from}: ${entry.reason}`);
+  }
 });
 
 command("status", "manifest and JVM report").action(async () => {
@@ -467,13 +461,10 @@ command("prime", "the jarpeek cheatsheet for agents (this file)")
   });
 
 command("init", "wire AI harnesses (MCP server or CLI hints) for this project")
-  .option("--yes", "non-interactive: claude + mcp defaults, skip the first index")
+  .option("--yes", "non-interactive: claude + mcp defaults")
   .action(async (cmd: { yes?: boolean }) => {
     const inv = invocation();
-    const result = await runInit(inv.project, {
-      yes: cmd.yes === true,
-      onProgress: (msg) => process.stderr.write(`[jarpeek] ${msg}\n`),
-    });
+    const result = await runInit(inv.project, { yes: cmd.yes === true });
     emit(result, inv, () => renderInit(result));
   });
 

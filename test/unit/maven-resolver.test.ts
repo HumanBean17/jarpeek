@@ -175,7 +175,6 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     expect(springTx.provenance).toBeUndefined();
     expect(springTx.warnings).toBeUndefined();
     expect(springTx.classesDir).toBeUndefined();
-    expect(springTx.sourceSig).toBeUndefined();
 
     const junit = lookup(JUNIT);
     expect(junit.kind).toBe("external");

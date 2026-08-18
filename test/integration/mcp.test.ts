@@ -116,7 +116,7 @@ beforeAll(async () => {
   const ctx = openContext(projectRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts: demoArtifacts() }), includeJdk: false },
     cacheDir: process.env.JARPEEK_CACHE_DIR,
-    onProgress: () => {},
+    onNotice: () => {},
   });
   const client = await connect(ctx);
   Object.assign(c, { projectRoot, cacheDir: process.env.JARPEEK_CACHE_DIR, ctx, client });
@@ -127,7 +127,7 @@ beforeAll(async () => {
   const lazyCtx = openContext(lazyRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts: demoArtifacts() }), includeJdk: false },
     cacheDir: process.env.JARPEEK_CACHE_DIR,
-    onProgress: () => {},
+    onNotice: () => {},
   });
   Object.assign(lazy, { projectRoot: lazyRoot, ctx: lazyCtx, client: await connect(lazyCtx) });
 });

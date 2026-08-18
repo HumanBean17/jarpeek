@@ -41,13 +41,13 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<{ ctx: Quer
   const root = freshRoot();
   writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
   await writeManifest(root, {
-    version: 1,
+    version: 2,
     resolvedAt: "2026-08-17T00:00:00.000Z",
     dependencySetHash: await computeDependencySetHash(root),
     artifacts,
   });
   const cacheDir = freshRoot();
-  return { ctx: openContext(root, { cacheDir, onProgress: () => {} }), cacheDir };
+  return { ctx: openContext(root, { cacheDir, onNotice: () => {} }), cacheDir };
 }
 
 describe("where lists recorded paths", () => {

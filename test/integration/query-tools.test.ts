@@ -62,7 +62,7 @@ function openSuite(artifacts: () => DependencyArtifact[]): Suite {
   const ctx = openContext(projectRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts: artifacts() }), includeJdk: false },
     cacheDir,
-    onProgress: () => {},
+    onNotice: () => {},
   });
   return { projectRoot, cacheDir, ctx };
 }
@@ -434,7 +434,7 @@ describe("read_resource / where honesty parity", () => {
       const ctx = openContext(projectRoot, {
         resolvers: { gradle: async () => impl(), includeJdk: false },
         cacheDir,
-        onProgress: () => {},
+        onNotice: () => {},
       });
       await readResource(ctx, "demo-lib", "config/*"); // bootstrap
 
