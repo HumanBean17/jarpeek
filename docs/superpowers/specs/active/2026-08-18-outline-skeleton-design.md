@@ -1,6 +1,6 @@
 # Outline skeleton + separated read-source — outline redesign
 
-**Status:** draft
+**Status:** in_progress
 
 ## Problem
 
