@@ -1,0 +1,79 @@
+# Release — triggered by pushing a v* tag created by `npm version`.
+# Runs all gates, publishes to npm via OIDC trusted publishing (no stored
+# secrets), and opens a GitHub Release with conventional-commit notes.
+#
+# One-time setup: register this repository (HumanBean17/jarpeek) and the
+# workflow filename `release.yml` as a trusted publisher for the `jarpeek`
+# package on npmjs.com. See README "Releasing".
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # create the GitHub Release
+  id-token: write # OIDC token for npm trusted publishing
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history for changelog generation
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # Node 24 bundles npm 11, but trusted publishing needs >= 11.5.1 — pin up.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Verify tag matches package.json version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::Tag ${TAG} does not match package.json version ${VERSION}. Use 'npm version <patch|minor|major>' and push with --follow-tags."
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Show what will be published
+        run: npm publish --dry-run
+
+      - name: Publish to npm (OIDC trusted publishing)
+        run: npm publish --provenance
+
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
+        with:
+          config: cliff.toml
+          version: v2.13.1
+          args: --latest
+        env:
+          OUTPUT: CHANGES.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists; skipping creation."
+            exit 0
+          fi
+          gh release create "${GITHUB_REF_NAME}" --verify-tag \
+            --title "${GITHUB_REF_NAME}" --notes-file CHANGES.md

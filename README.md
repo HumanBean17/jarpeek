@@ -197,6 +197,25 @@ Network-dependent e2e tests self-skip unless `JARPEEK_E2E=1` is set. Never
 edit generated fixture jars by hand — edit `test/fixtures/src` and rerun
 the build script.
 
+### Releasing
+
+CI runs on pushes to `main` and on PRs; releases are tag-driven. To cut one:
+
+```
+npm version minor        # bump commit + v* tag (patch | minor | major)
+git push --follow-tags   # the release workflow takes over
+```
+
+The workflow verifies the tag matches `package.json`, reruns every gate,
+publishes to npm with provenance via [trusted publishing][tp] — no tokens
+stored in the repo — and opens a GitHub Release with notes grouped from
+conventional commits.
+
+One-time setup: on npmjs.com, list this repository and `release.yml` as a
+trusted publisher for the `jarpeek` package.
+
+[tp]: https://docs.npmjs.com/trusted-publishers/
+
 ## Limitations
 
 - No type hierarchy, find-usages, or call-graph navigation — declaration
