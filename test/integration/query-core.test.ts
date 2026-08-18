@@ -249,14 +249,14 @@ describe("readMember / readSource from listings", () => {
     expect(result.members).toHaveLength(2);
 
     const run = result.members.find((m) => m.selector === "run(String,int)")!;
-    expect(run.startLine).toBe(11); // javadocStart from the Task 4 golden
-    expect(run.endLine).toBe(21);
+    expect(run.startLine).toBe(13); // javadocStart from the Task 4 golden
+    expect(run.endLine).toBe(23);
     expect(run.javadoc).toBeDefined();
     expect(run.javadoc![0]!.trim()).toBe("/**");
     expect(run.lines.join("\n")).toContain("public Object run(String input, int count) throws Exception {");
 
     const name = result.members.find((m) => m.selector === "NAME")!;
-    expect(name.startLine).toBe(9);
+    expect(name.startLine).toBe(11);
     expect(name.lines).toEqual(['    private static final String NAME = "demo";']);
     expect(result.misses).toEqual([]);
   });
@@ -372,7 +372,7 @@ describe("both-backings artifacts (the real Gradle/Maven shape)", () => {
     expect(result.coordinates).toBe("com.example:demo-lib:1.0.0");
     expect(result.provenance).toBe("source");
     const run = result.rows.find((r) => r.selector === "run" && r.kind === "method")!;
-    expect(run.lineStart).toBe(19); // the source file's line, not a decompile's
+    expect(run.lineStart).toBe(21); // the source file's line, not a decompile's
     expect(result.rows.some((r) => r.selector === "Worker" && r.kind === "class")).toBe(true);
   });
 
@@ -387,7 +387,7 @@ describe("both-backings artifacts (the real Gradle/Maven shape)", () => {
   it("readMember slices carry the source file's line spans", async () => {
     const result = await readMember(ctx, "com.example.Demo", "#run(String,int)");
     expect(result.provenance).toBe("source");
-    expect(result.members[0]!.startLine).toBe(11);
+    expect(result.members[0]!.startLine).toBe(13);
     expect(result.members[0]!.javadoc).toBeDefined();
   });
 });

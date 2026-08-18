@@ -186,10 +186,9 @@ describe("locateClass", () => {
     expect(records.some((r) => r.selector === "run" && r.kind === "method")).toBe(true);
     expect(records.some((r) => r.selector === "old" && r.kind === "method" && r.deprecated)).toBe(true);
     expect(records.some((r) => r.selector === "NAME" && r.kind === "field")).toBe(true);
-    // includeNested: the lexer's dot-separated Worker class row, members excluded
-    const worker = records.filter((r) => r.fqn === "com.example.Demo.Worker");
+    // includeNested: the lexer's dot-separated Worker class row plus its members
+    const worker = records.filter((r) => r.fqn === "com.example.Demo.Worker" && r.kind === "class");
     expect(worker).toHaveLength(1);
-    expect(worker[0]!.kind).toBe("class");
     expect(result.alternatives).toEqual([]);
     expect(result.degraded).toEqual([]);
   });
@@ -263,9 +262,10 @@ describe("locateClass", () => {
     expect(classRow.lineStart).toBeGreaterThan(0); // source rows carry line ranges
     expect(result.winner.records.some((r) => r.selector === "run" && r.kind === "method")).toBe(true);
     // nested Worker arrives from the parsed source text (family filter), not sibling entries
-    const worker = result.winner.records.filter((r) => r.fqn === "com.example.Demo.Worker");
+    const worker = result.winner.records.filter(
+      (r) => r.fqn === "com.example.Demo.Worker" && r.kind === "class",
+    );
     expect(worker).toHaveLength(1);
-    expect(worker[0]!.kind).toBe("class");
     // Demo.Worker has no own .java entry (it lives inside Demo.java), so the
     // sources backing cannot yield it and the parse falls back to the
     // binary entry — the ladder serves what exists, never fabricates
@@ -333,9 +333,10 @@ describe("locateClass", () => {
       expect(result.winner.records.some((r) => r.fqn === "a.b.Outer" && r.kind === "class")).toBe(true);
       expect(result.winner.records.some((r) => r.selector === "dispatch" && r.kind === "method")).toBe(true);
       // the class-file reader maps $ to ., so the nested row arrives dot-separated
-      const nested = result.winner.records.filter((r) => r.fqn === "a.b.Outer.Inner");
+      const nested = result.winner.records.filter(
+        (r) => r.fqn === "a.b.Outer.Inner" && r.kind === "class",
+      );
       expect(nested).toHaveLength(1);
-      expect(nested[0]!.kind).toBe("class");
       expect(result.winner.records.some((r) => r.fqn === "a.b.Outer.1")).toBe(false);
       expect(result.degraded).toEqual([]);
       const bare = await locateClass(d, "a.b.Outer", { includeNested: false });
@@ -430,6 +431,66 @@ describe("locateClass", () => {
         "com.example.Demo",
       ).catch((e) => e);
       expect(miss).toBeInstanceOf(LookupMissError);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("full-family retention (outline skeleton data)", () => {
+  it("keeps nested-class member rows and dedupes the nested class to one row", async () => {
+    const result = await locateClass(deps([DEMO_SOURCES]), "com.example.Demo");
+    const records = result.winner.records;
+    // the nested class's members are family records now, not just its class row
+    const work = records.filter((r) => r.fqn === "com.example.Demo.Worker" && r.kind === "method");
+    expect(work.map((r) => r.selector)).toEqual(["work"]);
+    // RestTemplate regression: Worker must appear exactly once — the outer
+    // class's member row for it is dropped in favor of its own class row
+    const workerRows = records.filter((r) => r.selector === "Worker" && r.kind === "class");
+    expect(workerRows).toHaveLength(1);
+    expect(workerRows[0]!.fqn).toBe("com.example.Demo.Worker");
+  });
+
+  it("includeNested: false keeps only the target's own rows (resolveContent path)", async () => {
+    const result = await locateClass(deps([DEMO_SOURCES]), "com.example.Demo", {
+      includeNested: false,
+    });
+    expect(result.winner.records.every((r) => r.fqn === "com.example.Demo")).toBe(true);
+    // no dedup happens either: the outer member row for Worker survives
+    expect(result.winner.records.some((r) => r.selector === "Worker" && r.kind === "class")).toBe(true);
+  });
+
+  it("carries the parsed file's imports for source winners and none for binary winners", async () => {
+    const source = await locateClass(deps([DEMO_SOURCES]), "com.example.Demo");
+    expect(source.winner.imports).toEqual(["import java.util.List;"]);
+    const binary = await locateClass(
+      deps([artifact({ coordinates: "com.example:nosources-lib:1.0.0", binaryJar: NOSOURCES_JAR })]),
+      "com.example.nosources.Hidden",
+    );
+    expect(binary.winner.imports).toBeUndefined();
+  });
+
+  it("binary nested entries contribute their member rows too", async () => {
+    const dir = tempDir();
+    try {
+      const jar = join(dir, "nested-members.jar");
+      writeFileSync(
+        jar,
+        craftZip([
+          { name: "a/b/Outer.class", data: craftClassFile("a/b/Outer", "dispatch") },
+          { name: "a/b/Outer$Inner.class", data: craftClassFile("a/b/Outer$Inner", "describe") },
+        ]),
+      );
+      const result = await locateClass(
+        deps([artifact({ coordinates: "test:nm:1", binaryJar: jar })]),
+        "a.b.Outer",
+      );
+      const describe = result.winner.records.filter(
+        (r) => r.fqn === "a.b.Outer.Inner" && r.kind === "method",
+      );
+      expect(describe.map((r) => r.selector)).toEqual(["describe"]);
+      const innerRows = result.winner.records.filter((r) => r.selector === "Inner" && r.kind === "class");
+      expect(innerRows).toHaveLength(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

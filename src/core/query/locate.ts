@@ -3,8 +3,9 @@
  * parsing. The manifest's artifacts are listed in
  * order (ListingService caches per coordinates+stamp) and the first whose
  * backing declares the fqn is parsed from exactly one file: its source entry
- * or its compiled class entry, plus one class row per directly nested class
- * entry. Later hits become `alternatives`; unreadable artifacts and entries
+ * or its compiled class entry, plus every family record (class row and
+ * members) of each directly nested class entry. Later hits become
+ * `alternatives`; unreadable artifacts and entries
  * that failed to read or parse become aggregated `degraded` notes — the only
  * throw is the LookupMissError protocol. `recordsForArtifact` reuses the same
  * listing+parse plumbing to feed search_symbols a whole artifact at a time,
@@ -104,10 +105,12 @@ export interface LocatedClass {
   artifact: DependencyArtifact;
   /** Jar entry name or sourceDir relpath the records were parsed from. */
   entry: string;
-  /** The class's own row, its member rows, and (includeNested) nested class rows. */
+  /** The class's own row, its member rows, and (includeNested) nested class rows and their members. */
   records: Declaration[];
   /** "source" for sources/sourceDir backings; "signature" for binary — locate never decompiles. */
   provenance: Provenance;
+  /** The parsed file's verbatim import statements; source backings only. */
+  imports?: string[];
 }
 
 export interface LocateResult {
@@ -177,20 +180,32 @@ interface Scan {
 }
 
 /**
- * Family filter over source-parsed records: the class's own row and its
- * members carry `fqn` and pass as equal; nested classes (the lexers nest by
- * dots) pass only as class-kind rows — their members belong to the nested
- * class's own lookup, not this one.
+ * Family filter over source-parsed records: the target's own row and its
+ * members carry `fqn` and pass as equal; every record of a nested class (the
+ * lexers nest by dots) belongs to the family too — the outline skeleton
+ * renders nested bodies, not just their headers. The outer class's member
+ * row for a retained nested class is dropped in favor of that class's own
+ * family row, so each nested class appears exactly once (the RestTemplate
+ * duplication).
  */
 function familyRecords(
   records: Declaration[],
   fqn: string,
   includeNested: boolean,
 ): Declaration[] {
-  return records.filter(
+  const family = records.filter(
+    (record) => record.fqn === fqn || (includeNested && classFamily(record.fqn, fqn)),
+  );
+  if (!includeNested) return family;
+  const nestedSelectors = new Set(
+    family
+      .filter((record) => record.fqn !== fqn && isClassKind(record.kind))
+      .map((record) => record.selector),
+  );
+  if (nestedSelectors.size === 0) return family;
+  return family.filter(
     (record) =>
-      record.fqn === fqn ||
-      (includeNested && isClassKind(record.kind) && classFamily(record.fqn, fqn)),
+      !(record.fqn === fqn && isClassKind(record.kind) && nestedSelectors.has(record.selector)),
   );
 }
 
@@ -214,17 +229,23 @@ async function sourceLocated(
     scan.failed++;
     return { artifact, entry, records: [], provenance: "source" };
   }
-  const { records, diagnostics } = recordsFromSourceText(text, entry);
+  const { records, diagnostics, imports } = recordsFromSourceText(text, entry);
   if (diagnostics.length > 0) scan.failed++;
-  return { artifact, entry, records: familyRecords(records, fqn, includeNested), provenance: "source" };
+  return {
+    artifact,
+    entry,
+    records: familyRecords(records, fqn, includeNested),
+    provenance: "source",
+    imports,
+  };
 }
 
 /**
  * Parse the winning class entry (equal-fqn records: its class row and
  * members — the class-file reader renders fqns dot-separated) plus, when
- * included, one class row per DIRECTLY nested entry: `internal + "$" +
- * ident` where ident has no further `$` and starts a Java identifier, so
- * anonymous/local classes (`Outer$1`) and deeper nesting stay out.
+ * included, every family record of each DIRECTLY nested entry: `internal +
+ * "$" + ident` where ident has no further `$` and starts a Java identifier,
+ * so anonymous/local classes (`Outer$1`) and deeper nesting stay out.
  */
 async function binaryLocated(
   artifact: DependencyArtifact,
@@ -252,11 +273,8 @@ async function binaryLocated(
       try {
         const parsed = recordsFromClassBytes(await readZipEntry(jar, nested), nested.name, nested.name);
         if (parsed.warning !== undefined) scan.failed++;
-        records.push(
-          ...parsed.records.filter(
-            (record) => isClassKind(record.kind) && classFamily(record.fqn, fqn),
-          ),
-        );
+        // every family record of the nested entry: its class row and members
+        records.push(...parsed.records.filter((record) => classFamily(record.fqn, fqn)));
       } catch {
         scan.failed++;
       }
