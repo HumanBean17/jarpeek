@@ -1,6 +1,6 @@
 # Outline Skeleton + Separated Read-Source Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Replace `outline`'s clipped table with a Java-shaped skeleton (presets + section toggles, javadoc ladder, imports for source provenance, `--table` as legacy opt-in) and make `read-source` default to `full` uniformly on CLI and MCP.
 
@@ -58,29 +58,29 @@
   - `recordsFromSourceText(text, file)` returns `{ records: Declaration[]; diagnostics: string[]; imports: string[] }` (new third field). Records now carry `javadoc`.
   - `classRecord` accepts and threads `javadoc?: string` via `ClassRecordSource`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `test/unit/java-lexer.test.ts`: parsing a source with `package a.b; import java.net.URI; import static java.util.Objects.requireNonNull;` yields `imports` exactly `["import java.net.URI;", "import static java.util.Objects.requireNonNull;"]`; a class with javadoc, a method with javadoc, and a field with javadoc each produce records whose `javadoc` equals the raw block (e.g. `"/** Runs the demo. */"`). Non-javadoc members have no `javadoc` key (undefined). In `test/unit/kotlin-lexer.test.ts`: `import a.b.C as D` captured verbatim (no semicolon); KDoc text lands on class/member records. In `test/unit/records.test.ts`: `recordsFromSourceText` returns the file's imports and threads `javadoc` from a member declaration and from the class into the flat records.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/java-lexer.test.ts test/unit/kotlin-lexer.test.ts test/unit/records.test.ts`
 Expected: FAIL — `imports` undefined / records lack `javadoc`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add `javadoc?: string` to `Declaration`; add `imports: string[]` to `SourceFileDeclarations` (default `[]`). Java lexer: in `parseFile`'s import branch, reconstruct the statement from the consumed tokens (keyword `import`, optional `static`, dotted name, optional `.*`) joined with spaces and terminated by `;`; push to `result.imports`. Kotlin lexer: same for its import syntax (dotted name, optional ` as alias`, no semicolon). At every `header.javadoc ? { javadocStart: … }` spread site in both lexers, also spread `javadoc: header.javadoc.text`. In `records.ts`: extend `ClassRecordSource`/`classRecord` with `javadoc`; return `imports: parsed.imports` from `recordsFromSourceText`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/java-lexer.test.ts test/unit/kotlin-lexer.test.ts test/unit/records.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Fixture + golden repair**
+- [x] **Step 5: Fixture + golden repair**
 
 Add `import java.util.List;` after the package line of `test/fixtures/src/java/com/example/Demo.java`, then run `node scripts/build-fixtures.mjs`. Existing golden tests that pin Demo.java line numbers shift by one — update those expectations (do not change assertions' meaning, only the pinned numbers). Run `npx vitest run test/unit` — Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run: `git add -A && git commit -m "feat(parse): capture javadoc text and import statements"`
 
@@ -100,25 +100,25 @@ Run: `git add -A && git commit -m "feat(parse): capture javadoc text and import 
   - `LocatedClass.imports?: string[]` — present for source backings (`sourceLocated` fills it from the parse result), absent for binary backings.
   - `includeNested: false` (the `resolveContent` path) behavior is unchanged: only `fqn === target` rows, no dedup, no imports change.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `test/unit/locate.test.ts`: (a) locating a source-backed class whose file declares a nested class returns the nested class's member rows too (nested member kind/method present, fqn = `outer.nested`); (b) each nested class contributes exactly ONE class-kind row (count of rows with a given nested selector and class kind === 1) — this is the RestTemplate duplication regression test; (c) `LocatedClass.imports` equals the fixture file's imports (`["import java.util.List;"]` for Demo) for a sources-jar winner and is `undefined` for a binary-only winner.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/locate.test.ts`
 Expected: FAIL — nested members missing / duplicate class rows present / no `imports`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Relax `familyRecords` per the Produces contract; apply the dedup rule inside the same function (only in the `includeNested` branch). In `binaryLocated`'s nested-entry loop, keep every parsed record matching `classFamily` (drop the `isClassKind` restriction) so nested members from class bytes survive. In `sourceLocated`, thread `imports` from `recordsFromSourceText` into the returned `LocatedClass`; `binaryLocated` returns no `imports` key. `recordsForArtifact` is untouched.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/locate.test.ts test/integration/query-core.test.ts`
 Expected: PASS (query-core outline scenarios now see nested members; if any pinned row counts there assumed class-kind-only retention, update them to the new contract — nested members are correct output now).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add -A && git commit -m "feat(locate): retain nested members, dedupe nested class rows, carry imports"`
 
@@ -142,25 +142,25 @@ Run: `git add -A && git commit -m "feat(locate): retain nested members, dedupe n
   - `outline(ctx, fqn, opts)` applies, in order: existing kind/visibility filter, then section filtering on the effective sections: `fields:false` drops rows with kind `field` | `property` | `enum-constant`; `methods:false` drops kind `method` | `constructor`; `inner:false` drops rows where `row.fqn !== fqn && classFamily(row.fqn, fqn)`; `javadoc:false` removes the `javadoc` property from every row. The target class's own row is never dropped by sections.
   - `OutlineResult.imports?: string[]` — present (the winner's imports) iff effective `sections.imports` is true AND the located winner carried imports; otherwise the key is absent.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `test/unit/outline-sections.test.ts` (pure resolver tests, no ctx): every preset's five booleans per the table above; `undefined` preset ≡ `outline`; each single override flips only its field for every preset (e.g. `resolveSections("minimal", {imports: true})` → imports true, fields false); empty overrides ≡ no overrides. In `test/integration/query-core.test.ts`: outline on the Demo fixture returns `imports: ["import java.util.List;"]` by default; `sections: {fields: false}` result rows contain no field rows but keep the class row and methods; `sections: {inner: false}` drops every row whose fqn !== the queried fqn; `sections: {javadoc: false}` rows have no `javadoc` key; `preset: "minimal"` ≡ `{imports:true→absent imports field, fields:false, javadoc:false}` in one result; constructor rows survive `fields:false` and die under `methods:false`; enum-constant rows die under `fields:false` (use the `com.example.Colors` fixture).
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/outline-sections.test.ts test/integration/query-core.test.ts`
 Expected: FAIL — `resolveSections` not exported / no `imports` in result.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add the types and `resolveSections` to `outline.ts`; extend `OutlineOptions`/`OutlineResult`; apply the filter chain and imports gating exactly as in Produces. Export `SectionName`, `Sections`, `OutlinePreset`, `resolveSections` for the CLI (Task 5) and tests.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/outline-sections.test.ts test/integration/query-core.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add -A && git commit -m "feat(outline): section presets, data-level filtering, imports in result"`
 
@@ -176,25 +176,25 @@ Run: `git add -A && git commit -m "feat(outline): section presets, data-level fi
 - Consumes: nothing new.
 - Produces: `readSource(ctx, fqn, {})` returns a `FullReadResult` (`mode: "full"`) — the default is `opts.mode ?? "full"`. Explicit `mode: "outline"` still returns the outline result; `mode: "lines"` still requires `from`/`to` (error unchanged). `resolveContent` untouched.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `test/integration/query-core.test.ts`: `readSource(ctx, "com.example.Demo")` (no options) returns `mode === "full"` with the file's content and `lineCount`. In `cli.test.ts` update/replace the current "default mode renders the outline rows" test: `read-source com.example.Demo` with no flags now renders the full-source format (numbered lines, `file … provenance …` header) and its `--json` payload equals `readSource(ctx, fqn)` in-process.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/integration/query-core.test.ts test/integration/cli.test.ts`
 Expected: FAIL — default mode is still `outline`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Flip the default mode; update `read-source.ts`'s header comment (the doc paragraph currently narrates the outline default).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/integration/query-core.test.ts test/integration/cli.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add -A && git commit -m "feat(read-source): default mode is full source"`
 
@@ -218,25 +218,25 @@ Run: `git add -A && git commit -m "feat(read-source): default mode is full sourc
   - Javadoc lines (when `sections.javadoc` and the row carries `javadoc`): `detail: "summary"` → one line `/** <summarizeJavadoc(raw)> */` above the member at the same indent, omitted when the summary is `""`; `detail: "full"` → the raw block's lines above the member, each indented. Class rows (root and nested) get the same treatment.
   - Graceful empties: all sections off still renders header + package + class signature + `{`/`}`; no members → empty braces on separate lines.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `test/unit/skeleton.test.ts` with hand-built rows (no fixtures): (1) header comments exactly `// a.b.Demo` / `// g:a:1  provenance source` (+ stale line when flagged); (2) `package a.b;` derived from the fqn, omitted for a dotless fqn; (3) imports render verbatim and are skipped when `imports` is absent; (4) members render as `signature;` in row order, indented 4 spaces; (5) a nested class node renders `signature {`, its members at 8 spaces, `}` — and a doubly nested class reaches 12; (6) javadoc summary line sits above its member, drops `@param`/`@return` text, ends at the first sentence, caps at 180 chars with `…`; (7) `detail: "full"` renders the raw block lines and method lines end ` { … }`; (8) a 200-char signature appears verbatim (no-clipping assertion); (9) `sections.javadoc: false` renders no javadoc even when rows carry it; (10) summarizeJavadoc edge cases: inline `{@link …}` kept as plain text, no period → whole text, empty description → `""`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/skeleton.test.ts`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Write `src/cli/skeleton.ts` exactly to the Produces contract. Dependency-free (matches `render.ts`'s ethos); the javadoc block `//`-header style comes from the input object, not from environment.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/skeleton.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add src/cli/skeleton.ts test/unit/skeleton.test.ts && git commit -m "feat(cli): java-shaped skeleton renderer"`
 
@@ -256,25 +256,25 @@ Run: `git add src/cli/skeleton.ts test/unit/skeleton.test.ts && git commit -m "f
   - `read-source`: `--full` retained as explicit form, `--lines a:b` unchanged, exclusivity error unchanged; the no-flag default now exercises Task 4's core default (no mode passed).
   - `renderReadSource`'s `mode === "outline"` branch renders via `renderSkeleton(…, "summary")` instead of the table (branch is unreachable from CLI flags after this task — defensive consistency only).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `cli.test.ts` outline block (rewrite existing table assertions): (1) `outline com.example.Demo` renders `// com.example.Demo` header, `package com.example;`, `import java.util.List;`, `public class Demo {`, members as `signature;` lines, closing `}`; (2) `--kind method` output contains only method/constructor member lines; (3) `--minimal` output has no `import` lines and no field lines but keeps methods; (4) `--minimal --fields` re-enables field lines (toggle-over-preset); (5) `--full` method lines end ` { … }` and javadoc blocks render whole; (6) `--no-javadoc` suppresses javadoc lines; (7) `--table` renders the legacy header row `SELECTOR  KIND  VIS …`; (8) `--minimal --full` exits 1 with the mutual-exclusion error; (9) `--json outline … --kind method` still deep-equals the in-process `outline(ctx, fqn, {kind})` result, and `--json outline … --minimal --no-javadoc` deep-equals the in-process `outline(ctx, fqn, { preset: "minimal", sections: { javadoc: false } })` result — CLI flags and MCP params provably reach the identical core sections (the spec's parity test). In the read-source block: no-flag run renders numbered full source (Task 4 already added this — keep both green).
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npm run build && npx vitest run test/integration/cli.test.ts`
 Expected: FAIL — outline still renders the table; `--minimal` unknown option.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Wire the flags per Produces. Update the outline command's commander description string (`"java-shaped class skeleton (presets + section toggles; --table for the legacy view)"`). Keep `warn(…result.degraded)` and the miss path untouched.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npm run build && npx vitest run test/integration/cli.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add -A && git commit -m "feat(cli): outline skeleton default with presets, toggles, --table"`
 
@@ -293,25 +293,25 @@ Run: `git add -A && git commit -m "feat(cli): outline skeleton default with pres
   - `read_source` schema unchanged; its description becomes `"Source text for one class (full | lines | outline) — default full; prefer outline for the frugal first look."` The server `instructions` string gains the same frugality steer (outline/read_member before read_source).
   - Default parity is inherited from the core (Task 4) — no per-surface default exists anywhere.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `mcp.test.ts`: (1) calling the `outline` tool with `preset: "minimal"` returns the same payload as in-process `outline(ctx, fqn, { preset: "minimal" })`; (2) `sections: { fields: false, javadoc: false }` deep-equals the matching in-process call; (3) `read_source` with no `mode` returns `mode === "full"`; (4) `read_source` with `mode: "outline"` still returns the outline-shaped payload.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/integration/mcp.test.ts`
 Expected: FAIL — schema rejects `preset`/`sections`; default mode outline.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Extend the two registrations per Produces; update the two description strings.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/integration/mcp.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add -A && git commit -m "feat(mcp): outline preset/sections params, read_source defaults full"`
 
@@ -329,25 +329,25 @@ Run: `git add -A && git commit -m "feat(mcp): outline preset/sections params, re
 - Consumes: final flag surface from Tasks 6–7.
 - Produces: docs that describe the shipped behavior only. Cheatsheet outline row: `outline <fqn> [--kind k] [--visibility v] [--minimal|--full] [--no-imports] [--no-fields] [--no-methods] [--no-inner] [--no-javadoc] [--table]` → "java-shaped class skeleton". Cheatsheet read-source row: whole file by default; `--lines a:b` for a range; and one sentence stating outline/read-member are the frugal entry points before reading whole files. README changes per Files. Version `0.3.0` in both version files (a mismatch fails packaging tests).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `prime.test.ts`: the CLI cheatsheet contains `--minimal` and states read-source returns the whole file by default; it no longer contains the phrase "outline by default". `packaging.test.ts` (or a new assertion there): `VERSION` equals `package.json` version and both are `"0.3.0"`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/prime.test.ts test/integration/packaging.test.ts`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Apply the content edits per Produces. Keep the 600–1200-word budget of CLI_CONTENT roughly stable (net-new wording replaces the old rows).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/prime.test.ts test/integration/packaging.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add -A && git commit -m "docs: skeleton outline + full-default read-source; 0.3.0"`
 
@@ -361,20 +361,20 @@ Run: `git add -A && git commit -m "docs: skeleton outline + full-default read-so
 - Consumes: all previous tasks.
 - Produces: green suite evidence.
 
-- [ ] **Step 1: Rebuild everything offline**
+- [x] **Step 1: Rebuild everything offline**
 
 Run: `node scripts/build-fixtures.mjs && npm run build`
 Expected: both succeed.
 
-- [ ] **Step 2: Typecheck + full suite**
+- [x] **Step 2: Typecheck + full suite**
 
 Run: `npm run typecheck && npm test`
 Expected: 0 type errors; all unit + integration tests PASS (e2e self-skip without `JARPEEK_E2E=1`).
 
-- [ ] **Step 3: Smoke the real UX**
+- [x] **Step 3: Smoke the real UX**
 
 Run the built CLI against the fixture project (the directory `cli.test.ts` builds its `c` fixture from — mirror its setup): `node dist/cli/index.js outline com.example.Demo`, then with `--minimal`, `--full`, `--table`. Expected: skeleton renders as designed; `--table` shows the legacy table; no stderr noise.
 
-- [ ] **Step 4: Close out**
+- [x] **Step 4: Close out**
 
 Run: `git status` (expect clean tree). Update beads: `bd close jvm-src-dvv` with the spec/plan paths in the reason.
