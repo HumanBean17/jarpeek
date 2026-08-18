@@ -419,12 +419,14 @@ describe("resolve", () => {
 });
 
 describe("status", () => {
-  it("reports cacheDir and artifact counts", () => {
+  it("reports manifest and jvm rows; no cacheDir/index rows", () => {
     const run = cli(c, ["status"]);
     expect(run.code).toBe(0);
-    expect(run.stdout).toContain("cacheDir");
-    expect(run.stdout).toContain("artifactCount");
-    expect(run.stdout).toContain(c.cacheDir);
+    expect(run.stdout).toContain("manifest.present");
+    expect(run.stdout).toContain("manifest.artifactCount");
+    expect(run.stdout).toContain("jvm.available");
+    expect(run.stdout).not.toContain("cacheDir");
+    expect(run.stdout).not.toContain("index.");
   });
 
   it("--json deep-equals the in-process status result", async () => {
@@ -436,16 +438,18 @@ describe("status", () => {
 });
 
 describe("where", () => {
-  it("prints an existing unpacked sources dir", () => {
+  it("prints one line per recorded path with its existence", () => {
     const run = cli(c, ["where", "com.example:demo-lib:1.0.0"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("coordinates com.example:demo-lib:1.0.0");
-    const dirLine = run.stdout.split("\n").find((l) => l.startsWith("dir "));
-    expect(dirLine).toBeDefined();
-    const dir = dirLine!.slice("dir ".length);
-    expect(dir.startsWith(join(c.cacheDir, "v1", "unpacked"))).toBe(true);
-    expect(existsSync(dir)).toBe(true);
-    expect(existsSync(join(dir, "com", "example", "Demo.java"))).toBe(true);
+    expect(run.stdout).toContain(`sourcesJar ${DEMO_SOURCES_JAR} (exists)`);
+    expect(run.stdout.split("\n").filter((l) => /^(sourcesJar|binaryJar|sourceDir) /.test(l))).toHaveLength(1);
+  });
+
+  it("a binary-only artifact prints its single jar row", () => {
+    const run = cli(c, ["where", "nosources-lib"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain(`binaryJar ${NOSOURCES_JAR} (exists)`);
   });
 
   it("--json deep-equals the in-process where result", async () => {

@@ -1,28 +1,25 @@
 /**
- * status: the one-call health report — manifest freshness, index size, and
- * whether a JVM is available for decompilation. Nothing here bootstraps or
- * mutates: it reports what is on disk right now, so a fresh project shows
- * `manifest.present: false` until something queries or primes. The JVM probe
- * is the shared per-process `probeJvmOnce`.
+ * status: the one-call health report — manifest freshness and whether a JVM
+ * is available for decompilation. Nothing here bootstraps or mutates, and
+ * nothing reads the index: it reports what is on disk right now, so a fresh
+ * project shows `manifest.present: false` until something queries or primes.
+ * The JVM probe defaults to the shared per-process `probeJvmOnce`; tests
+ * inject their own through the `opts.jvm` seam so they do not depend on the
+ * host machine.
  */
 import { isStale } from "../../index/manifest.js";
-import { probeJvmOnce } from "../../util/jvm.js";
+import { probeJvmOnce, type JvmProbe } from "../../util/jvm.js";
 import type { QueryContext } from "./context.js";
 import { mergedDegraded } from "./outline.js";
 
 export interface StatusResult {
   projectRoot: string;
-  cacheDir: string;
   manifest: {
     present: boolean;
     resolvedAt?: string;
     stale: boolean;
     artifactCount: number;
     dependencySetHash?: string;
-  };
-  index: {
-    artifactCount: number;
-    fqnCount: number;
   };
   jvm: {
     available: boolean;
@@ -31,23 +28,25 @@ export interface StatusResult {
   degraded: string[];
 }
 
-/** Report manifest, index, and JVM state. Never throws on a missing manifest. */
-export async function status(ctx: QueryContext): Promise<StatusResult> {
+/** Test injection point for the JVM probe; defaults to the shared memoized one. */
+export interface StatusOptions {
+  jvm?: () => Promise<JvmProbe>;
+}
+
+/** Report manifest and JVM state. Never throws on a missing manifest. */
+export async function status(ctx: QueryContext, opts: StatusOptions = {}): Promise<StatusResult> {
   const manifest = await ctx.manifest();
   const stale = manifest !== null && (await isStale(ctx.projectRoot, manifest));
-  const stats = await ctx.store.stats();
 
   return {
     projectRoot: ctx.projectRoot,
-    cacheDir: ctx.cacheDir,
     manifest: {
       present: manifest !== null,
       ...(manifest !== null ? { resolvedAt: manifest.resolvedAt, dependencySetHash: manifest.dependencySetHash } : {}),
       stale,
       artifactCount: manifest?.artifacts.length ?? 0,
     },
-    index: { artifactCount: stats.artifactCount, fqnCount: stats.fqnCount },
-    jvm: await probeJvmOnce(),
+    jvm: await (opts.jvm ?? probeJvmOnce)(),
     degraded: await mergedDegraded(ctx, stale ? ["stale index served"] : []),
   };
 }

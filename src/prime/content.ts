@@ -74,8 +74,8 @@ protocol below has already tried the three recovery steps for you.
 | \`read-resource <artifact> <glob>\` | artifact + glob | non-class jar entries: configs, service descriptors, manifests |
 | \`search-symbols <query> [--limit n] [--kind k]\` | member name | every declaration with that name across artifacts |
 | \`resolve\` | — | force a resolve + index pass; reports indexed vs skipped |
-| \`status\` | — | manifest, index, and JVM availability report |
-| \`where <coordinates>\` | one artifact | the on-disk directory its sources are unpacked to |
+| \`status\` | — | manifest freshness and JVM availability report |
+| \`where <coordinates>\` | one artifact | its recorded on-disk paths (jar, sources, source dir) with existence |
 
 Add \`--json\` to any of the nine query commands above for the
 machine-readable result object — the exact payload the matching MCP tool

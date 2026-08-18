@@ -230,13 +230,13 @@ export function createMcpServer(ctx: QueryContext): McpServer {
       ),
   );
 
-  server.registerTool("status", { description: "Manifest, index, and JVM report.", inputSchema: {} }, () =>
+  server.registerTool("status", { description: "Manifest and JVM report.", inputSchema: {} }, () =>
     run(ctx, async () => ok(await status(ctx))),
   );
 
   server.registerTool(
     "where",
-    { description: "On-disk sources for one artifact.", inputSchema: { coordinates: z.string() } },
+    { description: "On-disk paths for one artifact.", inputSchema: { coordinates: z.string() } },
     ({ coordinates }) => run(ctx, async () => ok(await where(ctx, coordinates))),
   );
 

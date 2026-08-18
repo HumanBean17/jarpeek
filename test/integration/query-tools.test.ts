@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -378,16 +378,15 @@ describe("search_symbols MCP schema", () => {
 });
 
 describe("status", () => {
-  it("reports manifest, index, and jvm after bootstrap", async () => {
+  it("reports manifest and jvm after bootstrap; no index keys", async () => {
     const result = await status(c.ctx);
     expect(result.projectRoot).toBe(c.projectRoot);
-    expect(result.cacheDir).toBe(c.cacheDir);
     expect(result.manifest.present).toBe(true);
     expect(result.manifest.artifactCount).toBeGreaterThanOrEqual(2);
     expect(result.manifest.resolvedAt).toBeDefined();
     expect(result.manifest.stale).toBe(false);
-    expect(result.index.artifactCount).toBeGreaterThanOrEqual(2);
-    expect(result.index.fqnCount).toBeGreaterThan(5);
+    expect(Object.keys(result)).not.toContain("index");
+    expect(Object.keys(result)).not.toContain("cacheDir");
     expect(result.jvm.available).toBe(hasJava);
     if (hasJava) expect(result.jvm.version).toMatch(/\d/);
     expect(Array.isArray(result.degraded)).toBe(true);
@@ -395,28 +394,20 @@ describe("status", () => {
 });
 
 describe("where", () => {
-  it("demo-lib unpacks its sources jar once under v1/unpacked", async () => {
-    const first = await where(c.ctx, "demo-lib");
-    expect(first.coordinates).toBe("com.example:demo-lib:1.0.0");
-    expect(first.dir.startsWith(join(c.cacheDir, "v1", "unpacked"))).toBe(true);
-    expect(existsSync(join(first.dir, "com", "example", "Demo.java"))).toBe(true);
-    expect(first.fileCount).toBe(6); // the sources jar's six .java entries
-
-    const marker = join(first.dir, ".jarpeek-unpacked");
-    expect(existsSync(marker)).toBe(true);
-    const markerMtime = statSync(marker).mtimeMs;
-
-    const second = await where(c.ctx, "demo-lib");
-    expect(second.dir).toBe(first.dir);
-    expect(second.fileCount).toBe(first.fileCount);
-    expect(statSync(marker).mtimeMs).toBe(markerMtime);
+  it("demo-lib lists its sources and binary jar paths, unpacking nothing", async () => {
+    const result = await where(c.ctx, "demo-lib");
+    expect(result.coordinates).toBe("com.example:demo-lib:1.0.0");
+    expect(result.paths).toEqual([
+      { role: "sourcesJar", path: DEMO_SOURCES_JAR, exists: true },
+    ]);
+    // the eager unpack died with the index: nothing lands under v1/unpacked
+    expect(existsSync(join(c.cacheDir, "v1", "unpacked"))).toBe(false);
   });
 
-  it("binary-only artifact reports the jar path with a no-sources note", async () => {
+  it("binary-only artifact lists its single jar path", async () => {
     const result = await where(c.ctx, "nosources-lib");
     expect(result.coordinates).toBe("com.example:nosources-lib:1.0.0");
-    expect(result.dir).toBe(NOSOURCES_JAR);
-    expect(result.note).toContain("no sources jar");
+    expect(result.paths).toEqual([{ role: "binaryJar", path: NOSOURCES_JAR, exists: true }]);
   });
 
   it("unknown artifact query throws", async () => {
@@ -463,6 +454,9 @@ describe("read_resource / where honesty parity", () => {
 
       const location = await where(ctx, "demo-lib");
       expect(location.stale).toBe(true);
+      expect(location.paths).toEqual([
+        { role: "binaryJar", path: DEMO_JAR, exists: true },
+      ]);
       expect(location.degraded.some((d) => d.includes("stale"))).toBe(true);
     } finally {
       // cleaned up via suites in afterAll

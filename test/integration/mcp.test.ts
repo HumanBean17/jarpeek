@@ -6,8 +6,8 @@
  * Cursor) sees — input schemas validated, results as text-serialized core
  * objects. Responses are pinned to committed goldens under
  * `test/golden/mcp/` (regenerate with `UPDATE_GOLDENS=1`); the `status`
- * golden is compared with volatile fields (cacheDir, resolvedAt, hashes)
- * normalized away first.
+ * golden is compared with volatile fields (resolvedAt, hashes, the jvm
+ * probe) normalized away first.
  *
  * Same harness shape as the CLI suite: a tmp project bootstrapped in-process
  * with injected resolvers, cache dir pinned via JARPEEK_CACHE_DIR — except
@@ -172,7 +172,8 @@ function expectGolden(name: string, actual: unknown): void {
 
 /**
  * Replace run- and machine-varying status fields with sentinels before the
- * golden compare: tmpdir paths, timestamps, hashes, and the whole JVM probe.
+ * golden compare: the tmpdir project root, timestamps, hashes, and the whole
+ * JVM probe.
  * The jvm block is normalized unconditionally — both values AND their
  * presence differ per machine (no-JVM answers `available: false` with no
  * version key; an unparseable `-version` answers `available: true` with no
@@ -186,7 +187,6 @@ function normalizeStatus(result: any): any {
   return {
     ...result,
     projectRoot: "<projectRoot>",
-    cacheDir: "<cacheDir>",
     ...(result.manifest !== undefined
       ? {
           manifest: {
@@ -364,18 +364,21 @@ describe("read_resource + search_symbols + where", () => {
     expect(parsed.rows[0].selector).toBe("run");
   });
 
-  it("where reports the unpacked dir", async () => {
+  it("where lists the artifact's recorded paths", async () => {
     const parsed = payload(await call("where", { coordinates: "com.example:demo-lib:1.0.0" }));
-    expect(parsed.dir.startsWith(join(c.cacheDir, "v1", "unpacked"))).toBe(true);
-    expect(existsSync(parsed.dir)).toBe(true);
+    expect(parsed.paths).toEqual([
+      { role: "sourcesJar", path: DEMO_SOURCES_JAR, exists: true },
+    ]);
+    expect(existsSync(DEMO_SOURCES_JAR)).toBe(true);
   });
 });
 
 describe("status", () => {
-  it("reports manifest and index, golden-pinned modulo volatile fields", async () => {
+  it("reports manifest and jvm, golden-pinned modulo volatile fields", async () => {
     const parsed = payload(await call("status", {}));
     expect(parsed.manifest.present).toBe(true);
-    expect(parsed.index.artifactCount).toBeGreaterThanOrEqual(2);
+    expect(parsed.index).toBeUndefined();
+    expect(parsed.cacheDir).toBeUndefined();
     expect(parsed.projectRoot).toBe(c.projectRoot);
     const expected = await status(c.ctx);
     expect({ ...parsed, jvm: expected.jvm }).toEqual({ ...expected, jvm: expected.jvm });

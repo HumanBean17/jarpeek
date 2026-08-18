@@ -215,27 +215,22 @@ function renderStatus(result: StatusResult): string {
   return renderTable([
     ["KEY", "VALUE"],
     ["projectRoot", result.projectRoot],
-    ["cacheDir", result.cacheDir],
     ["manifest.present", String(result.manifest.present)],
     ["manifest.resolvedAt", result.manifest.resolvedAt ?? ""],
     ["manifest.stale", String(result.manifest.stale)],
     ["manifest.artifactCount", String(result.manifest.artifactCount)],
     ["manifest.dependencySetHash", result.manifest.dependencySetHash ?? ""],
-    ["index.artifactCount", String(result.index.artifactCount)],
-    ["index.fqnCount", String(result.index.fqnCount)],
     ["jvm.available", String(result.jvm.available)],
     ["jvm.version", result.jvm.version ?? ""],
   ]);
 }
 
 function renderWhere(result: WhereResult): string {
-  // key-value lines, not a table: the dir is the payload and must never be
-  // clipped by the 60-char column cap
+  // one line per path, not a table: the paths are the payload and must never
+  // be clipped by the 60-char column cap
   return [
     `coordinates ${result.coordinates}`,
-    `dir ${result.dir}`,
-    `files ${result.fileCount}`,
-    ...(result.note !== undefined ? [`note ${result.note}`] : []),
+    ...result.paths.map((row) => `${row.role} ${row.path} (${row.exists ? "exists" : "missing"})`),
   ].join("\n");
 }
 
@@ -432,14 +427,14 @@ command("resolve", "force a resolve + index pass").action(async () => {
   for (const entry of result.degraded) warn(`${entry.from}: ${entry.reason}`);
 });
 
-command("status", "manifest, index, and JVM report").action(async () => {
+command("status", "manifest and JVM report").action(async () => {
   const inv = invocation();
   const result = await status(ctxFor(inv));
   emit(result, inv, () => renderStatus(result));
   if (result.degraded.length > 0) warn(...result.degraded);
 });
 
-command("where", "on-disk sources for one artifact")
+command("where", "on-disk paths for one artifact")
   .argument("<coordinates>")
   .action(async (coordinates: string) => {
     const inv = invocation();
