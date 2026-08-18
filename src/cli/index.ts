@@ -15,7 +15,8 @@
  * actually running, so a minutes-long cold-cache download never reads as a
  * hang.
  */
-import { Command, InvalidArgumentError } from "commander";
+import { Command, InvalidArgumentError, Option } from "commander";
+import { KIND_VALUES, VISIBILITY_VALUES } from "../core/enums.js";
 import { VERSION } from "../version.js";
 import { renderJson } from "./json.js";
 import { clipCell, numberLines, renderTable } from "./render.js";
@@ -359,8 +360,8 @@ command("find-class", "find classes by FQN, suffix, simple name, or fuzzy name")
 
 /** Flags of the outline subcommand: presets, section toggles, legacy table. */
 interface OutlineCmd {
-  kind?: string;
-  visibility?: string;
+  kind?: DeclKind;
+  visibility?: Visibility;
   minimal?: boolean;
   full?: boolean;
   imports?: boolean;
@@ -376,8 +377,10 @@ command(
   "java-shaped class skeleton (presets + section toggles; --table for the legacy view)",
 )
   .argument("<fqn>")
-  .option("--kind <k>", "filter by declaration kind")
-  .option("--visibility <v>", "filter by visibility")
+  // choice-constrained so an invalid value is a named usage error, and the
+  // valid set renders into --help from the same arrays the MCP schema uses
+  .addOption(new Option("--kind <k>", "filter by declaration kind").choices(KIND_VALUES))
+  .addOption(new Option("--visibility <v>", "filter by visibility").choices(VISIBILITY_VALUES))
   .option("--minimal", "preset: no imports, no fields, no javadoc")
   .option("--full", "preset: everything, javadoc blocks and body markers")
   .option("--imports", "show imports (overrides the preset)")
@@ -412,8 +415,8 @@ command(
       const overrides = hasOverrides ? toggles : undefined;
       const sections = resolveSections(preset, overrides);
       const result = await outline(ctx, fqn, {
-        ...(cmd.kind !== undefined ? { kind: cmd.kind as DeclKind } : {}),
-        ...(cmd.visibility !== undefined ? { visibility: cmd.visibility as Visibility } : {}),
+        ...(cmd.kind !== undefined ? { kind: cmd.kind } : {}),
+        ...(cmd.visibility !== undefined ? { visibility: cmd.visibility } : {}),
         preset,
         ...(overrides !== undefined ? { sections: overrides } : {}),
       });
@@ -492,15 +495,15 @@ command("search-symbols", "find declarations by member name in one artifact")
   .argument("<query>")
   .requiredOption("--artifact <coords>", "g:a:v coordinates or unique artifact id")
   .option("--limit <n>", "max rows", parsePositiveInt, 50)
-  .option("--kind <k>", "filter by declaration kind")
-  .action(async (query: string, cmd: { artifact: string; limit: number; kind?: string }) => {
+  .addOption(new Option("--kind <k>", "filter by declaration kind").choices(KIND_VALUES))
+  .action(async (query: string, cmd: { artifact: string; limit: number; kind?: DeclKind }) => {
     const inv = invocation();
     const ctx = ctxFor(inv);
     await runQuery(inv, ctx, async () => {
       const result = await searchSymbols(ctx, query, {
         artifact: cmd.artifact,
         limit: cmd.limit,
-        ...(cmd.kind !== undefined ? { kind: cmd.kind as DeclKind } : {}),
+        ...(cmd.kind !== undefined ? { kind: cmd.kind } : {}),
       });
       emit(
         result,
