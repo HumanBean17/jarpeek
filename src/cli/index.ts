@@ -9,7 +9,8 @@
  * nothing) walks handleMiss and exits 0 with its answer; SelectorError and
  * IO failures are the only fatal paths (exit 1). Everything diagnostic —
  * bootstrap progress, warnings, degradations — goes to stderr so stdout
- * stays parseable.
+ * stays parseable, under a hard three-line budget per invocation (one
+ * bootstrap notice plus the two warning lines `warn` prints).
  */
 import { Command, InvalidArgumentError } from "commander";
 import { VERSION } from "../version.js";
@@ -59,9 +60,21 @@ function ctxFor(inv: Invocation): QueryContext {
   });
 }
 
-/** Print `warning: <msg>` lines (degradations, partial misses) to stderr. */
+/**
+ * Print warnings to stderr under the output budget: the first warning
+ * verbatim, everything after it collapsed into ONE aggregate line pointing
+ * at `jarpeek status`. Deduplicated (order-preserving) before counting, so
+ * the same degradation named twice costs nothing. Together with the single
+ * bootstrap notice this keeps any invocation at ≤3 stderr lines — the number
+ * is the product feature (v1 printed one line per artifact).
+ */
 function warn(...messages: string[]): void {
-  for (const message of messages) process.stderr.write(`warning: ${message}\n`);
+  const unique = [...new Set(messages)];
+  if (unique.length === 0) return;
+  process.stderr.write(`warning: ${unique[0]}\n`);
+  if (unique.length > 1) {
+    process.stderr.write(`warning: +${unique.length - 1} more (see: jarpeek status)\n`);
+  }
 }
 
 /** Emit the result object in the mode the invocation asked for. */
@@ -350,8 +363,12 @@ command("read-member", "source slices for member selectors (#name, #name(T1,T2))
       // space-separated args and one comma-joined string are the same list
       const result = await readMember(ctx, fqn, selectors.join(","));
       emit(result, inv, () => renderReadMember(result));
-      for (const miss of result.misses) warn(`${miss.selector}: ${miss.reason}`);
-      if (result.degraded.length > 0) warn(...result.degraded);
+      // one warn call for the whole invocation: the budget is per run, not
+      // per warn site, so misses and degradations share the two-line ceiling
+      warn(
+        ...result.misses.map((miss) => `${miss.selector}: ${miss.reason}`),
+        ...result.degraded,
+      );
     });
   });
 
@@ -416,9 +433,7 @@ command("resolve", "force a dependency resolve pass").action(async () => {
   const ctx = ctxFor(inv);
   const result = await resolveNow(ctx);
   emit(result, inv, () => renderResolve(result));
-  if (result.degraded.length > 0) {
-    for (const entry of result.degraded) warn(`${entry.from}: ${entry.reason}`);
-  }
+  warn(...result.degraded.map((entry) => `${entry.from}: ${entry.reason}`));
 });
 
 command("status", "manifest and JVM report").action(async () => {
