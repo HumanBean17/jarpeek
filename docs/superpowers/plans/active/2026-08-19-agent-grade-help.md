@@ -36,25 +36,25 @@
 - Consumes: `DeclKind` and `Visibility` unions from `src/core/types.ts` (`DeclKind` = `class | interface | enum | record | annotation | object | method | constructor | field | property | enum-constant`; `Visibility` = `public | protected | package | private`).
 - Produces: `src/core/enums.ts` exports `KIND_VALUES` and `VISIBILITY_VALUES` — readonly string arrays with the exact values and order currently in `src/mcp/server.ts:31-43` and `51-56` (`KIND_VALUES` in the order class, interface, enum, record, annotation, object, method, constructor, field, property, enum-constant), each declared `as const satisfies readonly DeclKind[]` / `readonly Visibility[]`, with the two exhaustiveness-check aliases and their forcing consts moved verbatim. `server.ts` keeps its `KIND_ENUM = z.enum(KIND_VALUES)` / `VISIBILITY_ENUM` lines, now importing the arrays; MCP wire behavior is byte-identical.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `test/unit/enums.test.ts` with two cases: (1) `KIND_VALUES` deep-equals the exact 11-value ordered list above; (2) `VISIBILITY_VALUES` deep-equals `["public", "protected", "package", "private"]`. Import from `../src/core/enums.js`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/unit/enums.test.ts`
 Expected: FAIL — cannot resolve `../src/core/enums.js` (module does not exist).
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Create `src/core/enums.ts` with the two arrays, their `satisfies` clauses, and the moved exhaustiveness checks (keep the existing explanatory comments about the conditional-type trick). Edit `src/mcp/server.ts`: delete lines 30-63 (the two array definitions and their checks), add `KIND_VALUES`/`VISIBILITY_VALUES` to the import from `../core/enums.js`, leave the `z.enum` lines and every tool schema untouched.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/enums.test.ts test/unit/cli-smoke.test.ts test/integration/mcp.test.ts && npm run typecheck`
 Expected: all PASS (mcp.test.ts proves the server rewiring changed nothing), typecheck clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add src/core/enums.ts src/mcp/server.ts test/unit/enums.test.ts`
 Run: `git commit -m "refactor: shared decl-kind/visibility enums in core/enums.ts"`
@@ -71,7 +71,7 @@ Run: `git commit -m "refactor: shared decl-kind/visibility enums in core/enums.t
 - Consumes: `KIND_VALUES`, `VISIBILITY_VALUES` from `src/core/enums.js` (Task 1); commander's `Option` class alongside the existing `Command`/`InvalidArgumentError` imports.
 - Produces: three flags become choice-constrained: `outline --kind <k>` (choices = `KIND_VALUES`), `outline --visibility <v>` (choices = `VISIBILITY_VALUES`), `search-symbols --kind <k>` (choices = `KIND_VALUES`). Option descriptions keep their current text ("filter by declaration kind" / "filter by visibility"). The `OutlineCmd` interface tightens `kind?: DeclKind` and `visibility?: Visibility` (was `string`), and the actions drop the `as DeclKind` / `as Visibility` casts — a valid choice is guaranteed by the parser. Later tasks and MCP parity rely on no other surface change: `--json` payloads, renderer calls, and miss behavior are byte-identical for valid values.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Extend `test/unit/cli-smoke.test.ts` with a `describe("flag value validation")` containing four cases, each via `runCli`:
 
@@ -80,21 +80,21 @@ Extend `test/unit/cli-smoke.test.ts` with a `describe("flag value validation")` 
 3. `["search-symbols", "builder", "--artifact", "g:a:1", "--kind", "methods"]` → `code === 1`, `stderr` contains `Allowed choices are`.
 4. `["outline", "--help"]` → `code === 0`, `stdout` contains `(choices:` and `enum-constant` (commander auto-renders the declared choices into the options table).
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/cli-smoke.test.ts`
 Expected: the three validation cases FAIL with `code` 0 (or a different stderr — today a wrong `--kind` silently filters results); the help case FAILS (no `(choices:` in output). The pre-existing three smoke cases still PASS.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `src/cli/index.ts`: import `Option` from commander and the two arrays from `../core/enums.js`. For outline, replace the two string-style `.option()` calls for `--kind`/`--visibility` with `addOption(new Option("--kind <k>", "filter by declaration kind").choices(...))` and the visibility twin (if the TS typings demand a mutable array, spread: `choices([...KIND_VALUES])`); leave the preset/toggle flags as they are. Do the same for search-symbols `--kind`. Update `OutlineCmd` field types and remove the casts in both action bodies (pass `cmd.kind` / `cmd.visibility` straight through).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/cli-smoke.test.ts test/unit/enums.test.ts && npm run typecheck`
 Expected: all PASS, typecheck clean (the tightened `OutlineCmd` types must not break the outline action).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add src/cli/index.ts test/unit/cli-smoke.test.ts`
 Run: `git commit -m "feat(cli): choice-validate --kind/--visibility, values render in help"`
@@ -109,9 +109,9 @@ Run: `git commit -m "feat(cli): choice-validate --kind/--visibility, values rend
 
 **Interfaces:**
 - Consumes: `topMatches<T>(items: T[], label: (t: T) => string, query: string, limit: number): Array<{ item: T; score: number }>` from `src/core/fuzzy.ts` (returns ranked fuzzy matches, non-matches dropped); `InvalidArgumentError` from commander (the existing fatal catch prints its message bare — no `error:` prefix — and exits 1); the registered subcommand names on `program.commands` (commander also auto-registers `help` — exclude it from candidates).
-- Produces: the program fallback behavior other tooling depends on: bare `jarpeek` (no operands) prints help to stdout, exit 0 — unchanged. Any unmatched first operand throws `InvalidArgumentError` whose message is exactly `unknown command 'find-classes' — did you mean 'find-class'? (see: jarpeek --help)` when a suggestion exists, or `unknown command 'frobnicate' (see: jarpeek --help)` when none does. A suggestion exists iff `topMatches` over the 12 command names (find-class, outline, read-member, read-source, read-resource, search-symbols, resolve, status, where, mcp, prime, init — `help` excluded) returns at least one entry; the suggestion is the first entry's name. Exit 1, stderr.
+- Produces: the program fallback behavior other tooling depends on: bare `jarpeek` (no operands) prints help to stdout, exit 0 — unchanged. Any unmatched first operand throws `InvalidArgumentError` whose message is exactly `unknown command 'find-classes' — did you mean 'find-class'? (see: jarpeek --help)` when a suggestion exists, or `unknown command 'frobnicate' (see: jarpeek --help)` when none does. A suggestion exists iff some command name fuzzy-matches the operand — implemented as `fuzzyScore` scored in **both directions** per candidate (query=operand→target=name and query=name→target=operand), keeping each candidate's max: one direction alone misses typos that lengthen the name (`find-classes` is not a subsequence of `find-class`, but the reverse matches). Candidates are the 12 command names (find-class, outline, read-member, read-source, read-resource, search-symbols, resolve, status, where, mcp, prime, init — `help` excluded), ranked score-descending; the suggestion is the top name. Exit 1, stderr.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Extend `test/unit/cli-smoke.test.ts` with a `describe("unknown command")` containing three cases via `runCli`:
 
@@ -119,21 +119,21 @@ Extend `test/unit/cli-smoke.test.ts` with a `describe("unknown command")` contai
 2. `["frobnicate"]` → `code === 1`, `stderr` contains `unknown command 'frobnicate'` and does NOT contain `did you mean`.
 3. The pre-existing case `[]` (bare invocation) still exits 0 with `Usage:` on stdout — keep it green (it already exists as "no args prints help with Usage and subcommands, exit 0").
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/cli-smoke.test.ts`
 Expected: the two new cases FAIL — today both print help to stdout and exit 0. The bare-invocation case still PASSES.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
-Replace the body of the fallback `program.action` in `src/cli/index.ts`: read the operands from the `Command` parameter's `.args`; when empty, call `program.help()` as today; otherwise build the message per the contract above (candidate list = `program.commands` names minus `help`, suggestion = first `topMatches` entry when non-empty) and `throw new InvalidArgumentError(message)` — the existing `parseAsync().catch` already prints it bare to stderr and exits 1.
+Replace the body of the fallback `program.action` in `src/cli/index.ts`: read the operands from the `Command` parameter's `.args`; when empty, call `program.help()` as today; otherwise build the message per the contract above (candidate list = `program.commands` names minus `help`, suggestion = the best both-directions `fuzzyScore` candidate when any matches) and `throw new InvalidArgumentError(message)` — the existing `parseAsync().catch` already prints it bare to stderr and exits 1.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/cli-smoke.test.ts`
 Expected: all PASS, including the pre-existing bare-invocation and flag-validation cases.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add src/cli/index.ts test/unit/cli-smoke.test.ts`
 Run: `git commit -m "feat(cli): unknown command exits 1 with did-you-mean suggestion"`
@@ -166,25 +166,25 @@ Run: `git commit -m "feat(cli): unknown command exits 1 with did-you-mean sugges
     - `INIT_HELP`: example `jarpeek init --yes`; text: non-interactive wiring (Claude Code + MCP).
   - The `command(name, description, helpText?)` helper in `src/cli/index.ts` calls `sub.addHelpText("after", helpText)` when the third argument is present; every `command(...)` call site passes its block. The program gets `program.addHelpText("after", TOP_LEVEL_HELP)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `test/unit/cli-help.test.ts` with a unit `describe` (no spawn) asserting on the imported constants: `TOP_LEVEL_HELP` contains the exact frugal-path sentence, all five example lines, and the exact cheatsheet pointer line; each per-command block contains its example line(s) from the contract and a line starting `related:`. Then an integration `describe` with three `runCli` cases: (1) `["--help"]` → exit 0, stdout contains `the frugal path:` and `full agent cheatsheet: jarpeek prime --full`; (2) `["outline", "--help"]` → exit 0, stdout contains `Examples:` and `read-member`; (3) `["read-source", "--help"]` → exit 0, stdout contains `related:` and `outline`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/cli-help.test.ts`
 Expected: FAIL — cannot resolve `../src/cli/help.js`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Create `src/cli/help.ts` with the constants per the contract above (a short file-header comment stating the block contract: blank-line-led, Examples + related, values auto-rendered by commander so never duplicated here). In `src/cli/index.ts`: extend the `command()` helper with the optional third parameter and its `addHelpText` call, pass each block at its call site, and add the top-level `addHelpText`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/cli-help.test.ts test/unit/cli-smoke.test.ts`
 Expected: all PASS — including Task 2/3 cases (help additions must not disturb choice rendering or the unknown-command path).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add src/cli/help.ts src/cli/index.ts test/unit/cli-help.test.ts`
 Run: `git commit -m "feat(cli): agent-grade help — frugal path, examples, related links"`
@@ -200,12 +200,12 @@ Run: `git commit -m "feat(cli): agent-grade help — frugal path, examples, rela
 - Consumes: everything from Tasks 1-4.
 - Produces: a verified tree — full suite green, typecheck clean, every spec decision confirmed present, nothing outside the spec's scope changed.
 
-- [ ] **Step 1: Run the full quality gates**
+- [x] **Step 1: Run the full quality gates**
 
 Run: `npm test && npm run typecheck`
 Expected: full suite PASS (unit + integration; e2e self-skips without `JARPEEK_E2E=1`), typecheck clean.
 
-- [ ] **Step 2: Manual smoke of the cold-agent path**
+- [x] **Step 2: Manual smoke of the cold-agent path**
 
 Run each and confirm against the spec's contract:
 - `npx tsx src/cli/index.ts` → help on stdout, exit 0
@@ -215,11 +215,11 @@ Run each and confirm against the spec's contract:
 - `npx tsx src/cli/index.ts find-classes Foo` → exit 1, `did you mean 'find-class'?`
 - `npx tsx src/cli/index.ts mcp --help` → block present (the mcp command is registered via `registerMcpCommand`, not the `command()` helper — if its block is missing, wire `MCP_HELP` inside `src/cli/mcp-command.ts` with the same `addHelpText` call; that file is in scope for this step only)
 
-- [ ] **Step 3: Spec coverage check**
+- [x] **Step 3: Spec coverage check**
 
 Walk the spec's locked decisions 1-7 (`docs/superpowers/specs/active/2026-08-19-agent-grade-help-design.md`) against the tree: D1 scope (no new commands, no heuristics — confirm nothing extra crept in), D2 choices, D3 shared enums, D4 help architecture (note: enum lists reach help via `choices()` auto-render, satisfying D4's no-drift intent without hand interpolation), D5 unknown command, D6 prime pointer, D7 miss protocol untouched (`test/unit/miss.test.ts` green). Fix any gap the same way its task would have.
 
-- [ ] **Step 4: Commit any residual fix (or nothing)**
+- [x] **Step 4: Commit any residual fix (or nothing)**
 
 Run: `git status` — expected clean tree after the previous tasks. If Step 2 or 3 produced a fix (e.g. the mcp-command wiring), commit it: `git commit -m "fix(cli): help coverage gap from verification sweep"`.
 
