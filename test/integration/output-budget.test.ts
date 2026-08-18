@@ -192,7 +192,9 @@ describe("resolve caps its warning lines: first 5, then one aggregate", () => {
     roots.push(m2);
   });
 
-  it("prints 14 warnings as 5 lines plus ONE '+9 more' aggregate", () => {
+  // spawns the CLI against a 24-artifact m2 tree — CI runners need headroom
+  // past the 30s default (timed out on a contended runner once)
+  it("prints 14 warnings as 5 lines plus ONE '+9 more' aggregate", { timeout: 90_000 }, () => {
     const run = cli(projectRoot, ["resolve"], pin);
     expect(run.code).toBe(0);
     const out = lines(run.stdout);

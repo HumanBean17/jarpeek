@@ -140,9 +140,8 @@ describe("packaging", () => {
     expect(license).toContain("2026");
   });
 
-  it("ships one version: package.json and src/version.ts agree at 0.3.0", () => {
+  it("ships one version: src/version.ts matches package.json", () => {
     const pkg = readPkg();
-    expect(pkg.version).toBe("0.3.0");
     expect(VERSION).toBe(pkg.version);
   });
 });

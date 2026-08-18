@@ -33,9 +33,11 @@ jobs:
           node-version: 24
           cache: npm
 
-      # Node 24 bundles npm 11, but trusted publishing needs >= 11.5.1 — pin up.
-      - name: Upgrade npm for trusted publishing
-        run: npm install -g npm@latest
+      # Trusted publishing needs npm >= 11.5.1. Stay off 12.x: its
+      # `npm notice run` stderr lines and pack --json object shape break
+      # the test suite (output-budget, packaging tests).
+      - name: Pin npm for trusted publishing
+        run: npm install -g npm@11
 
       - name: Verify tag matches package.json version
         run: |

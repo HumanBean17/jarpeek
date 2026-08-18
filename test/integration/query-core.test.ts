@@ -499,7 +499,10 @@ describe("collisions (manifest order)", () => {
 });
 
 describe("stale index served", () => {
-  it("a stale manifest is served flagged with stale: true and a degraded entry", async () => {
+  // runs the failing resolve cascade (gradle/maven probes) after the build
+  // file moves — CI runners need headroom past the 30s default (timed out
+  // on contended runners twice)
+  it("a stale manifest is served flagged with stale: true and a degraded entry", { timeout: 90_000 }, async () => {
     const ctx = await contextWith([
       { coordinates: "com.example:demo-lib:1.0.0", kind: "external", sourcesJar: DEMO_SOURCES_JAR },
     ]);
