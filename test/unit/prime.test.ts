@@ -60,6 +60,11 @@ describe("defaultPrimeContent(mcp)", () => {
     expect(line).toBeDefined();
     expect(line).toContain(",");
   });
+
+  it("teaches lazy resolution, not indexing", () => {
+    expect(defaultPrimeContent("mcp")).not.toMatch(/indexing/i);
+    expect(defaultPrimeContent("mcp")).not.toMatch(/first index/i);
+  });
 });
 
 describe("defaultPrimeContent(cli)", () => {
@@ -82,6 +87,21 @@ describe("defaultPrimeContent(cli)", () => {
     expect(text).toContain("decompiled");
     expect(text).toContain("signature");
     expect(text).toContain("full content: jarpeek prime --export");
+  });
+
+  it("teaches the lazy contracts", () => {
+    // search-symbols is scoped: the artifact flag is part of the contract
+    expect(text).toContain("search-symbols <query> --artifact <g:a:v>");
+    // lazy resolution: first query (or stale manifest) resolves, never indexes
+    expect(text).not.toMatch(/indexing/i);
+    expect(text).not.toMatch(/first index/i);
+    expect(text).toMatch(/auto-?resolve/);
+    expect(text).toContain("never indexes");
+    // misses are answers: suggestions / did-you-mean, exit 0
+    expect(text).toContain("exit 0");
+    expect(text).toContain("did you mean");
+    // where's contract is the paths line
+    expect(text).toContain("where <coordinates>");
   });
 
   it("bolds the rule", () => {
