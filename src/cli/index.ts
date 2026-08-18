@@ -21,6 +21,7 @@ import { VERSION } from "../version.js";
 import { renderJson } from "./json.js";
 import { clipCell, numberLines, renderTable } from "./render.js";
 import { handleMiss, type MissResult } from "../core/miss.js";
+import { fuzzyScore } from "../core/fuzzy.js";
 import { openContext, type QueryContext } from "../core/query/context.js";
 import { findClass, type FindClassResult } from "../core/query/find-class.js";
 import {
@@ -569,8 +570,35 @@ command("init", "wire AI harnesses (MCP server or CLI hints) for this project")
     emit(result, inv, () => renderInit(result));
   });
 
-program.action(() => {
-  program.help();
+program.action((...rest: unknown[]) => {
+  // the fallback fires only when no subcommand matched: bare invocation is a
+  // legitimate "how do I use this" (help, exit 0), anything else is a typo'd
+  // or invented command and must read as the usage error it is — v0.3 printed
+  // help to stdout and exited 0, indistinguishable from success
+  const cmd = rest.at(-1) as Command;
+  const operands = cmd.args;
+  if (operands.length === 0) {
+    program.help();
+  }
+  // both directions: a typo can delete from the name (findclass ⊂ find-class)
+  // or add to it (find-class ⊂ find-classes) — one subsequence direction
+  // alone misses half the typos, so each candidate keeps its better score
+  const candidates = program.commands
+    .map((c) => c.name())
+    .filter((name) => name !== "help");
+  const scored = candidates
+    .map((name) => {
+      const forward = fuzzyScore(operands[0]!, name);
+      const backward = fuzzyScore(name, operands[0]!);
+      const best = forward === null ? backward : backward === null ? forward : Math.max(forward, backward);
+      return best === null ? null : { name, score: best };
+    })
+    .filter((entry): entry is { name: string; score: number } => entry !== null)
+    .sort((a, b) => b.score - a.score);
+  const suggestion = scored.length > 0 ? ` — did you mean '${scored[0]!.name}'?` : "";
+  throw new InvalidArgumentError(
+    `unknown command '${operands[0]}'${suggestion} (see: jarpeek --help)`,
+  );
 });
 
 program.parseAsync().catch((error: unknown) => {

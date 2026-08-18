@@ -90,3 +90,21 @@ describe("flag value validation", () => {
     expect(stdout).toContain("enum-constant");
   });
 });
+
+describe("unknown command", () => {
+  it("a near-miss command name exits 1 on stderr with a did-you-mean", async () => {
+    const { stdout, stderr, code } = await runCli(["find-classes", "Foo"]);
+    expect(code).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("unknown command 'find-classes'");
+    expect(stderr).toContain("did you mean 'find-class'");
+    expect(stderr).toContain("(see: jarpeek --help)");
+  });
+
+  it("a far-off command name exits 1 without a suggestion", async () => {
+    const { stderr, code } = await runCli(["frobnicate"]);
+    expect(code).toBe(1);
+    expect(stderr).toContain("unknown command 'frobnicate'");
+    expect(stderr).not.toContain("did you mean");
+  });
+});
