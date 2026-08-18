@@ -171,10 +171,8 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     expect(springTx.sourcesJar).toBe(
       join(m2, "org", "springframework", "spring-tx", "6.1.4", "spring-tx-6.1.4-sources.jar"),
     );
-    // the legacy per-artifact metadata fields are no longer set here
-    expect(springTx.provenance).toBeUndefined();
-    expect(springTx.warnings).toBeUndefined();
-    expect(springTx.classesDir).toBeUndefined();
+    // exact shape: the legacy per-artifact metadata fields no longer exist
+    expect(Object.keys(springTx).sort()).toEqual(["binaryJar", "configuration", "coordinates", "kind", "sourcesJar"]);
 
     const junit = lookup(JUNIT);
     expect(junit.kind).toBe("external");
@@ -182,7 +180,6 @@ describe("resolveMaven: parsing the build-classpath output", () => {
       join(m2, "org", "junit", "jupiter", "junit-jupiter", "5.10.2", "junit-jupiter-5.10.2.jar"),
     );
     expect(junit.sourcesJar).toBeUndefined();
-    expect(junit.provenance).toBeUndefined();
 
     // invocation shape: bare mvn (no wrapper in scratch, probe passed), the
     // goal pins, cwd projectRoot, default timeout, output under os.tmpdir;

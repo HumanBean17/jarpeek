@@ -47,7 +47,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<{ ctx: Quer
     dependencySetHash: await computeDependencySetHash(root),
     artifacts,
   });
-  return { ctx: openContext(root, { cacheDir: freshRoot(), onNotice: () => {} }), root };
+  return { ctx: openContext(root, { onNotice: () => {} }), root };
 }
 
 const JVM = { available: true, version: "25.0.2" };
@@ -75,7 +75,7 @@ describe("status without the index", () => {
     expect(result.degraded).toEqual([]);
   });
 
-  it("carries no index or cacheDir keys", async () => {
+  it("carries no index key", async () => {
     const result = await status(ctx, { jvm: () => Promise.resolve(JVM) });
     expect(Object.keys(result)).not.toContain("index");
     expect(Object.keys(result)).not.toContain("cacheDir");
@@ -106,7 +106,7 @@ describe("status on a manifest-less project", () => {
   it("reports present false, artifactCount 0, and never throws", async () => {
     const root = freshRoot();
     writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
-    const ctx = openContext(root, { cacheDir: freshRoot(), onNotice: () => {} });
+    const ctx = openContext(root, { onNotice: () => {} });
     const result = await status(ctx, { jvm: () => Promise.resolve({ available: false }) });
     expect(result.manifest.present).toBe(false);
     expect(result.manifest.artifactCount).toBe(0);

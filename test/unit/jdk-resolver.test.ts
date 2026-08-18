@@ -56,7 +56,7 @@ describe("resolveJdk", () => {
     root = undefined;
   });
 
-  it("resolves lib/src.zip as a slim sourcesJar artifact with no classesDir", async () => {
+  it("resolves lib/src.zip as a slim sourcesJar artifact", async () => {
     delete process.env.JAVA_HOME; // pin resolution to the javaHome we pass
     const javaHome = scratch();
     writeRelease(javaHome, "21.0.0");
@@ -64,7 +64,7 @@ describe("resolveJdk", () => {
 
     const { artifact, warnings } = await resolveJdk({ javaHome });
 
-    // exact shape: the jimage-era provenance/warnings/classesDir are gone
+    // exact shape: the jimage-era per-artifact fields are gone
     expect(artifact).toEqual({
       coordinates: "jdk:21.0.0",
       kind: "jdk",

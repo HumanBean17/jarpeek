@@ -1,9 +1,7 @@
 /**
  * Warning-channel lifecycle: the degraded[] arrays every tool returns are
- * only honest if (a) they describe the LAST bootstrap rather than the
- * accumulation of every bootstrap this process ever ran, and (b) a fresh
- * process serving an existing manifest still surfaces the per-artifact
- * warnings resolution persisted into it.
+ * only honest if they describe the LAST bootstrap rather than the
+ * accumulation of every bootstrap this process ever ran.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
@@ -19,12 +17,11 @@ const DEMO_SOURCES_JAR = join(FIXTURES, "jars", "demo-lib-1.0.0-sources.jar");
 
 const roots: string[] = [];
 
-function freshProject(): { projectRoot: string; cacheDir: string } {
+function freshProject(): { projectRoot: string } {
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-warnchan-project-"));
-  const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-warnchan-cache-"));
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
-  roots.push(projectRoot, cacheDir);
-  return { projectRoot, cacheDir };
+  roots.push(projectRoot);
+  return { projectRoot };
 }
 
 afterAll(() => {
@@ -33,14 +30,12 @@ afterAll(() => {
 
 describe("warning channel lifecycle", () => {
   it("a successful bootstrap clears the previous bootstrap's warnings", async () => {
-    const { projectRoot, cacheDir } = freshProject();
+    const { projectRoot } = freshProject();
     const goodArtifacts: DependencyArtifact[] = [
       {
         coordinates: "com.example:demo-lib:1.0.0",
         kind: "external",
         sourcesJar: DEMO_SOURCES_JAR,
-        provenance: "source",
-        warnings: [],
       },
     ];
     let impl: () => Promise<{ ok: boolean; artifacts: DependencyArtifact[]; reason?: string }> =
@@ -52,7 +47,6 @@ describe("warning channel lifecycle", () => {
         cacheScan: async () => ({ artifacts: [], warnings: [] }),
         includeJdk: false,
       },
-      cacheDir,
       now: () => clock,
     });
 
@@ -76,15 +70,13 @@ describe("warning channel lifecycle", () => {
     expect(afterSuccess).not.toContain("degraded-to-cache-scan");
   });
 
-  it("a fresh process serving an existing manifest surfaces its persisted artifact warnings", async () => {
-    const { projectRoot, cacheDir } = freshProject();
+  it("a fresh process serving an existing manifest carries no warnings", async () => {
+    const { projectRoot } = freshProject();
     const artifacts: DependencyArtifact[] = [
       {
         coordinates: "com.example:warny:1.0",
         kind: "external",
         sourcesJar: DEMO_SOURCES_JAR,
-        provenance: "source",
-        warnings: ["cache-scan ambiguity: warny matched two layouts"],
       },
     ];
     let calls = 0;
@@ -96,17 +88,14 @@ describe("warning channel lifecycle", () => {
         },
         includeJdk: false,
       },
-      cacheDir,
     });
     await first.ensureReady();
     expect(calls).toBe(1);
-    // the manifest persisted the artifact warning
-    expect((await first.manifest())!.artifacts[0]!.warnings).toContain(
-      "cache-scan ambiguity: warny matched two layouts",
-    );
+    expect(await first.bootstrapWarnings()).toEqual([]);
 
     // a FRESH process (the long-lived MCP server restarted) serves the same
-    // manifest without bootstrapping — the warning must still surface
+    // manifest without bootstrapping and without warnings — nothing is
+    // persisted per artifact anymore
     const second = openContext(projectRoot, {
       resolvers: {
         gradle: async () => {
@@ -115,17 +104,16 @@ describe("warning channel lifecycle", () => {
         },
         includeJdk: false,
       },
-      cacheDir,
     });
     await second.ensureReady();
     expect(calls).toBe(1); // served fresh: no resolver ran
-    expect(await second.bootstrapWarnings()).toContain("cache-scan ambiguity: warny matched two layouts");
+    expect(await second.bootstrapWarnings()).toEqual([]);
   });
 });
 
 describe("cache-scan guard (manifest present)", () => {
   it("serves the manifest stale with the exact warning instead of adopting the scan", async () => {
-    const { projectRoot, cacheDir } = freshProject();
+    const { projectRoot } = freshProject();
     await writeManifest(projectRoot, {
       version: 2,
       resolvedAt: new Date().toISOString(),
@@ -137,8 +125,6 @@ describe("cache-scan guard (manifest present)", () => {
           coordinates: "com.example:demo-lib:1.0.0",
           kind: "external",
           sourcesJar: DEMO_SOURCES_JAR,
-          provenance: "source",
-          warnings: [],
         },
       ],
     });
@@ -158,7 +144,6 @@ describe("cache-scan guard (manifest present)", () => {
         }),
         includeJdk: false,
       },
-      cacheDir,
     });
 
     const result = await ctx.ensureReady();
@@ -174,8 +159,8 @@ describe("cache-scan guard (manifest present)", () => {
 
 describe("zero-artifact manifest scoping", () => {
   it("scopes to empty: outline never serves foreign listings", async () => {
-    const { projectRoot, cacheDir } = freshProject();
-    const ctx: QueryContext = openContext(projectRoot, { cacheDir });
+    const { projectRoot } = freshProject();
+    const ctx: QueryContext = openContext(projectRoot);
 
     // the manifest EXISTS and declares zero artifacts (a resolved-empty set)
     await writeManifest(projectRoot, {

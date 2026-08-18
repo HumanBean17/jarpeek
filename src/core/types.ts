@@ -1,8 +1,8 @@
 /**
  * Shared type contracts for jarpeek.
  *
- * These are load-bearing: every indexer, resolver, and query module
- * consumes them. Field names must stay stable.
+ * These are load-bearing: every resolver and query module consumes them.
+ * Field names must stay stable.
  */
 
 export type Provenance = "source" | "decompiled" | "signature";
@@ -50,10 +50,7 @@ export interface DependencyArtifact {
   binaryJar?: string;
   sourcesJar?: string;
   sourceDir?: string;
-  classesDir?: string;
-  provenance?: Provenance;
   noDecompile?: boolean;
-  warnings?: string[];
 }
 
 export interface ClassHit {

@@ -8,7 +8,7 @@
  * an untouched one costs one stat. This module never writes to disk.
  */
 import { statSync } from "node:fs";
-import { isSourceEntry, walkFiles } from "../index/walk.js";
+import { isSourceEntry, walkFiles } from "../util/walk.js";
 import { isClassEntry } from "../parse/records.js";
 import { listZipEntries, type ZipEntry } from "../parse/zip.js";
 import type { DependencyArtifact } from "./types.js";

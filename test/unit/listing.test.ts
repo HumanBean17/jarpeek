@@ -100,7 +100,7 @@ function tempDir(): string {
 function artifact(
   fields: Pick<DependencyArtifact, "coordinates"> & Partial<DependencyArtifact>,
 ): DependencyArtifact {
-  return { kind: "external", provenance: "signature", warnings: [], ...fields };
+  return { kind: "external", ...fields };
 }
 
 const fqns = (listing: { classes: { fqn: string }[] }): string[] => listing.classes.map((c) => c.fqn);

@@ -1,6 +1,6 @@
 /**
  * Shared declaration-lexer contracts. The Java and Kotlin lexers produce
- * these shapes so the indexer downstream treats both languages alike.
+ * these shapes so every consumer treats both languages alike.
  */
 import type { Declaration, Visibility } from "../core/types.js";
 

@@ -28,7 +28,7 @@ function tmpProjectRoot(): string {
 }
 
 function artifact(overrides: Partial<DependencyArtifact>): DependencyArtifact {
-  return { coordinates: "g:a:1", kind: "external", provenance: "source", warnings: [], ...overrides };
+  return { coordinates: "g:a:1", kind: "external", ...overrides };
 }
 
 function manifestFor(dependencySetHash: string, artifacts: DependencyArtifact[]): Manifest {
@@ -124,9 +124,8 @@ describe("readManifest / writeManifest", () => {
           binaryJar: "/cache/a-1.0.jar",
           sourcesJar: "/cache/a-1.0-sources.jar",
           noDecompile: true,
-          warnings: ["w"],
         }),
-        artifact({ coordinates: ":mod", kind: "module", sourceDir: join(root, "mod"), warnings: [] }),
+        artifact({ coordinates: ":mod", kind: "module", sourceDir: join(root, "mod") }),
       ]);
       await writeManifest(root, m);
 
@@ -173,7 +172,7 @@ describe("readManifest / writeManifest", () => {
     }
   });
 
-  it("the written JSON carries no sourceSig and omits absent optional fields", async () => {
+  it("the written JSON omits absent optional fields", async () => {
     const root = tmpProjectRoot();
     try {
       const jar = join(root, "lib.jar");
@@ -184,11 +183,10 @@ describe("readManifest / writeManifest", () => {
         string,
         unknown
       >;
-      expect(raw.sourceSig).toBeUndefined();
       const artifacts = raw.artifacts as Array<Record<string, unknown>>;
-      expect(artifacts[0]!.sourceSig).toBeUndefined();
-      expect(artifacts[0]!.classesDir).toBeUndefined();
       expect(artifacts[0]!.binaryJar).toBe(jar);
+      expect(artifacts[0]!.sourcesJar).toBeUndefined();
+      expect(artifacts[0]!.sourceDir).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -225,8 +223,8 @@ describe("isStale", () => {
     try {
       const hash = await computeDependencySetHash(root);
       const allPresent: Manifest = manifestFor(hash, [
-        artifact({ sourcesJar: join(root, "a-sources.jar"), warnings: [] }),
-        artifact({ coordinates: ":mod", kind: "module", sourceDir: join(root, "mod"), warnings: [] }),
+        artifact({ sourcesJar: join(root, "a-sources.jar") }),
+        artifact({ coordinates: ":mod", kind: "module", sourceDir: join(root, "mod") }),
       ]);
       mkdirSync(join(root, "mod"));
       writeFileSync(join(root, "a-sources.jar"), "jar");
@@ -242,8 +240,8 @@ describe("isStale", () => {
     }
   });
 
-  it("a module whose sources changed after resolving is NOT stale (no sourceSig)", async () => {
-    // the indexer-era source-tree fingerprint is gone: a sibling-file edit
+  it("a module whose sources changed after resolving is NOT stale", async () => {
+    // source-tree contents are not fingerprinted: a sibling-file edit
     // without a build-file move leaves the manifest fresh, because the
     // resolve-only manifest only promises WHICH artifacts back the project
     const root = tmpProjectRoot();

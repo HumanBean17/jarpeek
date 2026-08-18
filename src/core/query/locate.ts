@@ -1,6 +1,6 @@
 /**
  * Locate: listings-backed FQN → artifact location and one-file record
- * parsing — the store's replacement. The manifest's artifacts are listed in
+ * parsing. The manifest's artifacts are listed in
  * order (ListingService caches per coordinates+stamp) and the first whose
  * backing declares the fqn is parsed from exactly one file: its source entry
  * or its compiled class entry, plus one class row per directly nested class

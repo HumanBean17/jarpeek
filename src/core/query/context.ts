@@ -31,9 +31,7 @@ import {
   writeManifest,
   type Manifest,
 } from "../../index/manifest.js";
-import { IndexStore } from "../../index/store.js";
 import { resolveDependencies, type ResolveDependenciesOptions } from "../../resolver/index.js";
-import { ensureCacheDir } from "../../util/cache-dir.js";
 import { ListingService } from "../listing.js";
 import { createDecompiler, type DecompileFn } from "../../decompile/cfr.js";
 
@@ -46,9 +44,6 @@ export interface EnsureReadyResult {
 
 export interface QueryContext {
   readonly projectRoot: string;
-  readonly store: IndexStore;
-  /** Cache root shared by the store. */
-  readonly cacheDir: string;
   /** Resolver overrides this context was opened with (resolveNow reuses them). */
   readonly resolvers?: ResolveDependenciesOptions;
   /** Listing service: provides artifact listings. */
@@ -59,17 +54,15 @@ export interface QueryContext {
   manifest(): Promise<Manifest | null>;
   artifacts(): Promise<DependencyArtifact[]>;
   /**
-   * Warnings of the last bootstrap (cache-scan, stale-served, ...) plus the
-   * persisted per-artifact warnings of the manifest being served — a fresh
-   * process serving an existing manifest still surfaces what resolution
-   * degraded on.
+   * Warnings of the last bootstrap (cache-scan, stale-served, ...): the
+   * channel documents what the process currently serving answers degraded
+   * on, not the accumulation of every bootstrap it ever ran.
    */
   bootstrapWarnings(): Promise<string[]>;
 }
 
 export interface OpenContextOptions {
   resolvers?: ResolveDependenciesOptions;
-  cacheDir?: string;
   /**
    * One line per bootstrap attempt, emitted right before resolution runs —
    * the only progress a resolve-only bootstrap has to report.
@@ -97,12 +90,10 @@ const STALE_SERVED_CACHE_SCAN = "stale index served (resolution degraded to cach
 const FAILED_CACHE_SCAN = "resolution failed: degraded to cache-scan; run jarpeek resolve";
 
 /**
- * Open a query context. Nothing touches the filesystem beyond cache-dir
- * creation until the first `ensureReady`-bearing query.
+ * Open a query context. Nothing touches the filesystem until the first
+ * `ensureReady`-bearing query.
  */
 export function openContext(projectRoot: string, opts: OpenContextOptions = {}): QueryContext {
-  const cacheDir = opts.cacheDir ?? ensureCacheDir();
-  const store = new IndexStore(cacheDir);
   const warnings: string[] = [];
   const now = opts.now ?? Date.now;
 
@@ -112,14 +103,6 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
   const addWarning = (msg: string): void => {
     if (!warnings.includes(msg)) warnings.push(msg);
   };
-
-  /** Fold the served manifest's persisted per-artifact warnings in (deduped). */
-  async function addPersistedArtifactWarnings(): Promise<void> {
-    const manifest = await readManifest(projectRoot);
-    for (const artifact of manifest?.artifacts ?? []) {
-      for (const warning of artifact.warnings ?? []) addWarning(warning);
-    }
-  }
 
   async function runBootstrap(wasStale: boolean): Promise<EnsureReadyResult> {
     // the one progress line a resolve-only bootstrap owes the user
@@ -137,7 +120,6 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
           warnings.length = 0;
           for (const entry of resolution.degraded) addWarning(`${entry.from}: ${entry.reason}`);
           addWarning(STALE_SERVED_CACHE_SCAN);
-          await addPersistedArtifactWarnings();
           failedAt = now();
           return { bootstrapped: false, stale: true };
         }
@@ -166,7 +148,6 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       const manifest = await readManifest(projectRoot);
       if (manifest !== null) {
         addWarning(`stale index served (resolution failed: ${errorMessage(e)})`);
-        await addPersistedArtifactWarnings();
         return { bootstrapped: false, stale: true };
       }
       // nothing to serve and nothing produced: memoize the failure so a
@@ -185,17 +166,12 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
 
   return {
     projectRoot,
-    store,
-    cacheDir,
     ...(opts.resolvers !== undefined ? { resolvers: opts.resolvers } : {}),
     listings,
     decompiler,
     async ensureReady(): Promise<EnsureReadyResult> {
       const manifest = await readManifest(projectRoot);
       if (manifest !== null && !(await isStale(projectRoot, manifest))) {
-        // serving an existing manifest without bootstrapping: its persisted
-        // warnings are this process's view of what indexing degraded on
-        await addPersistedArtifactWarnings();
         return { bootstrapped: false, stale: false };
       }
       if (failedAt !== undefined && now() - failedAt < FAILED_BOOTSTRAP_BACKOFF_MS) {

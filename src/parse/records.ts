@@ -3,9 +3,9 @@
  *
  * Everything here turns a single parsed unit — one source text or one
  * compiled class buffer — into `Declaration` records, with no knowledge of
- * where the bytes came from (jar entry, source dir, classes dir) or where
- * the records go. The eager indexer uses these directly; the lazy paths
- * reuse them per file on demand. Failures are returned, never thrown: a
+ * where the bytes came from (jar entry, source dir, compiled class file)
+ * or where the records go. Every caller reuses these per file on demand.
+ * Failures are returned, never thrown: a
  * corrupt class file becomes a `warning`, and every branch keeps the
  * record/warning shape its caller already expects.
  */

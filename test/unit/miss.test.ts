@@ -46,7 +46,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
     dependencySetHash: await computeDependencySetHash(projectRoot),
     artifacts,
   });
-  return openContext(projectRoot, { cacheDir: freshRoot(), onNotice: () => {} });
+  return openContext(projectRoot, { onNotice: () => {} });
 }
 
 const DEMO_SOURCES: DependencyArtifact = {
@@ -116,7 +116,6 @@ describe("handleMiss negative", () => {
         cacheScan: async () => ({ artifacts: [DEMO_SOURCES], warnings: [] }),
         includeJdk: false,
       },
-      cacheDir: freshRoot(),
       onNotice: () => {},
     });
     await ctx.ensureReady();

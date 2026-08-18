@@ -8,8 +8,8 @@
  * `Deprecated` (+ `RuntimeVisibleAnnotations` ending `Deprecated;`),
  * `InnerClasses` for nested-class static-ness, and `Record` for record
  * components. Everything malformed — bad magic, truncation, a bad pool index,
- * an unknown tag — is a named ClassFileError, never a crash; indexer callers
- * catch it per entry. Type names from descriptors and signatures are fully
+ * an unknown tag — is a named ClassFileError, never a crash; callers catch
+ * it per entry. Type names from descriptors and signatures are fully
  * qualified (`Ljava/lang/String;` → `java.lang.String`, `[I` → `int[]`), and
  * `$` in binary names maps to `.` nesting like everywhere else in jarpeek.
  */

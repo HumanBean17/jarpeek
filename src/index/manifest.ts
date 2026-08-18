@@ -102,9 +102,9 @@ export async function computeDependencySetHash(projectRoot: string): Promise<str
  * Stale when the build files' fingerprint moved or any artifact's recorded
  * backing (binary/sources jar, source dir) disappeared — either way the
  * manifest no longer reflects what a resolve would produce today. Source
- * TREE contents are deliberately not fingerprinted (the indexer-era
- * `sourceSig` is gone): the manifest promises which artifacts back the
- * project, not that their contents have not been rebuilt since.
+ * TREE contents are deliberately not fingerprinted: the manifest promises
+ * which artifacts back the project, not that their contents have not been
+ * rebuilt since.
  */
 export async function isStale(projectRoot: string, m: Manifest): Promise<boolean> {
   if ((await computeDependencySetHash(projectRoot)) !== m.dependencySetHash) {

@@ -12,7 +12,7 @@
  * and the store never hears about it.
  */
 import { afterAll, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openContext, type OpenContextOptions, type QueryContext } from "../../src/core/query/context.js";
@@ -26,12 +26,11 @@ const DEMO_SOURCES_JAR = join(FIXTURES, "jars", "demo-lib-1.0.0-sources.jar");
 const roots: string[] = [];
 
 /** A tmp project with a gradle marker (so detection routes to the injected gradle resolver). */
-function freshProject(): { projectRoot: string; cacheDir: string } {
+function freshProject(): { projectRoot: string } {
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-backoff-project-"));
-  const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-backoff-cache-"));
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
-  roots.push(projectRoot, cacheDir);
-  return { projectRoot, cacheDir };
+  roots.push(projectRoot);
+  return { projectRoot };
 }
 
 afterAll(() => {
@@ -39,18 +38,12 @@ afterAll(() => {
 });
 
 const fixtureArtifacts: DependencyArtifact[] = [
-  {
-    coordinates: "com.example:demo-lib:1.0.0",
-    kind: "external",
-    sourcesJar: DEMO_SOURCES_JAR,
-    provenance: "source",
-    warnings: [],
-  },
+  { coordinates: "com.example:demo-lib:1.0.0", kind: "external", sourcesJar: DEMO_SOURCES_JAR },
 ];
 
 describe("failed-bootstrap backoff", () => {
   it("first failure runs the resolvers; the window suppresses re-runs; expiry retries", async () => {
-    const { projectRoot, cacheDir } = freshProject();
+    const { projectRoot } = freshProject();
 
     let calls = 0;
     let clock = 1_000_000;
@@ -61,7 +54,6 @@ describe("failed-bootstrap backoff", () => {
 
     const ctx = openContext(projectRoot, {
       resolvers: { gradle: failingGradle, includeJdk: false },
-      cacheDir,
       now: () => clock,
     });
 
@@ -84,7 +76,7 @@ describe("failed-bootstrap backoff", () => {
   });
 
   it("a manifest present + failing resolver serves it stale", async () => {
-    const { projectRoot, cacheDir } = freshProject();
+    const { projectRoot } = freshProject();
     await writeManifest(projectRoot, {
       version: 2,
       resolvedAt: new Date().toISOString(),
@@ -100,7 +92,6 @@ describe("failed-bootstrap backoff", () => {
         },
         includeJdk: false,
       },
-      cacheDir,
     });
 
     const result = await ctx.ensureReady();
@@ -124,14 +115,14 @@ describe("cache-scan guard", () => {
   }
 
   it("a real manifest present: served stale with the exact warning, never overwritten", async () => {
-    const { projectRoot, cacheDir } = freshProject();
+    const { projectRoot } = freshProject();
     await writeManifest(projectRoot, {
       version: 2,
       resolvedAt: new Date().toISOString(),
       dependencySetHash: "not-the-current-hash",
       artifacts: fixtureArtifacts,
     });
-    const ctx = openContext(projectRoot, { ...cacheScanOpts(fixtureArtifacts), cacheDir });
+    const ctx = openContext(projectRoot, cacheScanOpts(fixtureArtifacts));
 
     const result = await ctx.ensureReady();
     expect(result).toEqual({ bootstrapped: false, stale: true });
@@ -144,7 +135,7 @@ describe("cache-scan guard", () => {
   });
 
   it("no manifest: the bootstrap fails, warns exactly, and backs off", async () => {
-    const { projectRoot, cacheDir } = freshProject();
+    const { projectRoot } = freshProject();
     let clock = 5_000_000;
     let scans = 0;
     const ctx = openContext(projectRoot, {
@@ -157,7 +148,6 @@ describe("cache-scan guard", () => {
         },
         includeJdk: false,
       },
-      cacheDir,
       now: () => clock,
     });
 
@@ -182,11 +172,10 @@ describe("cache-scan guard", () => {
 
 describe("successful resolve-only bootstrap", () => {
   it("writes the v2 manifest and nothing else; onNotice fires exactly once", async () => {
-    const { projectRoot, cacheDir } = freshProject();
+    const { projectRoot } = freshProject();
     const notices: string[] = [];
     const ctx = openContext(projectRoot, {
       resolvers: { gradle: async () => ({ ok: true, artifacts: fixtureArtifacts }), includeJdk: false },
-      cacheDir,
       onNotice: (msg) => notices.push(msg),
     });
 
@@ -199,19 +188,16 @@ describe("successful resolve-only bootstrap", () => {
     const manifest = await ctx.manifest();
     expect(manifest?.version).toBe(2);
     expect(manifest?.artifacts.map((a) => a.coordinates)).toEqual(["com.example:demo-lib:1.0.0"]);
-    // the store stays untouched — nothing was ever written through it
-    expect(existsSync(join(cacheDir, "v1"))).toBe(false);
     // the fresh manifest is served as-is on the next query
     expect(notices).toEqual(["resolving dependencies (first run)"]);
     expect(await ctx.ensureReady()).toEqual({ bootstrapped: false, stale: false });
   });
 
   it("a stale manifest bootstraps again with the stale-run notice", async () => {
-    const { projectRoot, cacheDir } = freshProject();
+    const { projectRoot } = freshProject();
     const notices: string[] = [];
     const ctx = openContext(projectRoot, {
       resolvers: { gradle: async () => ({ ok: true, artifacts: fixtureArtifacts }), includeJdk: false },
-      cacheDir,
       onNotice: (msg) => notices.push(msg),
     });
     await ctx.ensureReady();
@@ -235,11 +221,10 @@ describe("successful resolve-only bootstrap", () => {
 
 describe("fresh-project query end-to-end", () => {
   it("find-class auto-resolves (notice once) and answers from the listing", async () => {
-    const { projectRoot, cacheDir } = freshProject();
+    const { projectRoot } = freshProject();
     const notices: string[] = [];
     const ctx: QueryContext = openContext(projectRoot, {
       resolvers: { gradle: async () => ({ ok: true, artifacts: fixtureArtifacts }), includeJdk: false },
-      cacheDir,
       onNotice: (msg) => notices.push(msg),
     });
 

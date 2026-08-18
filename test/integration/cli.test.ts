@@ -35,7 +35,6 @@ const NOSOURCES_JAR = join(JARS, "nosources-lib-1.0.0.jar");
 
 interface Suite {
   projectRoot: string;
-  cacheDir: string;
   ctx: QueryContext;
 }
 
@@ -68,7 +67,6 @@ function demoArtifacts(): DependencyArtifact[] {
 /** A project whose gradle resolver always answers the fixture artifact set. */
 function openSuite(artifacts: () => DependencyArtifact[] | null): Suite {
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-cli-project-"));
-  const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-cli-cache-"));
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
   const injected = artifacts();
   const ctx = openContext(projectRoot, {
@@ -77,9 +75,8 @@ function openSuite(artifacts: () => DependencyArtifact[] | null): Suite {
     ...(injected === null
       ? {}
       : { resolvers: { gradle: async () => ({ ok: true, artifacts: injected }), includeJdk: false } }),
-    cacheDir,
   });
-  return { projectRoot, cacheDir, ctx };
+  return { projectRoot, ctx };
 }
 
 const c = {} as Suite;
@@ -106,7 +103,7 @@ function writeFakeGradlew(projectRoot: string, jar: string, sourcesJar: string):
 
 beforeAll(async () => {
   Object.assign(c, openSuite(() => demoArtifacts()));
-  await c.ctx.ensureReady(); // build manifest + index before any subprocess
+  await c.ctx.ensureReady(); // build the manifest before any subprocess
 
   Object.assign(resolveSuite, openSuite(() => null));
   suites.push(c, resolveSuite);
@@ -115,7 +112,6 @@ beforeAll(async () => {
 afterAll(() => {
   for (const s of suites) {
     rmSync(s.projectRoot, { recursive: true, force: true });
-    rmSync(s.cacheDir, { recursive: true, force: true });
   }
 });
 
@@ -133,9 +129,9 @@ function cli(suite: Suite, args: string[], env: Record<string, string> = {}): Cl
     {
       cwd: PKG_ROOT,
       encoding: "utf8",
-      // pin the cache dir so the subprocess serves the suite's exact index —
-      // the parity assertions compare against the in-process store
-      env: { ...process.env, JARPEEK_CACHE_DIR: suite.cacheDir, ...env },
+      // the manifest under --project is the only shared state between this
+      // process and the subprocess — the parity assertions compare against it
+      env: { ...process.env, ...env },
       timeout: 60_000,
     },
   );
@@ -436,13 +432,12 @@ describe("resolve", () => {
 });
 
 describe("status", () => {
-  it("reports manifest and jvm rows; no cacheDir/index rows", () => {
+  it("reports manifest and jvm rows; no index rows", () => {
     const run = cli(c, ["status"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("manifest.present");
     expect(run.stdout).toContain("manifest.artifactCount");
     expect(run.stdout).toContain("jvm.available");
-    expect(run.stdout).not.toContain("cacheDir");
     expect(run.stdout).not.toContain("index.");
   });
 

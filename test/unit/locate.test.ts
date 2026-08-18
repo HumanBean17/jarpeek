@@ -163,7 +163,7 @@ function tempDir(): string {
 function artifact(
   fields: Pick<DependencyArtifact, "coordinates"> & Partial<DependencyArtifact>,
 ): DependencyArtifact {
-  return { kind: "external", provenance: "signature", warnings: [], ...fields };
+  return { kind: "external", ...fields };
 }
 
 /** Hand-built LocateDeps: a real ListingService over the given artifacts plus a manifest literal. */

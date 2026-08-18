@@ -1,8 +1,8 @@
 /**
- * Shared directory walk used by the indexer and the staleness checker.
+ * Shared directory walk used by the listing service's sourceDir listings.
  *
- * One implementation so a source signature covers exactly the files the
- * indexer would parse: same pruning, same keep predicate, same sort.
+ * One implementation everywhere a directory of sources is enumerated: same
+ * pruning, same keep predicate, same sort.
  */
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -12,10 +12,10 @@ const PRUNED_DIR_SEGMENTS = new Set(["build", "target", "out", ".git", "node_mod
 
 /**
  * Collect files under `root` as `/`-separated paths relative to `root`.
- * Source walks prune build-output and VCS directory segments; class walks
- * keep everything (`build/classes/...` is a legitimate classesDir). A
- * directory that cannot be read becomes one `failed to walk` warning and the
- * walk continues — a bad artifact never aborts the run.
+ * Source walks prune build-output and VCS directory segments; unpruned walks
+ * keep everything. A directory that cannot be read becomes one
+ * `failed to walk` warning and the walk continues — a bad artifact never
+ * aborts the run.
  */
 export function walkFiles(
   root: string,
@@ -46,5 +46,5 @@ export function walkFiles(
   return out.sort();
 }
 
-/** True for source file names the indexer parses from sourceDir/source jars. */
+/** True for source file names parsed as sources from sourceDir/source jars. */
 export const isSourceEntry = (name: string): boolean => name.endsWith(".java") || name.endsWith(".kt");

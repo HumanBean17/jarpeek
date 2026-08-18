@@ -2,7 +2,7 @@
  * findClass: name → class hits, in the cheapest tier that answers.
  *
  * Listing-backed (Task 8): the manifest's artifacts are listed in order —
- * no store streaming — and each listing's class entries run the v1 tier
+ * nothing streamed from disk state — and each listing's class entries run the v1 tier
  * ladder: exact FQN, segment-aligned suffix, simple name (collected fully),
  * then fuzzy over simple names through a bounded keep-`limit` collector.
  * Hits carry the artifact's coordinates/version; the fqn is displayed

@@ -154,7 +154,7 @@ export async function resolveContent(ctx: QueryContext, fqn: string): Promise<Re
     return signatureFallback(`signatures only (decompilation failed: ${detail})`, { decompile: result });
   }
 
-  // 4. nothing better than signatures (JDK classesDir, vanished sources, ...)
+  // 4. nothing better than signatures (JDK artifacts, vanished sources, ...)
   return signatureFallback(meta.noDecompile || meta.kind === "jdk" ? JDK_NOTE : "signatures only (no source available)");
 }
 

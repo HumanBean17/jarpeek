@@ -58,7 +58,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
     dependencySetHash: await computeDependencySetHash(projectRoot),
     artifacts,
   });
-  return openContext(projectRoot, { cacheDir: freshRoot(), onNotice: () => {} });
+  return openContext(projectRoot, { onNotice: () => {} });
 }
 
 /** Hand-built LocateDeps: a real ListingService over the given artifacts plus a manifest literal. */

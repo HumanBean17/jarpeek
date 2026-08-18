@@ -43,7 +43,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
     dependencySetHash: await computeDependencySetHash(root),
     artifacts,
   });
-  return openContext(root, { cacheDir: freshRoot(), onNotice: () => {} });
+  return openContext(root, { onNotice: () => {} });
 }
 
 describe("readResource provenance is computed", () => {

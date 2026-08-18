@@ -10,9 +10,9 @@
  * probe) normalized away first.
  *
  * Same harness shape as the CLI suite: a tmp project bootstrapped in-process
- * with injected resolvers, cache dir pinned via JARPEEK_CACHE_DIR — except
- * here the "subprocess" is the server object in this process, so parity with
- * `--json` is asserted against the same ctx, not a spawned peer.
+ * with injected resolvers — except here the "subprocess" is the server
+ * object in this process, so parity with `--json` is asserted against the
+ * same ctx, not a spawned peer.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -56,7 +56,6 @@ const EXPECTED_TOOLS = [
 
 interface Suite {
   projectRoot: string;
-  cacheDir: string;
   ctx: QueryContext;
   client: Client;
 }
@@ -109,24 +108,20 @@ const lazy = {} as { projectRoot: string; ctx: QueryContext; client: Client };
 const teardown: Array<() => Promise<unknown>> = [];
 
 beforeAll(async () => {
-  process.env.JARPEEK_CACHE_DIR = mkdtempSync(join(tmpdir(), "jarpeek-mcp-cache-"));
-
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-mcp-project-"));
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
   const ctx = openContext(projectRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts: demoArtifacts() }), includeJdk: false },
-    cacheDir: process.env.JARPEEK_CACHE_DIR,
     onNotice: () => {},
   });
   const client = await connect(ctx);
-  Object.assign(c, { projectRoot, cacheDir: process.env.JARPEEK_CACHE_DIR, ctx, client });
+  Object.assign(c, { projectRoot, ctx, client });
 
   // lazy suite: manifest deliberately absent until the first tool call
   const lazyRoot = mkdtempSync(join(tmpdir(), "jarpeek-mcp-lazy-"));
   writeFileSync(join(lazyRoot, "build.gradle"), "plugins { id 'java' }\n");
   const lazyCtx = openContext(lazyRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts: demoArtifacts() }), includeJdk: false },
-    cacheDir: process.env.JARPEEK_CACHE_DIR,
     onNotice: () => {},
   });
   Object.assign(lazy, { projectRoot: lazyRoot, ctx: lazyCtx, client: await connect(lazyCtx) });
@@ -137,7 +132,6 @@ afterAll(async () => {
   for (const root of [c.projectRoot, lazy.projectRoot]) {
     if (root) rmSync(root, { recursive: true, force: true });
   }
-  if (c.cacheDir) rmSync(c.cacheDir, { recursive: true, force: true });
 });
 
 /** Call a tool and parse its single text block as the core result object. */
@@ -378,7 +372,6 @@ describe("status", () => {
     const parsed = payload(await call("status", {}));
     expect(parsed.manifest.present).toBe(true);
     expect(parsed.index).toBeUndefined();
-    expect(parsed.cacheDir).toBeUndefined();
     expect(parsed.projectRoot).toBe(c.projectRoot);
     const expected = await status(c.ctx);
     expect({ ...parsed, jvm: expected.jvm }).toEqual({ ...expected, jvm: expected.jvm });

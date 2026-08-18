@@ -131,7 +131,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
     dependencySetHash: await computeDependencySetHash(projectRoot),
     artifacts,
   });
-  return openContext(projectRoot, { cacheDir: freshRoot(), onNotice: () => {} });
+  return openContext(projectRoot, { onNotice: () => {} });
 }
 
 async function demoSource(): Promise<string> {

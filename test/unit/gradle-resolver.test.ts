@@ -119,17 +119,14 @@ describe("resolveGradle: parsing the sentinel-wrapped dump", () => {
     expect(springTx.configuration).toBe("compile");
     expect(springTx.binaryJar).toBe(SPRING_TX_JAR);
     expect(springTx.sourcesJar).toBe(SPRING_TX_SOURCES);
-    // the legacy per-artifact metadata fields are no longer set here
-    expect(springTx.provenance).toBeUndefined();
-    expect(springTx.warnings).toBeUndefined();
-    expect(springTx.classesDir).toBeUndefined();
+    // exact shape: the legacy per-artifact metadata fields no longer exist
+    expect(Object.keys(springTx).sort()).toEqual(["binaryJar", "configuration", "coordinates", "kind", "sourcesJar"]);
 
     const slf4j = lookup(SLF4J);
     expect(slf4j.kind).toBe("external");
     expect(slf4j.configuration).toBe("compile");
     expect(slf4j.binaryJar).toBe(SLF4J_JAR);
     expect(slf4j.sourcesJar).toBeUndefined();
-    expect(slf4j.provenance).toBeUndefined();
 
     const junit = lookup(JUNIT);
     expect(junit.kind).toBe("external");

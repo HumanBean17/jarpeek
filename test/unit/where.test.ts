@@ -1,11 +1,11 @@
 /**
  * where: the paths-printer — an artifact's recorded on-disk locations with
- * an existence flag each. No unpacking happens (the eager unpack-for-Grep
- * died with the index), so these suites assert exactly that: the cache dir
- * stays empty and the result lists what the manifest recorded, existing or
- * not. The manifest is written directly per suite (fixture-manifest world:
- * `writeManifest` with a matching `dependencySetHash` so `isStale` is false
- * and `ensureReady` never resolves).
+ * an existence flag each. Nothing is written (the eager unpack-for-Grep died
+ * with the index), so these suites assert exactly that: `.jarpeek` still
+ * holds only the manifest and the result lists what the manifest recorded,
+ * existing or not. The manifest is written directly per suite
+ * (fixture-manifest world: `writeManifest` with a matching
+ * `dependencySetHash` so `isStale` is false and `ensureReady` never resolves).
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -37,7 +37,7 @@ afterAll(() => {
 });
 
 /** A context over a manifest written BEFORE construction (fresh, non-stale). */
-async function contextWith(artifacts: DependencyArtifact[]): Promise<{ ctx: QueryContext; cacheDir: string }> {
+async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContext> {
   const root = freshRoot();
   writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
   await writeManifest(root, {
@@ -46,16 +46,14 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<{ ctx: Quer
     dependencySetHash: await computeDependencySetHash(root),
     artifacts,
   });
-  const cacheDir = freshRoot();
-  return { ctx: openContext(root, { cacheDir, onNotice: () => {} }), cacheDir };
+  return openContext(root, { onNotice: () => {} });
 }
 
 describe("where lists recorded paths", () => {
   let ctx: QueryContext;
-  let cacheDir: string;
 
   beforeAll(async () => {
-    ({ ctx, cacheDir } = await contextWith([
+    ctx = await contextWith([
       {
         coordinates: "com.example:demo-lib:1.0.0",
         kind: "external",
@@ -63,7 +61,7 @@ describe("where lists recorded paths", () => {
         sourcesJar: DEMO_SOURCES_JAR,
       },
       { coordinates: "com.example:nosources-lib:1.0.0", kind: "external", binaryJar: NOSOURCES_JAR },
-    ]));
+    ]);
   });
 
   it("both-jars artifact lists sourcesJar and binaryJar, each exists", async () => {
@@ -82,10 +80,9 @@ describe("where lists recorded paths", () => {
     expect(result.paths).toEqual([{ role: "binaryJar", path: NOSOURCES_JAR, exists: true }]);
   });
 
-  it("unpacks nothing — the cache dir stays empty", async () => {
+  it("writes nothing — .jarpeek still holds only the manifest", async () => {
     await where(ctx, "demo-lib");
-    expect(existsSync(join(cacheDir, "v1"))).toBe(false);
-    expect(readdirSync(cacheDir)).toEqual([]);
+    expect(readdirSync(join(ctx.projectRoot, ".jarpeek"))).toEqual(["manifest.json"]);
   });
 
   it("unknown artifact query throws (fatal, as today)", async () => {
@@ -98,7 +95,7 @@ describe("where existence flags", () => {
     const dir = freshRoot();
     const jar = join(dir, "gone-lib-1.0.0.jar");
     writeFileSync(jar, "stub"); // exists at manifest time so the path is recorded
-    const { ctx } = await contextWith([
+    const ctx = await contextWith([
       {
         coordinates: "com.example:gone-lib:1.0.0",
         kind: "external",
@@ -125,7 +122,7 @@ describe("where existence flags", () => {
     const sources = join(dir, "all-gone-sources.jar");
     writeFileSync(jar, "stub");
     writeFileSync(sources, "stub");
-    const { ctx } = await contextWith([
+    const ctx = await contextWith([
       {
         coordinates: "com.example:all-gone:1.0.0",
         kind: "external",
@@ -145,7 +142,7 @@ describe("where existence flags", () => {
     const src = join(dir, "src", "main", "java");
     mkdirSync(src, { recursive: true });
     writeFileSync(join(src, "A.java"), "class A {}\n");
-    const { ctx } = await contextWith([
+    const ctx = await contextWith([
       { coordinates: "com.example:module:1.0", kind: "module", sourceDir: src },
     ]);
     const result = await where(ctx, "module");
@@ -159,7 +156,7 @@ describe("where existence flags", () => {
     const src = join(dir, "src");
     mkdirSync(src, { recursive: true });
     writeFileSync(join(src, "A.java"), "class A {}\n");
-    const { ctx } = await contextWith([
+    const ctx = await contextWith([
       {
         coordinates: "com.example:mixed:1.0",
         kind: "module",

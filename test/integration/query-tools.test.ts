@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,7 +26,6 @@ const withJava = hasJava ? describe : describe.skip;
 
 interface Suite {
   projectRoot: string;
-  cacheDir: string;
   ctx: QueryContext;
 }
 
@@ -57,14 +56,12 @@ function demoArtifacts(): DependencyArtifact[] {
 
 function openSuite(artifacts: () => DependencyArtifact[]): Suite {
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-tools-project-"));
-  const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-tools-cache-"));
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
   const ctx = openContext(projectRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts: artifacts() }), includeJdk: false },
-    cacheDir,
     onNotice: () => {},
   });
-  return { projectRoot, cacheDir, ctx };
+  return { projectRoot, ctx };
 }
 
 const suites: Suite[] = [];
@@ -90,7 +87,6 @@ beforeAll(() => {
 afterAll(() => {
   for (const s of suites) {
     rmSync(s.projectRoot, { recursive: true, force: true });
-    rmSync(s.cacheDir, { recursive: true, force: true });
   }
   for (const closer of mcpTeardown.splice(0).reverse()) void closer().catch(() => {});
 });
@@ -386,7 +382,6 @@ describe("status", () => {
     expect(result.manifest.resolvedAt).toBeDefined();
     expect(result.manifest.stale).toBe(false);
     expect(Object.keys(result)).not.toContain("index");
-    expect(Object.keys(result)).not.toContain("cacheDir");
     expect(result.jvm.available).toBe(hasJava);
     if (hasJava) expect(result.jvm.version).toMatch(/\d/);
     expect(Array.isArray(result.degraded)).toBe(true);
@@ -400,8 +395,8 @@ describe("where", () => {
     expect(result.paths).toEqual([
       { role: "sourcesJar", path: DEMO_SOURCES_JAR, exists: true },
     ]);
-    // the eager unpack died with the index: nothing lands under v1/unpacked
-    expect(existsSync(join(c.cacheDir, "v1", "unpacked"))).toBe(false);
+    // the eager unpack died with the index: .jarpeek holds only the manifest
+    expect(readdirSync(join(c.projectRoot, ".jarpeek"))).toEqual(["manifest.json"]);
   });
 
   it("binary-only artifact lists its single jar path", async () => {
@@ -418,8 +413,7 @@ describe("where", () => {
 describe("read_resource / where honesty parity", () => {
   it("a stale-served manifest carries stale:true and a degraded entry on both tools", async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-parity-project-"));
-    const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-parity-cache-"));
-    suites.push({ projectRoot, cacheDir, ctx: undefined as unknown as QueryContext });
+    suites.push({ projectRoot, ctx: undefined as unknown as QueryContext });
     try {
       writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
       // the resource-half shape: demo-lib with its binary jar carries the
@@ -433,7 +427,6 @@ describe("read_resource / where honesty parity", () => {
       });
       const ctx = openContext(projectRoot, {
         resolvers: { gradle: async () => impl(), includeJdk: false },
-        cacheDir,
         onNotice: () => {},
       });
       await readResource(ctx, "demo-lib", "config/*"); // bootstrap
