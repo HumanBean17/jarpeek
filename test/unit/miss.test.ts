@@ -99,4 +99,34 @@ describe("handleMiss negative", () => {
     const result = await handleMiss(ctx, new LookupMissError("java.util.FakeMiss"));
     expect(result).toMatchObject({ found: false, via: "negative" });
   });
+
+  it("a cache-scan bootstrap appends the cache-scan note to the searched set", async () => {
+    // the real degradation path: every detected build system fails and the
+    // resolver cascade falls back to the local caches — injected gradle +
+    // maven failures and a fake cacheScan serving the fixture artifact, so
+    // bootstrapWarnings carries "degraded-to-cache-scan" and the negative
+    // answer must say so instead of presenting the heuristic set as resolved
+    const projectRoot = freshRoot();
+    writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+    const ctx = openContext(projectRoot, {
+      resolvers: {
+        gradle: async () => ({ ok: false, artifacts: [], reason: "network down" }),
+        maven: async () => ({ ok: false, artifacts: [], reason: "no pom" }),
+        cacheScan: async () => ({ artifacts: [DEMO_SOURCES], warnings: [] }),
+        includeJdk: false,
+      },
+      cacheDir: freshRoot(),
+      onProgress: () => {},
+    });
+    await ctx.ensureReady();
+    expect(await ctx.bootstrapWarnings()).toContain("degraded-to-cache-scan");
+
+    const result = await handleMiss(ctx, new LookupMissError("com.example.Nowhere"));
+    expect(result.found).toBe(false);
+    if (result.found) throw new Error("unreachable");
+    expect(result.via).toBe("negative");
+    // the cache-scan artifact set IS the searched set, flagged with the note
+    expect(result.searchedArtifacts).toContain("com.example:demo-lib:1.0.0");
+    expect(result.searchedArtifacts.some((s) => s.includes("cache-scan"))).toBe(true);
+  });
 });

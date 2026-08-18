@@ -100,8 +100,8 @@ function zipEntryNamed(listing: ArtifactListing, name: string): ZipEntry | undef
  * Fill the exact/suffix/simple tiers fully (deduped per coordinates+fqn) and
  * the fuzzy tier through a bounded keep-`limit` collector — v1's ordering
  * semantics: tier concatenation, manifest position first, iteration order
- * breaking ties. Listing fqns keep `$`, so an exact-tier query matches either
- * spelling (`Outer$Inner` entry = `Outer.Inner` query).
+ * breaking ties. Listing fqns keep `$`, so exact-tier and suffix-tier queries
+ * match either spelling (`Outer$Inner` entry = `Outer.Inner` query).
  */
 async function collectTiers(
   ctx: QueryContext,
@@ -141,7 +141,9 @@ async function collectTiers(
 
       if (fqn === query || fqn.replaceAll("$", ".") === query) {
         exact.set(key, candidate);
-      } else if (suffixMatches(fqn, query)) {
+      } else if (suffixMatches(fqn, query) || suffixMatches(displayFqn(fqn), query)) {
+        // dotted suffixes (`Outer.Inner` of `com.example.Outer$Inner`) matched
+        // in v1; the raw check keeps `$`-spelled suffix queries working too
         suffix.set(key, candidate);
       } else if (simpleName === query) {
         simple.set(key, candidate);

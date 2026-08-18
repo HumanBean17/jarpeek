@@ -2,10 +2,11 @@
  * Shared JVM probe: the `java -version` question every caller asks once per
  * process (status's health report, find-class's provenance promise).
  *
- * The probe spawn is covered by the integration status cases; what is
- * unit-observable here is the version-line extraction (extracted as a pure
- * helper for exactly that reason) and the memo's contract: settled answers,
- * same shape every call, never a rejection.
+ * What is unit-observable here is the version-line extraction (extracted as
+ * a pure helper for exactly that reason) and the memo's contract: settled
+ * answers, same shape every call, never a rejection. The PATH-less spawn
+ * negative lives in query-core's readMember no-JVM case; status's golden
+ * normalizes the probe's machine variance.
  */
 import { describe, expect, it } from "vitest";
 import { extractJvmVersion, probeJvmOnce } from "../../src/util/jvm.js";
@@ -51,9 +52,10 @@ describe("probeJvmOnce", () => {
 
   it("never rejects: a failed spawn is the unavailable answer", async () => {
     // the module memo may already hold this process's real probe, so the
-    // honest unit assertion is the contract itself — settled, boolean answer
-    // (the PATH-less spawn negative is covered by the integration status
-    // cases, which run in their own processes)
+    // honest unit assertion is the contract itself — settled, boolean answer.
+    // The PATH-less spawn negative is exercised by query-core's readMember
+    // no-JVM case (a PATH-less env driving the JVM-dependent decompile path),
+    // not by a probe test.
     await expect(probeJvmOnce()).resolves.toMatchObject({ available: expect.any(Boolean) });
   });
 });

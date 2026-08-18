@@ -212,6 +212,21 @@ describe("findClass tiers over listings", () => {
     expect(demo.hits.map((h) => h.fqn)).not.toContain("com.example.Demo.Worker");
   });
 
+  it("dotted suffix queries hit a nested class — and `$`-spelled suffixes still work", async () => {
+    // `Outer.Inner` and `example.Outer.Inner` are proper dotted suffixes of
+    // the listing fqn `com.example.Outer$Inner` (v1 answered both); the raw
+    // check stays so `$`-spelled suffix queries (`example.Outer$Inner`) hit
+    // too. A DOTLESS `Outer$Inner` query is not a suffix query at all — the
+    // suffix tier requires a `.` in the query, exactly as in v1
+    const ctx = await contextWith([DEMO_BINARY]);
+    for (const query of ["Outer.Inner", "example.Outer.Inner", "example.Outer$Inner"]) {
+      const result = await findClass(ctx, query);
+      expect(result.hits.map((h) => h.fqn), query).toContain("com.example.Outer.Inner");
+    }
+    const dotless = await findClass(ctx, "Outer$Inner");
+    expect(dotless.hits).toEqual([]);
+  });
+
   it("two artifacts declaring the same class each hit, in manifest order", async () => {
     const ctx = await contextWith([DEMO_SOURCES, DEMO_BINARY]);
     const result = await findClass(ctx, "com.example.Demo");
