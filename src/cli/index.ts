@@ -10,7 +10,10 @@
  * IO failures are the only fatal paths (exit 1). Everything diagnostic —
  * bootstrap progress, warnings, degradations — goes to stderr so stdout
  * stays parseable, under a hard three-line budget per invocation (one
- * bootstrap notice plus the two warning lines `warn` prints).
+ * bootstrap notice plus the two warning lines `warn` prints); the one
+ * exception is bootstrap heartbeats, one line per 30s while a resolve is
+ * actually running, so a minutes-long cold-cache download never reads as a
+ * hang.
  */
 import { Command, InvalidArgumentError } from "commander";
 import { VERSION } from "../version.js";
@@ -66,7 +69,9 @@ function ctxFor(inv: Invocation): QueryContext {
  * at `jarpeek status`. Deduplicated (order-preserving) before counting, so
  * the same degradation named twice costs nothing. Together with the single
  * bootstrap notice this keeps any invocation at ≤3 stderr lines — the number
- * is the product feature (v1 printed one line per artifact).
+ * is the product feature (v1 printed one line per artifact). Bootstrap
+ * heartbeats are the sanctioned exception: one line per 30s while a resolve
+ * runs, never more.
  */
 function warn(...messages: string[]): void {
   const unique = [...new Set(messages)];

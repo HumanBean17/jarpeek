@@ -1,29 +1,43 @@
 /**
  * Maven resolver — asks the project's own POM where its dependencies live.
  *
- * `dependency:build-classpath` prints the effective classpath (one jar per
- * path entry) into a temp file, which this module reverse-maps into m2
- * coordinates by path layout. `dependency:sources` then populates the local
- * repository with `-sources` jars; it is best-effort — its exit code is
- * ignored. Multi-module projects run the goal once at the root plus once per
- * depth-1 submodule and merge, because the root run only covers the root
- * POM. Everything degrades rather than fails: no mvn anywhere, a timeout, a
- * failed build, or an empty classpath each become `{ ok: false, reason }`.
+ * One reactor-wide `dependency:build-classpath` run at the project root
+ * writes the effective classpath of every module: a RELATIVE
+ * `-Dmdep.outputFile` resolves against each module's basedir, so each module
+ * drops its own `target/jarpeek-classpath.txt` while keeping the reactor
+ * context that maps sibling dependencies onto their `target/classes` (a
+ * per-module `--non-recursive` run would lose that context and fail on any
+ * sibling never installed to the local repository). `-fae` keeps the reactor
+ * going past a failing module; its failure degrades the resolution (`partial`)
+ * instead of discarding the modules that resolved. The collected files are
+ * reverse-mapped into m2 coordinates by path layout. `dependency:sources`
+ * then runs once at the root to populate the local repository with
+ * `-sources` jars; it is best-effort — its exit code is ignored. Everything
+ * degrades rather than fails: no mvn anywhere, a timeout, a fully failed
+ * build, or an empty classpath each become `{ ok: false, reason }`.
  */
-import { accessSync, constants, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, join, relative } from "node:path";
 import type { DependencyArtifact } from "../core/types.js";
 import { moduleCoordinates } from "./module-coordinate.js";
 import { runWithTimeout, SpawnError, TimeoutError, type RunResult } from "../util/exec.js";
 
-const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
 const STDERR_TAIL_CHARS = 500;
+/** Per-module classpath output, relative to each module's basedir (forward slashes: the mojo normalizes). */
+const CP_FILE_REL = "target/jarpeek-classpath.txt";
 
 export interface MavenResolution {
   ok: boolean;
   artifacts: DependencyArtifact[];
   reason?: "no-mvn" | "timeout" | `mvn-failed:${string}` | "no-classpath";
+  /**
+   * Set when the run partially failed: some modules resolved (artifacts is
+   * trustworthy) but at least one module's resolution failed, so its unique
+   * dependencies are missing. Names the failed module directories.
+   */
+  partial?: string;
 }
 
 export interface ResolveMavenOptions {
@@ -219,9 +233,9 @@ function matchModuleClasses(raw: string, modules: string[]): string | null {
 
 /**
  * Parse the collected build-classpath outputs into artifacts, deduplicated by
- * coordinates with the first module in run order winning. A sibling reactor
- * module appears as its `<module>/target/classes` output — mapped to a
- * `kind: "module"` artifact on the module directory itself, so its sources
+ * coordinates with the first module in discovery order winning. A sibling
+ * reactor module appears as its `<module>/target/classes` output — mapped to
+ * a `kind: "module"` artifact on the module directory itself, so its sources
  * are indexed in place exactly like a Gradle module's. An output that is
  * missing or empty contributes nothing; only when every output was empty is
  * the resolution a `no-classpath` failure (the root POM may legitimately be
@@ -284,15 +298,23 @@ function parseOutputs(outputs: string[], m2Dir: string, projectRoot: string, mod
   return { ok: true, artifacts: [...byCoordinates.values()] };
 }
 
+/** Absolute path of a directory's classpath output file. */
+function cpFile(dir: string): string {
+  return join(dir, ...CP_FILE_REL.split("/"));
+}
+
 /**
- * Resolve a Maven project's dependencies. The build-classpath goal runs once
- * at the project root plus once per module directory (recursive to depth 3),
- * each `--non-recursive` with its own output file and merged by coordinates;
- * `dependency:sources` then runs once at the root — enough for a reactor —
- * with its exit code ignored. Every recognized failure mode — no mvn
- * anywhere, timeout, spawn failure, non-zero exit, empty classpath, or a
- * classpath outside the m2 layout — becomes `{ ok: false, reason }`; an
- * unexpected error thrown by `exec` itself propagates to the caller.
+ * Resolve a Maven project's dependencies. One reactor-wide
+ * `dependency:build-classpath` run at the project root writes
+ * `<module>/target/jarpeek-classpath.txt` for the root and every module
+ * directory (recursive to depth 3); `-fae` keeps the reactor going past a
+ * failing module, whose failure degrades to `partial` instead of discarding
+ * the modules that resolved. `dependency:sources` then runs once at the
+ * root — enough for a reactor — with its exit code ignored. Every recognized
+ * failure mode — no mvn anywhere, timeout, spawn failure, a fully failed
+ * build, an empty classpath, or a classpath outside the m2 layout — becomes
+ * `{ ok: false, reason }`; an unexpected error thrown by `exec` itself
+ * propagates to the caller.
  */
 export async function resolveMaven(
   projectRoot: string,
@@ -307,45 +329,60 @@ export async function resolveMaven(
     return { ok: false, artifacts: [], reason: "no-mvn" };
   }
 
-  const scratch = mkdtempSync(join(tmpdir(), "jarpeek-mvn-"));
-  const outputs: string[] = [];
   const modules = moduleDirs(projectRoot);
+  const targets = [projectRoot, ...modules].map(cpFile);
+  // a file left by a crashed previous run must not pass for this run's
+  // output; `target/` is pre-created so the mojo can always write into it
+  // (a read-only tree skips the mkdir and the run itself will say why)
+  for (const target of targets) {
+    rmSync(target, { force: true });
+    try {
+      mkdirSync(join(target, ".."), { recursive: true });
+    } catch {
+      // unwritable: the mvn run's failure detail will carry the story
+    }
+  }
   try {
-    // every invocation is --non-recursive with its own output file: a root
-    // reactor run would overwrite the absolute outputFile per module, so the
-    // surviving file would hold only the LAST module's classpath
-    for (const [index, moduleDir] of [projectRoot, ...modules].entries()) {
-      const output = join(scratch, `cp-${index}.txt`);
-      outputs.push(output);
-      const args = [
-        ...selected.preArgs,
-        "-B",
-        "-q",
-        "--non-recursive",
-        "dependency:build-classpath",
-        `-Dmdep.outputFile=${output}`,
-      ];
-      let result: RunResult;
-      try {
-        result = await exec(selected.command, args, { timeoutMs, cwd: moduleDir });
-      } catch (error) {
-        if (error instanceof TimeoutError) {
-          return { ok: false, artifacts: [], reason: "timeout" };
-        }
-        if (error instanceof SpawnError) {
-          // bare mvn that cannot spawn despite a passing probe = treat as
-          // absence; an existing wrapper that fails to exec is a build failure
-          if (selected.bare) return { ok: false, artifacts: [], reason: "no-mvn" };
-          return { ok: false, artifacts: [], reason: `mvn-failed:${error.message}` };
-        }
-        throw error;
+    let result: RunResult;
+    try {
+      result = await exec(
+        selected.command,
+        [
+          ...selected.preArgs,
+          "-B",
+          "-q",
+          "-fae",
+          "dependency:build-classpath",
+          `-Dmdep.outputFile=${CP_FILE_REL}`,
+        ],
+        { timeoutMs, cwd: projectRoot },
+      );
+    } catch (error) {
+      if (error instanceof TimeoutError) {
+        return { ok: false, artifacts: [], reason: "timeout" };
       }
-      if (result.code !== 0) {
-        return { ok: false, artifacts: [], reason: `mvn-failed:${failureDetail(result)}` };
+      if (error instanceof SpawnError) {
+        // bare mvn that cannot spawn despite a passing probe = treat as
+        // absence; an existing wrapper that fails to exec is a build failure
+        if (selected.bare) return { ok: false, artifacts: [], reason: "no-mvn" };
+        return { ok: false, artifacts: [], reason: `mvn-failed:${error.message}` };
       }
+      throw error;
     }
 
-    // best-effort sources population; exit code and throw both ignored
+    const outputs = targets.filter((target) => existsSync(target));
+    const parsed = parseOutputs(outputs, m2Dir, projectRoot, modules);
+    if (!parsed.ok) {
+      // nothing survived the run: with a non-zero exit the mvn failure is
+      // the reason, else every module simply produced an empty classpath
+      return result.code !== 0
+        ? { ok: false, artifacts: [], reason: `mvn-failed:${failureDetail(result)}` }
+        : parsed;
+    }
+
+    // best-effort sources population; exit code and throw both ignored — it
+    // runs on partial resolutions too: everything that resolved deserves its
+    // sources even when a sibling module failed
     try {
       await exec(
         selected.command,
@@ -356,8 +393,15 @@ export async function resolveMaven(
       // tolerated: pairing simply falls back to whatever sources already exist
     }
 
-    return parseOutputs(outputs, m2Dir, projectRoot, modules);
+    if (result.code !== 0) {
+      const failed = [projectRoot, ...modules]
+        .filter((dir) => !existsSync(cpFile(dir)))
+        .map((dir) => (dir === projectRoot ? "." : relative(projectRoot, dir)))
+        .join(", ");
+      return { ...parsed, partial: `modules failed to resolve: ${failed}` };
+    }
+    return parsed;
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    for (const target of targets) rmSync(target, { force: true });
   }
 }

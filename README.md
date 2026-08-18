@@ -39,7 +39,9 @@ went stale the moment the build moved. 0.2.0 is lazy instead:
   artifacts with exit code 0, never a stack trace.
 - **Quiet by contract.** stderr is capped at three lines per invocation
   (one bootstrap notice plus at most two warning lines); stdout stays
-  parseable.
+  parseable. The only exception: while a resolve is actually running,
+  one heartbeat line per 30s — a cold-cache first run downloads for
+  minutes and silence reads as a hang.
 
 jarpeek resolves through the project's own build (Gradle, then Maven,
 then local machine caches as an explicit last resort), appends the local
@@ -94,7 +96,8 @@ Artifact arguments take full `g:a:v` coordinates or a unique artifact id
 Nothing needs to be primed by hand. The first query on a fresh project —
 or the first query after the build files change or a recorded jar
 vanishes — auto-resolves: one bounded Gradle/Maven pass, one stderr
-notice line, and the manifest is rewritten. jarpeek never indexes; later
+notice line (plus a 30s heartbeat while it runs), and the manifest is
+rewritten. jarpeek never indexes; later
 queries read the manifest and open only the jar entries they need.
 
 A resolve that fails never fails the query. With a manifest on disk it
@@ -131,8 +134,9 @@ Also: `jarpeek init` (wire harnesses), `jarpeek prime` (print the agent
 cheatsheet; `--full`, `--mcp`, `--export`, `--hook-json`), `jarpeek mcp`
 (serve MCP stdio).
 
-Diagnostics — the one bootstrap notice, warnings, degradations — go to
-stderr under a three-line cap; stdout stays parseable. Unknown classes
+Diagnostics — the one bootstrap notice, resolve heartbeats, warnings,
+degradations — go to stderr (warnings under a three-line cap); stdout
+stays parseable. Unknown classes
 exit 0 with suggestions.
 
 ## Provenance
@@ -160,7 +164,9 @@ failed re-resolve serves the existing manifest flagged `stale`; a
 resolution that degrades all the way to the cache scan is never adopted
 by queries (served stale with a manifest, answered as a miss without
 one). Each is a `warning: ...` line on stderr (a `degraded[]` field in
-JSON), aggregated so an invocation never exceeds the three-line budget.
+JSON), aggregated so an invocation never exceeds the three-line warning
+budget. A Maven reactor where some modules resolve and one fails keeps
+the resolved set and names the failed modules in the same channel.
 Search results are scoped to the project's resolved dependency set, and
 `search_symbols` further to the one named artifact.
 

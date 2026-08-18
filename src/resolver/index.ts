@@ -95,6 +95,11 @@ export async function resolveDependencies(
       const resolution = await maven(projectRoot);
       if (resolution.ok && resolution.artifacts.length > 0) {
         artifacts = resolution.artifacts;
+        // a reactor that partially failed still answers, but the missing
+        // modules' unique dependencies ride the warning channel
+        if (resolution.partial !== undefined) {
+          degraded.push({ from: "maven", reason: resolution.partial });
+        }
         break;
       }
       degraded.push({ from: "maven", reason: resolution.reason ?? NO_ARTIFACTS });

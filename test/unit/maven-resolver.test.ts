@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,13 +62,6 @@ function stubExec(
   return { exec, calls };
 }
 
-/** The `-Dmdep.outputFile=` path of a build-classpath invocation. */
-function outputFileOf(call: ExecCall): string {
-  const arg = call.args.find((a) => a.startsWith("-Dmdep.outputFile="));
-  if (arg === undefined) throw new Error(`no outputFile arg in ${call.args.join(" ")}`);
-  return arg.slice("-Dmdep.outputFile=".length);
-}
-
 /** coordinates → artifact lookup that fails loudly on a missing entry. */
 function indexBy(artifacts: Array<{ coordinates: string }>) {
   const index = new Map(artifacts.map((a) => [a.coordinates, a]));
@@ -117,31 +110,44 @@ function m2Jar(m2: string, ...rel: string[]): string {
 }
 
 /**
- * exec stub whose build-classpath invocations write `content` to the
- * invocation's own `-Dmdep.outputFile`; dependency:sources resolves cleanly
- * unless `sourcesResult` says otherwise.
+ * exec stub mimicking the reactor-wide build-classpath run: the goal's
+ * RELATIVE `-Dmdep.outputFile` resolves against each module's basedir, so
+ * the stub writes every module's `target/jarpeek-classpath.txt` on the one
+ * root invocation. A module absent from `cps` writes nothing (its
+ * resolution failed). `exit` becomes the mvn exit code (0 default, 1 for a
+ * partial reactor); dependency:sources resolves cleanly unless
+ * `sourcesResult` says otherwise.
  */
-function cpExec(content: string, sourcesResult: Pick<RunResult, "code" | "stderr"> = {}) {
+function reactorCpExec(
+  cps: { dir: string; content: string }[],
+  { exit = 0, sourcesResult = {} as Pick<RunResult, "code" | "stderr"> } = {},
+) {
   return stubExec(async (_cmd, args) => {
     if (args.includes("dependency:sources")) {
       return { stdout: "", stderr: sourcesResult.stderr ?? "", code: sourcesResult.code ?? 0 };
     }
-    const out = args.find((a) => a.startsWith("-Dmdep.outputFile="))!.slice("-Dmdep.outputFile=".length);
-    writeFileSync(out, content, "utf8");
-    return { stdout: "", stderr: "", code: 0 };
+    for (const { dir, content } of cps) {
+      const file = join(dir, "target", "jarpeek-classpath.txt");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, content, "utf8");
+    }
+    return { stdout: "", stderr: exit === 0 ? "" : "[ERROR] reactor partially failed", code: exit };
   });
 }
 
-/** exec stub keyed on invocation cwd: build-classpath writes that module's cp. */
-function perModuleCpExec(cps: { cwd: string; content: string }[]) {
+/**
+ * exec stub for a single-module project: the one build-classpath invocation
+ * writes `content` under its cwd's `target/`.
+ */
+function cpExec(content: string, sourcesResult: Pick<RunResult, "code" | "stderr"> = {}) {
   return stubExec(async (_cmd, args, opts) => {
     if (args.includes("dependency:sources")) {
-      return { stdout: "", stderr: "", code: 0 };
+      return { stdout: "", stderr: sourcesResult.stderr ?? "", code: sourcesResult.code ?? 0 };
     }
-    const entry = cps.find((c) => c.cwd === opts.cwd);
-    if (entry === undefined) throw new Error(`unexpected cwd ${opts.cwd}`);
-    const out = args.find((a) => a.startsWith("-Dmdep.outputFile="))!.slice("-Dmdep.outputFile=".length);
-    writeFileSync(out, entry.content, "utf8");
+    const rel = args.find((a) => a.startsWith("-Dmdep.outputFile="))!.slice("-Dmdep.outputFile=".length);
+    const file = join(opts.cwd ?? process.cwd(), ...rel.split("/"));
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, content, "utf8");
     return { stdout: "", stderr: "", code: 0 };
   });
 }
@@ -181,22 +187,27 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     );
     expect(junit.sourcesJar).toBeUndefined();
 
-    // invocation shape: bare mvn (no wrapper in scratch, probe passed), the
-    // goal pins, cwd projectRoot, default timeout, output under os.tmpdir;
-    // the sources run follows and reuses the same command
+    // invocation shape: bare mvn (no wrapper in scratch, probe passed), ONE
+    // reactor-wide run at the root — -fae so a failing module cannot discard
+    // the rest, RELATIVE outputFile so each module writes under its own
+    // target/ — then the sources run with the same command
     expect(calls).toHaveLength(2);
     expect(calls[0].cmd).toBe("mvn");
-    expect(calls[0].args.slice(0, 4)).toEqual(["-B", "-q", "--non-recursive", "dependency:build-classpath"]);
-    expect(calls[0].args).toHaveLength(5);
-    const out = outputFileOf(calls[0]);
-    expect(out.startsWith(join(tmpdir(), "jarpeek-mvn-"))).toBe(true);
-    expect(out.endsWith("cp-0.txt")).toBe(true);
+    expect(calls[0].args).toEqual([
+      "-B",
+      "-q",
+      "-fae",
+      "dependency:build-classpath",
+      "-Dmdep.outputFile=target/jarpeek-classpath.txt",
+    ]);
     expect(calls[0].opts.cwd).toBe(projectRoot);
-    expect(calls[0].opts.timeoutMs).toBe(180_000);
+    expect(calls[0].opts.timeoutMs).toBe(300_000);
     expect(calls[1].cmd).toBe("mvn");
     expect(calls[1].args).toEqual(["-B", "-q", "dependency:sources", "-DincludeScope=test"]);
     expect(calls[1].opts.cwd).toBe(projectRoot);
-    expect(calls[1].opts.timeoutMs).toBe(180_000);
+    expect(calls[1].opts.timeoutMs).toBe(300_000);
+    // the per-module output file never outlives the resolution
+    expect(existsSync(join(projectRoot, "target", "jarpeek-classpath.txt"))).toBe(false);
   });
 
   it("parses a windows cp.txt joined by ; with backslash m2 layout", async () => {
@@ -217,7 +228,8 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     expect(b.binaryJar).toBe("C:\\Users\\dev\\.m2\\repository\\org\\a\\b\\1.0\\b-1.0.jar");
     expect(b.sourcesJar).toBeUndefined(); // no sibling in the fixture m2
     expect(b.provenance).toBeUndefined();
-    expect(calls[0].args).toContain("--non-recursive");
+    expect(calls[0].args).toContain("-fae");
+    expect(calls[0].args).not.toContain("--non-recursive");
     expect(calls[0].args[3]).toBe("dependency:build-classpath");
   });
 
@@ -395,7 +407,7 @@ describe("resolveMaven: wrapper selection", () => {
 
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe(join(projectRoot, "mvnw"));
-    expect(calls[0].args).toContain("--non-recursive");
+    expect(calls[0].args).not.toContain("--non-recursive");
     expect(calls[0].args[3]).toBe("dependency:build-classpath");
     expect(calls[0].opts.cwd).toBe(projectRoot);
   });
@@ -428,11 +440,15 @@ describe("resolveMaven: wrapper selection", () => {
 
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe("cmd");
-    expect(calls[0].args.slice(0, 6)).toEqual(["/c", "mvn", "-B", "-q", "--non-recursive", "dependency:build-classpath"]);
-    expect(calls[0].args).toHaveLength(7);
-    const bareOut = outputFileOf(calls[0]);
-    expect(bareOut.startsWith(join(tmpdir(), "jarpeek-mvn-"))).toBe(true);
-    expect(bareOut.endsWith("cp-0.txt")).toBe(true);
+    expect(calls[0].args).toEqual([
+      "/c",
+      "mvn",
+      "-B",
+      "-q",
+      "-fae",
+      "dependency:build-classpath",
+      "-Dmdep.outputFile=target/jarpeek-classpath.txt",
+    ]);
   });
 });
 
@@ -447,25 +463,25 @@ describe("resolveMaven: multi-module", () => {
     return { projectRoot, mod };
   }
 
-  it("runs build-classpath per module with per-module output files and merges the artifacts", async () => {
+  it("runs ONE reactor-wide build-classpath and merges the per-module output files", async () => {
     const { projectRoot, mod } = multiModule();
     const m2 = join(projectRoot, "m2");
     const { content: rootCp } = materialize(m2, CP_UNIX, [
       "/home/dev/.m2/repository/org/springframework/spring-tx/6.1.4/spring-tx-6.1.4.jar",
     ]);
     const modCp = m2Jar(m2, "com", "example", "lib", "2.0", "lib-2.0.jar");
-    const { exec, calls } = perModuleCpExec([
-      { cwd: projectRoot, content: rootCp },
-      { cwd: mod, content: modCp },
+    const { exec, calls } = reactorCpExec([
+      { dir: projectRoot, content: rootCp },
+      { dir: mod, content: modCp },
     ]);
 
     const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
 
     expect(resolution.ok).toBe(true);
     const buildClasspathCalls = calls.filter((c) => c.args.includes("dependency:build-classpath"));
-    expect(buildClasspathCalls).toHaveLength(2);
-    expect(buildClasspathCalls.map((c) => c.opts.cwd).sort()).toEqual([mod, projectRoot].sort());
-    expect(outputFileOf(buildClasspathCalls[0])).not.toBe(outputFileOf(buildClasspathCalls[1]));
+    expect(buildClasspathCalls).toHaveLength(1);
+    expect(buildClasspathCalls[0].opts.cwd).toBe(projectRoot);
+    expect(buildClasspathCalls[0].args).toContain("-fae");
     // root's 2 m2 entries + the module's 1, all distinct coordinates
     expect(resolution.artifacts).toHaveLength(3);
     const lookup = indexBy(resolution.artifacts);
@@ -482,9 +498,9 @@ describe("resolveMaven: multi-module", () => {
     const m2 = join(projectRoot, "m2");
     const { content: rootCp } = materialize(m2, CP_UNIX, []);
     const modCp = m2Jar(m2, "org", "junit", "jupiter", "junit-jupiter", "5.10.2", "junit-jupiter-5.10.2.jar");
-    const { exec } = perModuleCpExec([
-      { cwd: projectRoot, content: rootCp },
-      { cwd: mod, content: modCp },
+    const { exec } = reactorCpExec([
+      { dir: projectRoot, content: rootCp },
+      { dir: mod, content: modCp },
     ]);
 
     const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
@@ -495,7 +511,7 @@ describe("resolveMaven: multi-module", () => {
     expect(resolution.artifacts.filter((a) => a.coordinates === JUNIT)).toHaveLength(1);
   });
 
-  it("discovers nested modules (root/a/a1) recursively and every run is --non-recursive", async () => {
+  it("discovers nested modules (root/a/a1) recursively and captures them in the one run", async () => {
     const projectRoot = scratch();
     const a1 = join(projectRoot, "a", "a1");
     mkdirSync(a1, { recursive: true });
@@ -504,19 +520,16 @@ describe("resolveMaven: multi-module", () => {
     const m2 = join(projectRoot, "m2");
     const { content: rootCp } = materialize(m2, CP_UNIX, []);
     const nestedCp = m2Jar(m2, "com", "example", "nested", "3.0", "nested-3.0.jar");
-    const { exec, calls } = perModuleCpExec([
-      { cwd: projectRoot, content: rootCp },
-      { cwd: a1, content: nestedCp },
+    const { exec, calls } = reactorCpExec([
+      { dir: projectRoot, content: rootCp },
+      { dir: a1, content: nestedCp },
     ]);
 
     const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
 
     expect(resolution.ok).toBe(true);
     const buildClasspathCalls = calls.filter((c) => c.args.includes("dependency:build-classpath"));
-    expect(buildClasspathCalls).toHaveLength(2);
-    // both runs pinned to their own module: no reactor-wide overwrite
-    expect(buildClasspathCalls.every((c) => c.args.includes("--non-recursive"))).toBe(true);
-    expect(buildClasspathCalls.map((c) => c.opts.cwd).sort()).toEqual([a1, projectRoot].sort());
+    expect(buildClasspathCalls).toHaveLength(1);
     // the nested module's unique dependency is captured AND the root's survive
     expect(resolution.artifacts).toHaveLength(3);
     const lookup = indexBy(resolution.artifacts);
@@ -529,15 +542,45 @@ describe("resolveMaven: multi-module", () => {
     const { projectRoot, mod } = multiModule();
     const m2 = join(projectRoot, "m2");
     const { content: rootCp } = materialize(m2, CP_UNIX, []);
-    const { exec } = perModuleCpExec([
-      { cwd: projectRoot, content: rootCp },
-      { cwd: mod, content: "" },
+    const { exec } = reactorCpExec([
+      { dir: projectRoot, content: rootCp },
+      { dir: mod, content: "" },
     ]);
 
     const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
 
     expect(resolution.ok).toBe(true);
     expect(resolution.artifacts).toHaveLength(2);
+  });
+
+  it("degrades to partial when a module fails while the others resolved (exit 1)", async () => {
+    const { projectRoot, mod } = multiModule();
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    // -fae reactor: root resolved, mod never wrote its file, mvn exited 1
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: rootCp }], { exit: 1 });
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    // what resolved is trustworthy; the failed module is named, not fatal
+    expect(resolution.ok).toBe(true);
+    expect(resolution.artifacts).toHaveLength(2); // root's spring-tx + junit
+    expect(resolution.partial).toBe("modules failed to resolve: mod");
+    expect(existsSync(join(mod, "target", "jarpeek-classpath.txt"))).toBe(false);
+  });
+
+  it("never ingests a stale output file left by a crashed previous run", async () => {
+    const { projectRoot } = multiModule();
+    const stale = join(projectRoot, "target", "jarpeek-classpath.txt");
+    mkdirSync(dirname(stale), { recursive: true });
+    writeFileSync(stale, "/opt/relocated/a/b/1.0/b-1.0.jar", "utf8");
+    // mvn succeeds but writes nothing (the goal skipped the module)
+    const { exec } = stubExec(async () => ({ stdout: "", stderr: "", code: 0 }));
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
+
+    expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-classpath" });
+    expect(existsSync(stale)).toBe(false); // removed before the run, not parsed
   });
 
   it("maps a sibling's target/classes entry to a kind:module artifact on the module directory", async () => {
@@ -548,9 +591,9 @@ describe("resolveMaven: multi-module", () => {
     // a reactor run resolving root's dependencies onto sibling mod's compiled
     // output plus one external jar
     const modClasses = join(mod, "target", "classes");
-    const { exec } = perModuleCpExec([
-      { cwd: projectRoot, content: `${modClasses}:${jar}` },
-      { cwd: mod, content: "" },
+    const { exec } = reactorCpExec([
+      { dir: projectRoot, content: `${modClasses}:${jar}` },
+      { dir: mod, content: "" },
     ]);
 
     const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });

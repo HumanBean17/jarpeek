@@ -32,7 +32,7 @@ const DEMO_JAR = join(PKG_ROOT, "test", "fixtures", "jars", "demo-lib-1.0.0.jar"
 const DEMO_SOURCES_JAR = join(PKG_ROOT, "test", "fixtures", "jars", "demo-lib-1.0.0-sources.jar");
 
 /** The two notices ctxFor can emit, pinned so a wording change is a conscious act. */
-const NOTICE_FIRST_RUN = "[jarpeek] resolving dependencies (first run)...";
+const NOTICE_FIRST_RUN = "[jarpeek] resolving dependencies (first run — may download dependencies and sources)...";
 const NOTICE_STALE = "[jarpeek] resolving dependencies (manifest stale)...";
 
 const roots: string[] = [];

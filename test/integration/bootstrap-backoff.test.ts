@@ -181,7 +181,7 @@ describe("successful resolve-only bootstrap", () => {
 
     const result = await ctx.ensureReady();
     expect(result).toEqual({ bootstrapped: true, stale: false });
-    expect(notices).toEqual(["resolving dependencies (first run)"]);
+    expect(notices).toEqual(["resolving dependencies (first run — may download dependencies and sources)"]);
 
     // the resolve-only bootstrap's whole footprint: manifest.json, nothing else
     expect(readdirSync(join(projectRoot, ".jarpeek"))).toEqual(["manifest.json"]);
@@ -189,7 +189,7 @@ describe("successful resolve-only bootstrap", () => {
     expect(manifest?.version).toBe(2);
     expect(manifest?.artifacts.map((a) => a.coordinates)).toEqual(["com.example:demo-lib:1.0.0"]);
     // the fresh manifest is served as-is on the next query
-    expect(notices).toEqual(["resolving dependencies (first run)"]);
+    expect(notices).toEqual(["resolving dependencies (first run — may download dependencies and sources)"]);
     expect(await ctx.ensureReady()).toEqual({ bootstrapped: false, stale: false });
   });
 
@@ -201,7 +201,7 @@ describe("successful resolve-only bootstrap", () => {
       onNotice: (msg) => notices.push(msg),
     });
     await ctx.ensureReady();
-    expect(notices).toEqual(["resolving dependencies (first run)"]);
+    expect(notices).toEqual(["resolving dependencies (first run — may download dependencies and sources)"]);
 
     // the build file moves: the next query re-resolves under the stale notice
     const gradle = join(projectRoot, "build.gradle");
@@ -213,7 +213,7 @@ describe("successful resolve-only bootstrap", () => {
     const result = await ctx.ensureReady();
     expect(result).toEqual({ bootstrapped: true, stale: true });
     expect(notices).toEqual([
-      "resolving dependencies (first run)",
+      "resolving dependencies (first run — may download dependencies and sources)",
       "resolving dependencies (manifest stale)",
     ]);
   });
@@ -230,7 +230,7 @@ describe("fresh-project query end-to-end", () => {
 
     const result = await findClass(ctx, "com.example.Demo");
     expect(result.hits.map((hit) => hit.fqn)).toContain("com.example.Demo");
-    expect(notices).toEqual(["resolving dependencies (first run)"]);
+    expect(notices).toEqual(["resolving dependencies (first run — may download dependencies and sources)"]);
 
     const manifest = await ctx.manifest();
     expect(manifest?.version).toBe(2);

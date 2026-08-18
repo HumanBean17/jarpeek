@@ -80,9 +80,11 @@ function errorMessage(e: unknown): string {
 const FAILED_BOOTSTRAP_BACKOFF_MS = 60_000;
 
 /** Notice emitted before the first resolution a project has ever seen. */
-const NOTICE_FIRST_RUN = "resolving dependencies (first run)";
+const NOTICE_FIRST_RUN = "resolving dependencies (first run — may download dependencies and sources)";
 /** Notice emitted when the manifest exists but no longer matches the build. */
 const NOTICE_STALE = "resolving dependencies (manifest stale)";
+/** While a bootstrap runs, one heartbeat per this many milliseconds. */
+const HEARTBEAT_MS = 30_000;
 
 /** Warning carried when a heuristic cache scan could not replace a real manifest. */
 const STALE_SERVED_CACHE_SCAN = "stale index served (resolution degraded to cache scan)";
@@ -105,8 +107,14 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
   };
 
   async function runBootstrap(wasStale: boolean): Promise<EnsureReadyResult> {
-    // the one progress line a resolve-only bootstrap owes the user
+    // the one progress line a resolve-only bootstrap owes the user…
     opts.onNotice?.(wasStale ? NOTICE_STALE : NOTICE_FIRST_RUN);
+    // …plus a heartbeat while it runs: a cold-cache resolve can download for
+    // minutes in total silence, which reads exactly like a hang
+    const startedAt = now();
+    const heartbeat = setInterval(() => {
+      opts.onNotice?.(`still resolving (${Math.round((now() - startedAt) / 1000)}s)`);
+    }, HEARTBEAT_MS);
     try {
       const resolution = await resolveDependencies(projectRoot, opts.resolvers);
       // cache-scan is the answer of last resort, and queries never adopt its
@@ -155,6 +163,8 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       failedAt = now();
       addWarning(`resolution failed: ${errorMessage(e)}`);
       return { bootstrapped: false, stale: false };
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 

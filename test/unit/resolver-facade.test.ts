@@ -137,6 +137,25 @@ describe("resolveDependencies", () => {
     expect(out.warnings).toEqual([]);
   });
 
+  it("a PARTIAL maven success still wins, with the failed modules in degraded", async () => {
+    const dir = scratch();
+    writeFileSync(join(dir, "pom.xml"), "");
+    const f = fakes({
+      maven: {
+        ok: true,
+        artifacts: [artifact("com.example:beta:2.0")],
+        partial: "modules failed to resolve: chat-app",
+      },
+    });
+
+    const out = await resolveDependencies(dir, f.opts);
+
+    expect(out.artifacts.map((a) => a.coordinates)).toEqual(["com.example:beta:2.0"]);
+    expect(out.degraded).toEqual([{ from: "maven", reason: "modules failed to resolve: chat-app" }]);
+    expect(out.viaCacheScan).toBe(false); // partial answers, it does not degrade to scan
+    expect(f.calls.cacheScan).toBe(0);
+  });
+
   it("both fail: cache-scan artifacts used, warning emitted, two degraded entries", async () => {
     const dir = scratch();
     writeFileSync(join(dir, "settings.gradle"), "");
