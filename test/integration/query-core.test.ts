@@ -363,6 +363,15 @@ describe("readMember / readSource from listings", () => {
     }
   });
 
+  it("readSource with no options defaults to full source", async () => {
+    const result = await readSource(ctx, "com.example.Demo");
+    expect(result.mode).toBe("full");
+    if (result.mode === "full") {
+      expect(result.content).toContain("public Object run(String input, int count) throws Exception {");
+      expect(result.lineCount).toBeGreaterThan(50);
+    }
+  });
+
   it("readSource full from a sources jar serves the exact fixture entry", async () => {
     const fixture = await demoSource();
     const result = await readSource(ctx, "com.example.Demo", { mode: "full" });

@@ -235,7 +235,7 @@ describe("read-member", () => {
     const run = cli(c, ["read-member", "com.example.Demo", "#run(String,int)"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("com.example.Demo#run(String,int)");
-    expect(run.stdout).toMatch(/lines 11–2[0-9]/);
+    expect(run.stdout).toMatch(/lines 13–2[0-9]/);
     expect(run.stdout).toContain("public Object run(String input, int count) throws Exception {");
     expect(run.stdout).toContain("Runs the demo transformation over the given input.");
   });
@@ -281,7 +281,7 @@ describe("read-source", () => {
     expect(run.stdout).toContain("file com/example/Demo.java");
     expect(run.stdout).toContain("provenance source");
     expect(run.stdout).toContain("1│ package com.example;");
-    expect(run.stdout).toContain("19│     public Object run(String input, int count) throws Exception {");
+    expect(run.stdout).toContain("21│     public Object run(String input, int count) throws Exception {");
   });
 
   it("--lines 2:3 prints exactly two numbered lines", () => {
@@ -289,20 +289,25 @@ describe("read-source", () => {
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("file com/example/Demo.java");
     const numbered = run.stdout.split("\n").filter((l) => /^\d+│ /.test(l));
-    // fixture line 2 is blank, line 3 opens the class javadoc
-    expect(numbered).toEqual(["2│ ", "3│ /**"]);
+    // fixture line 2 is blank, line 3 is the import the fixture gained
+    expect(numbered).toEqual(["2│ ", "3│ import java.util.List;"]);
   });
 
-  it("default mode renders the outline rows", () => {
+  it("no flags renders the full source by default", () => {
     const run = cli(c, ["read-source", "com.example.Demo"]);
     expect(run.code).toBe(0);
-    expect(run.stdout).toContain("SELECTOR");
-    expect(run.stdout).toContain("run(String,int)");
+    expect(run.stdout).toContain("file com/example/Demo.java");
+    expect(run.stdout).toContain("provenance source");
+    expect(run.stdout).toContain("1│ package com.example;");
+    expect(run.stdout).toContain("21│     public Object run(String input, int count) throws Exception {");
   });
 
   it("--json deep-equals the in-process readSource result", async () => {
     const full = await readSource(c.ctx, "com.example.Demo", { mode: "full" });
     expect(jsonRun(c, ["read-source", "com.example.Demo", "--full"])).toEqual(full);
+    // the no-flag default hits the same core default, not a CLI-side one
+    const defaulted = await readSource(c.ctx, "com.example.Demo");
+    expect(jsonRun(c, ["read-source", "com.example.Demo"])).toEqual(defaulted);
 
     const lines = await readSource(c.ctx, "com.example.Demo", { mode: "lines", from: 2, to: 3 });
     expect(jsonRun(c, ["read-source", "com.example.Demo", "--lines", "2:3"])).toEqual(lines);

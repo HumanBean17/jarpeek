@@ -1,10 +1,11 @@
 /**
  * readSource: source text for one class, in the size the caller asked for.
  *
- * `outline` (default) reuses the outline rows. `full` resolves the located
- * winner's best source — module sourceDir file, sources-jar entry (JDK
- * src.zip included), or a whole-class CFR decompile for binary-only
- * artifacts — and `lines` slices that content. The located entry names the
+ * `full` (default) resolves the located winner's best source — module
+ * sourceDir file, sources-jar entry (JDK src.zip included), or a whole-class
+ * CFR decompile for binary-only artifacts — and `lines` slices that content;
+ * `outline` reuses the outline rows (the frugal look is the `outline`
+ * command's job, spelled explicitly). The located entry names the
  * bytes for every rung: no re-listing, no suffix search. When no real source
  * can be produced (JDK classes where decompilation is out of scope, or a
  * decompile that failed) the signature rows render as text under provenance
@@ -163,7 +164,7 @@ export async function readSource(
   fqn: string,
   opts: ReadSourceOptions = {},
 ): Promise<ReadSourceResult> {
-  const mode = opts.mode ?? "outline";
+  const mode = opts.mode ?? "full";
   if (mode === "outline") {
     return { mode, ...(await outline(ctx, fqn)) };
   }
