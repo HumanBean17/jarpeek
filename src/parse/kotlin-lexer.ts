@@ -380,7 +380,9 @@ class Parser {
         this.pos++;
         this.result.pkg = this.readDottedName();
         this.finishLine();
-      } else if (isIdent(t, "import") || isIdent(t, "typealias")) {
+      } else if (isIdent(t, "import")) {
+        this.result.imports.push(this.readImportStatement());
+      } else if (isIdent(t, "typealias")) {
         this.finishLine();
       } else if (isPunct(t, ";")) {
         this.pos++;
@@ -429,6 +431,30 @@ class Parser {
       this.pos++;
     }
     if (isPunct(this.peek(), ";")) this.pos++;
+  }
+
+  /**
+   * Consume one `import a.b.C as D` statement starting at its `import`
+   * keyword and return it verbatim (whitespace-normalized, no semicolon —
+   * Kotlin imports are newline-terminated; a rare trailing `;` is consumed
+   * but kept out of the text). The keyword is consumed first, so even a
+   * stray `import` on its own line advances — the old branch delegated to
+   * finishLine before consuming anything and looped forever.
+   */
+  private readImportStatement(): string {
+    const parts: Token[] = [this.tokens[this.pos]!];
+    this.pos++;
+    const line = parts[0]!.line;
+    while (
+      this.pos < this.tokens.length &&
+      this.tokens[this.pos]!.line === line &&
+      !isPunct(this.tokens[this.pos], ";")
+    ) {
+      parts.push(this.tokens[this.pos]!);
+      this.pos++;
+    }
+    if (isPunct(this.peek(), ";")) this.pos++;
+    return joinTokens(parts);
   }
 
   /** Consume a balanced `(...)` group (annotation arguments, accessor parameters). */
@@ -667,7 +693,7 @@ class Parser {
         return;
       }
       if (kw !== undefined && isIdent(kw, "import")) {
-        this.finishLine();
+        this.result.imports.push(this.readImportStatement());
         return;
       }
       if (kw === undefined) return;
@@ -780,7 +806,7 @@ class Parser {
       signature,
       lineStart: header.start.line,
       lineEnd: this.lastConsumedLine(),
-      ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
+      ...(header.javadoc ? { javadocStart: header.javadoc.line, javadoc: header.javadoc.text } : {}),
       members: [],
     };
     this.result.classes.push(cls);
@@ -796,7 +822,7 @@ class Parser {
         signature,
         lineStart: cls.lineStart,
         lineEnd: cls.lineEnd,
-        ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
+        ...(header.javadoc ? { javadocStart: header.javadoc.line, javadoc: header.javadoc.text } : {}),
         ...(recordedModifiers.length > 0 ? { modifiers: recordedModifiers } : {}),
       });
     }
@@ -1205,7 +1231,7 @@ class Parser {
       signature,
       lineStart: header.start.line,
       lineEnd,
-      ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
+      ...(header.javadoc ? { javadocStart: header.javadoc.line, javadoc: header.javadoc.text } : {}),
       ...(receiver !== undefined ? { receiverType: receiver } : {}),
       ...(header.modifiers.length > 0 ? { modifiers: header.modifiers } : {}),
       ...platformOf(header),
@@ -1282,7 +1308,7 @@ class Parser {
       signature,
       lineStart: header.start.line,
       lineEnd,
-      ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
+      ...(header.javadoc ? { javadocStart: header.javadoc.line, javadoc: header.javadoc.text } : {}),
       ...(receiver !== undefined ? { receiverType: receiver } : {}),
       ...(header.modifiers.length > 0 ? { modifiers: header.modifiers } : {}),
       ...platformOf(header),
@@ -1302,7 +1328,7 @@ class Parser {
       signature: `constructor(${params.join(", ")})`,
       lineStart: header.start.line,
       lineEnd,
-      ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
+      ...(header.javadoc ? { javadocStart: header.javadoc.line, javadoc: header.javadoc.text } : {}),
       ...(header.modifiers.length > 0 ? { modifiers: header.modifiers } : {}),
     });
   }
@@ -1416,7 +1442,7 @@ class Parser {
       signature: name.text,
       lineStart: header.start.line,
       lineEnd,
-      ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
+      ...(header.javadoc ? { javadocStart: header.javadoc.line, javadoc: header.javadoc.text } : {}),
     });
     return endedConstantList;
   }
@@ -1453,7 +1479,7 @@ function platformOf(header: MemberHeader): { platform?: "expect" | "actual" } {
  * degrades to diagnostics on the returned record.
  */
 export function parseKotlinSource(text: string, file: string): SourceFileDeclarations {
-  const result: SourceFileDeclarations = { file, pkg: null, classes: [], diagnostics: [] };
+  const result: SourceFileDeclarations = { file, pkg: null, imports: [], classes: [], diagnostics: [] };
   try {
     const { tokens, javadocs } = tokenize(text);
     new Parser(tokens, javadocs, result, file).parseFile();

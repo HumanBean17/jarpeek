@@ -258,7 +258,7 @@ class Parser {
         this.result.pkg = this.readDottedName();
         this.finishStatement();
       } else if (isIdent(t, "import")) {
-        this.finishStatement();
+        this.result.imports.push(this.readImportStatement());
       } else if (isPunct(t, ";")) {
         this.pos++;
       } else {
@@ -312,6 +312,28 @@ class Parser {
   private finishStatement(): void {
     this.skipToSemicolon();
     if (isPunct(this.peek(), ";")) this.pos++;
+  }
+
+  /**
+   * Consume one `import [static] a.b.C[.*];` statement from its `import`
+   * keyword and return it verbatim (whitespace-normalized, `;` included) for
+   * `SourceFileDeclarations.imports`. Stops at a depth-0 `;` or `,` exactly
+   * like finishStatement, so malformed input recovers the same way.
+   */
+  private readImportStatement(): string {
+    const parts: Token[] = [];
+    let depth = 0;
+    while (this.pos < this.tokens.length) {
+      const t = this.tokens[this.pos]!;
+      if (depth === 0 && (t.text === ";" || t.text === ",")) break;
+      this.pos++;
+      parts.push(t);
+      if (t.text === "(" || t.text === "[" || t.text === "{") depth++;
+      else if (t.text === ")" || t.text === "]" || t.text === "}") depth = Math.max(0, depth - 1);
+    }
+    const joined = joinTokens(parts);
+    if (isPunct(this.peek(), ";")) this.pos++;
+    return joined.endsWith(";") ? joined : `${joined};`;
   }
 
   /**
@@ -469,7 +491,7 @@ class Parser {
         return;
       }
       if (kw && isIdent(kw, "import")) {
-        this.finishStatement();
+        this.result.imports.push(this.readImportStatement());
         return;
       }
       const classKind = classKindOf(kw);
@@ -549,7 +571,7 @@ class Parser {
       signature,
       lineStart: header.start.line,
       lineEnd: this.lastLine(),
-      ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
+      ...(header.javadoc ? { javadocStart: header.javadoc.line, javadoc: header.javadoc.text } : {}),
       members: [],
     };
     this.result.classes.push(cls);
@@ -565,7 +587,7 @@ class Parser {
         signature,
         lineStart: cls.lineStart,
         lineEnd: cls.lineEnd,
-        ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
+        ...(header.javadoc ? { javadocStart: header.javadoc.line, javadoc: header.javadoc.text } : {}),
         ...(header.modifiers.length > 0 ? { modifiers: header.modifiers } : {}),
       });
     }
@@ -667,7 +689,7 @@ class Parser {
       signature: name.text,
       lineStart: header.start.line,
       lineEnd,
-      ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
+      ...(header.javadoc ? { javadocStart: header.javadoc.line, javadoc: header.javadoc.text } : {}),
     });
     return endedConstantList;
   }
@@ -711,7 +733,7 @@ class Parser {
       signature: [...header.modifiers, `${name.text}(${params.join(",")})`].join(" "),
       lineStart: header.start.line,
       lineEnd,
-      ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
+      ...(header.javadoc ? { javadocStart: header.javadoc.line, javadoc: header.javadoc.text } : {}),
       ...(header.modifiers.length > 0 ? { modifiers: header.modifiers } : {}),
     });
   }
@@ -773,7 +795,7 @@ class Parser {
         .join(" "),
       lineStart: header.start.line,
       lineEnd,
-      ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
+      ...(header.javadoc ? { javadocStart: header.javadoc.line, javadoc: header.javadoc.text } : {}),
       ...(header.modifiers.length > 0 ? { modifiers: header.modifiers } : {}),
     });
   }
@@ -829,7 +851,7 @@ class Parser {
         ].join(" "),
         lineStart: name === firstName ? header.start.line : name.line,
         lineEnd,
-        ...(header.javadoc ? { javadocStart: header.javadoc.line } : {}),
+        ...(header.javadoc ? { javadocStart: header.javadoc.line, javadoc: header.javadoc.text } : {}),
         ...(header.modifiers.length > 0 ? { modifiers: header.modifiers } : {}),
       });
       if (isPunct(this.peek(), ",")) {
@@ -1017,7 +1039,7 @@ class Parser {
  * degrades to diagnostics on the returned record.
  */
 export function parseJavaSource(text: string, file: string): SourceFileDeclarations {
-  const result: SourceFileDeclarations = { file, pkg: null, classes: [], diagnostics: [] };
+  const result: SourceFileDeclarations = { file, pkg: null, imports: [], classes: [], diagnostics: [] };
   try {
     const { tokens, javadocs } = tokenize(text);
     new Parser(tokens, javadocs, result).parseFile();

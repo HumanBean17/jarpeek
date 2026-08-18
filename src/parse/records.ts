@@ -37,7 +37,7 @@ export type ClassRecordSource = Pick<
   ParsedClass,
   "fqn" | "kind" | "visibility" | "static" | "deprecated" | "signature"
 > &
-  Partial<Pick<ParsedClass, "lineStart" | "lineEnd" | "javadocStart">>;
+  Partial<Pick<ParsedClass, "lineStart" | "lineEnd" | "javadocStart" | "javadoc">>;
 
 /** Class-level Declaration: selector is the simple name, per the query contract. */
 export function classRecord(cls: ClassRecordSource, file: string): Declaration {
@@ -52,6 +52,7 @@ export function classRecord(cls: ClassRecordSource, file: string): Declaration {
     signature: cls.signature,
     ...(cls.lineStart !== undefined ? { lineStart: cls.lineStart, lineEnd: cls.lineEnd } : {}),
     ...(cls.javadocStart !== undefined ? { javadocStart: cls.javadocStart } : {}),
+    ...(cls.javadoc !== undefined ? { javadoc: cls.javadoc } : {}),
   };
 }
 
@@ -63,7 +64,7 @@ export function classRecord(cls: ClassRecordSource, file: string): Declaration {
 export function recordsFromSourceText(
   text: string,
   file: string,
-): { records: Declaration[]; diagnostics: string[] } {
+): { records: Declaration[]; diagnostics: string[]; imports: string[] } {
   const parsed = file.endsWith(".kt") ? parseKotlinSource(text, file) : parseJavaSource(text, file);
   const records: Declaration[] = [];
   for (const cls of parsed.classes) {
@@ -72,7 +73,7 @@ export function recordsFromSourceText(
       records.push({ ...member, fqn: cls.fqn, file });
     }
   }
-  return { records, diagnostics: parsed.diagnostics };
+  return { records, diagnostics: parsed.diagnostics, imports: parsed.imports };
 }
 
 /** One compiled class buffer → class + member records, or a warning on failure. */

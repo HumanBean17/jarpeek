@@ -15,12 +15,16 @@ export interface ParsedClass {
   lineStart: number;
   lineEnd: number;
   javadocStart?: number;
+  /** Raw doc block including delimiters; never set for class files. */
+  javadoc?: string;
   members: Declaration[];
 }
 
 export interface SourceFileDeclarations {
   file: string;
   pkg: string | null;
+  /** Verbatim import statements (`import a.b.C;` / `import a.b.C as D`); source only. */
+  imports: string[];
   classes: ParsedClass[];
   diagnostics: string[];
 }

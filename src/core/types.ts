@@ -38,6 +38,8 @@ export interface Declaration {
   lineStart?: number;
   lineEnd?: number;
   javadocStart?: number;
+  /** Raw javadoc/KDoc block verbatim, delimiters included; source provenance only. */
+  javadoc?: string;
   receiverType?: string;
   modifiers?: string[];
   platform?: "expect" | "actual";
