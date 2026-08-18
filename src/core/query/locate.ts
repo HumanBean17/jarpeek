@@ -57,6 +57,38 @@ const recordsMemo = new Map<string, { stamp: string; value: ArtifactRecords }>()
 /** Default options literal shared by every caller that does not inject. */
 const NO_OPTIONS: RecordsForArtifactOptions = {};
 
+/**
+ * How many entries `recordsForArtifact` parses concurrently. Each jar read
+ * opens the archive independently, so an unbounded fan-out would hold one fd
+ * per entry and EMFILE somewhere around the common 1024-fd soft limit — a
+ * 3000-class jar would lose most of its entries to "failed to parse". A small
+ * constant keeps peak fds bounded while still overlapping I/O.
+ */
+export const PARSE_POOL_SIZE = 8;
+
+/**
+ * `items.map(fn)` with at most `pool` fns in flight, results in input order.
+ * Workers pull the next index as they finish — no per-item promise is created
+ * ahead of its turn, so the in-flight bound holds no matter how long the list.
+ */
+export async function mapWithPool<T, R>(
+  items: readonly T[],
+  pool: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await fn(items[index]!, index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(pool, items.length) }, worker));
+  return results;
+}
+
 /** What locateClass needs from its host; QueryContext satisfies this structurally. */
 export interface LocateDeps {
   listings: ListingService;
@@ -390,12 +422,15 @@ function declaresFqn(listing: ArtifactListing, fqn: string): boolean {
 /**
  * Parse one entry of `artifact`'s `listing` into records. Source backings
  * read text and lex it (a read throw degrades to a labeled failure, never
- * aborts the artifact); binary backings read the class bytes. Diagnostics
- * and warnings are returned, not thrown, so the caller aggregates.
+ * aborts the artifact); binary backings read the class bytes. `zipByName` is
+ * the caller's one-shot name→entry map — per-entry lookup stays O(1) instead
+ * of a linear scan per class. Diagnostics and warnings are returned, not
+ * thrown, so the caller aggregates.
  */
 async function parseOneEntry(
   artifact: DependencyArtifact,
   listing: ArtifactListing,
+  zipByName: Map<string, ZipEntry>,
   entryName: string,
 ): Promise<{ records: Declaration[]; diagnostics?: string[]; warning?: string }> {
   if (listing.source === "sourceDir") {
@@ -409,7 +444,7 @@ async function parseOneEntry(
       return { records: [], diagnostics: [`failed to read ${entryName}`] };
     }
   }
-  const zipEntry = listing.entries.find((e) => e.name === entryName);
+  const zipEntry = zipByName.get(entryName);
   if (zipEntry === undefined) {
     return { records: [], diagnostics: [`missing entry ${entryName}`] };
   }
@@ -460,13 +495,17 @@ export async function recordsForArtifact(
 
   const parseEntries =
     opts.parseEntries ??
-    (async (entries: readonly string[]) =>
-      Promise.all(
-        entries.map(async (entry) => ({
-          entry,
-          ...(await parseOneEntry(artifact, listing, entry)),
-        })),
-      ));
+    (async (entries: readonly string[]) => {
+      // one name→entry map per call: a per-entry `entries.find` would scan the
+      // whole central directory for every class (O(entries²) on a big jar)
+      const zipByName = new Map(listing.entries.map((entry) => [entry.name, entry]));
+      // bounded pool, NOT Promise.all: each read opens the jar, and an
+      // unbounded fan-out would peak at one fd per entry (EMFILE on real jars)
+      return mapWithPool(entries, PARSE_POOL_SIZE, async (entry) => ({
+        entry,
+        ...(await parseOneEntry(artifact, listing, zipByName, entry)),
+      }));
+    });
   const failures: string[] = [];
   let failed = 0;
   const records: Declaration[] = [];

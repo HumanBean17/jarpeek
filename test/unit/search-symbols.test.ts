@@ -19,7 +19,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ListingService } from "../../src/core/listing.js";
 import { openContext, type QueryContext } from "../../src/core/query/context.js";
-import { recordsForArtifact, type LocateDeps } from "../../src/core/query/locate.js";
+import {
+  mapWithPool,
+  PARSE_POOL_SIZE,
+  recordsForArtifact,
+  type LocateDeps,
+} from "../../src/core/query/locate.js";
 import { searchSymbols } from "../../src/core/query/search-symbols.js";
 import { computeDependencySetHash, writeManifest } from "../../src/index/manifest.js";
 import type { DependencyArtifact } from "../../src/core/types.js";
@@ -67,6 +72,94 @@ function copiedSourcesJar(coordinates: string): DependencyArtifact {
   const jar = join(freshRoot(), `${coordinates.replaceAll(":", "_")}.jar`);
   copyFileSync(DEMO_SOURCES_JAR, jar);
   return { coordinates, kind: "external", sourcesJar: jar };
+}
+
+// -- hand-built zip of real class files (find-class.test.ts's crafting, slimmed) --
+
+const LFH_SIG = 0x04034b50;
+const CDH_SIG = 0x02014b50;
+const EOCD_SIG = 0x06054b50;
+
+function u16(v: number): Buffer {
+  const b = Buffer.alloc(2);
+  b.writeUInt16LE(v);
+  return b;
+}
+function u32(v: number): Buffer {
+  const b = Buffer.alloc(4);
+  b.writeUInt32LE(v);
+  return b;
+}
+function u8(v: number): Buffer {
+  return Buffer.from([v]);
+}
+/** Big-endian u16/u32 — class files are big-endian, unlike the zip fields above. */
+function u16be(v: number): Buffer {
+  const b = Buffer.alloc(2);
+  b.writeUInt16BE(v);
+  return b;
+}
+function u32be(v: number): Buffer {
+  const b = Buffer.alloc(4);
+  b.writeUInt32BE(v);
+  return b;
+}
+const utf8Const = (s: string): Buffer => {
+  const bytes = Buffer.from(s, "utf8");
+  return Buffer.concat([u8(1), u16be(bytes.length), bytes]);
+};
+const classConst = (nameIndex: number): Buffer => Buffer.concat([u8(7), u16be(nameIndex)]);
+
+/** Minimal well-formed class file naming itself `binaryName` (self-named: parses to its own fqn). */
+function craftClassFile(binaryName: string): Buffer {
+  const pool: Buffer[] = [utf8Const(binaryName), classConst(1), utf8Const("java/lang/Object"), classConst(3)];
+  return Buffer.concat([
+    u32be(0xcafebabe),
+    u16be(0), // minor
+    u16be(52), // major
+    u16be(pool.length + 1), // constant-pool count
+    ...pool,
+    u16be(0x0021), // ACC_PUBLIC | ACC_SUPER
+    u16be(2), // this_class
+    u16be(4), // super_class
+    u16be(0), // interfaces count
+    u16be(0), // fields count
+    u16be(0), // methods count
+    u16be(0), // method attribute count
+    u16be(0), // class attribute count
+  ]);
+}
+
+/** Stored (uncompressed) multi-entry zip of `n` real class files a/b/Cls<i>.class. */
+function craftClassZip(n: number): Buffer {
+  const files = Array.from({ length: n }, (_, i) => ({
+    name: `a/b/Cls${i}.class`,
+    data: craftClassFile(`a/b/Cls${i}`),
+  }));
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const { name, data } of files) {
+    const nameBytes = Buffer.from(name, "utf8");
+    const lfh = Buffer.concat([
+      u32(LFH_SIG), u16(20), u16(0), u16(0), u16(0), u16(0), u32(0),
+      u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), nameBytes,
+    ]);
+    const cdh = Buffer.concat([
+      u32(CDH_SIG), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0), u32(0),
+      u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), u16(0),
+      u16(0), u16(0), u32(0), u32(offset), nameBytes,
+    ]);
+    locals.push(lfh, data);
+    centrals.push(cdh);
+    offset += lfh.length + data.length;
+  }
+  const cd = Buffer.concat(centrals);
+  const eocd = Buffer.concat([
+    u32(EOCD_SIG), u16(0), u16(0), u16(files.length), u16(files.length),
+    u32(cd.length), u32(offset), u16(0),
+  ]);
+  return Buffer.concat([...locals, cd, eocd]);
 }
 
 const DEMO_SOURCES: DependencyArtifact = {
@@ -276,5 +369,48 @@ describe("recordsForArtifact", () => {
     expect(result.records).toEqual([]);
     expect(result.unreadable).toMatch(/1 entries failed to parse/);
     expect(result.unreadable).toContain("unbalanced braces in");
+  });
+});
+
+describe("parse pool bound (fd safety on big jars)", () => {
+  it("mapWithPool never exceeds the pool size in flight", async () => {
+    // 30 delayed fake reads over a pool of 8: the tracked in-flight peak must
+    // stay at 8, and every item must still be processed exactly once
+    const items = Array.from({ length: 30 }, (_, i) => i);
+    let inFlight = 0;
+    let peak = 0;
+    const seen: number[] = [];
+    const out = await mapWithPool(items, PARSE_POOL_SIZE, async (item) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      seen.push(item);
+      inFlight--;
+      return item * 2;
+    });
+    expect(peak).toBeLessThanOrEqual(PARSE_POOL_SIZE);
+    expect(peak).toBe(PARSE_POOL_SIZE); // the pool actually fills, not serializes
+    expect(out).toEqual(items.map((i) => i * 2));
+    expect(seen.sort((a, b) => a - b)).toEqual(items);
+  });
+
+  it("the pool processes more items than the pool size end to end without failures", async () => {
+    // a real jar with MORE class entries than the pool: every entry must
+    // parse (no EMFILE-style aggregate failure), proving the fan-out is
+    // bounded through the real readZipEntry path
+    const entries = 24; // > PARSE_POOL_SIZE (8)
+    const jar = join(freshRoot(), "many.jar");
+    writeFileSync(jar, craftClassZip(entries));
+    const artifact: DependencyArtifact = {
+      coordinates: "test:pool:1",
+      kind: "external",
+      binaryJar: jar,
+    };
+    const result = await recordsForArtifact(deps([artifact]), artifact);
+    expect(result.unreadable).toBeUndefined();
+    expect(result.records.filter((r) => r.kind === "class")).toHaveLength(entries);
+    // memo still holds after the pooled first parse
+    const again = await recordsForArtifact(deps([artifact]), artifact);
+    expect(again).toBe(result);
   });
 });
