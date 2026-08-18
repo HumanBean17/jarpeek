@@ -234,6 +234,79 @@ describe("outline from listings", () => {
   });
 });
 
+describe("outline sections (presets + toggles)", () => {
+  let ctx: QueryContext;
+  beforeAll(async () => {
+    ctx = await contextWith([
+      { coordinates: "com.example:demo-lib:1.0.0", kind: "external", sourcesJar: DEMO_SOURCES_JAR },
+    ]);
+  });
+
+  it("serves the file's imports by default", async () => {
+    const result = await outline(ctx, "com.example.Demo");
+    expect(result.imports).toEqual(["import java.util.List;"]);
+  });
+
+  it("fields:false drops field/property/enum-constant rows but keeps the class row and methods", async () => {
+    const result = await outline(ctx, "com.example.Demo", { sections: { fields: false } });
+    expect(result.imports).toEqual(["import java.util.List;"]); // untouched section
+    expect(result.rows.some((r) => r.kind === "field")).toBe(false);
+    expect(result.rows.some((r) => r.selector === "Demo" && r.kind === "class")).toBe(true);
+    expect(result.rows.some((r) => r.selector === "run" && r.kind === "method")).toBe(true);
+    // constructors are method-section members: they survive fields:false…
+    const point = await outline(ctx, "com.example.Point", { sections: { fields: false } });
+    expect(point.rows.some((r) => r.kind === "constructor")).toBe(true);
+    // …enum-constant rows are field-section members: they die under fields:false
+    const colors = await outline(ctx, "com.example.Colors", { sections: { fields: false } });
+    expect(colors.rows.some((r) => r.kind === "enum-constant")).toBe(false);
+  });
+
+  it("methods:false drops method and constructor rows", async () => {
+    const result = await outline(ctx, "com.example.Point", { sections: { methods: false } });
+    expect(result.rows.some((r) => r.kind === "method" || r.kind === "constructor")).toBe(false);
+    expect(result.rows.some((r) => r.selector === "Point" && r.kind === "record")).toBe(true);
+  });
+
+  it("inner:false drops every row that is not the target's own", async () => {
+    const result = await outline(ctx, "com.example.Demo", { sections: { inner: false } });
+    expect(result.rows.every((r) => r.fqn === "com.example.Demo")).toBe(true);
+    expect(result.rows.some((r) => r.selector === "work")).toBe(false);
+  });
+
+  it("javadoc:false strips the javadoc property from rows at data level", async () => {
+    const withDoc = await outline(ctx, "com.example.Demo");
+    expect(withDoc.rows.some((r) => r.javadoc !== undefined)).toBe(true);
+    const stripped = await outline(ctx, "com.example.Demo", { sections: { javadoc: false } });
+    expect(stripped.rows.every((r) => r.javadoc === undefined)).toBe(true);
+  });
+
+  it("preset minimal = no imports, no fields, no javadoc in one result", async () => {
+    const result = await outline(ctx, "com.example.Demo", { preset: "minimal" });
+    expect(result.imports).toBeUndefined();
+    expect(result.rows.some((r) => r.kind === "field")).toBe(false);
+    expect(result.rows.every((r) => r.javadoc === undefined)).toBe(true);
+    // methods and inner classes stay: the frugal-first look
+    expect(result.rows.some((r) => r.selector === "run" && r.kind === "method")).toBe(true);
+    expect(result.rows.some((r) => r.selector === "Worker" && r.kind === "class")).toBe(true);
+  });
+
+  it("imports stay absent when the section is on but the winner carried none (binary)", async () => {
+    const dir = freshRoot();
+    const jar = join(dir, "bare.jar");
+    writeFileSync(
+      jar,
+      craftStoredZip([
+        { name: "a/b/Outer.class", data: craftClassFile("a/b/Outer", "dispatch") },
+      ]),
+    );
+    const ctx2 = await contextWith([
+      { coordinates: "test:bare:1", kind: "external", binaryJar: jar },
+    ]);
+    const result = await outline(ctx2, "a.b.Outer");
+    expect(result.imports).toBeUndefined();
+  });
+});
+
 describe("readMember / readSource from listings", () => {
   let ctx: QueryContext;
   beforeAll(async () => {
