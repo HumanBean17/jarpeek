@@ -354,7 +354,7 @@ describe("read-resource", () => {
 
 describe("search-symbols", () => {
   it("ranks the exact selector first with a SIGNATURE column", () => {
-    const run = cli(c, ["search-symbols", "run"]);
+    const run = cli(c, ["search-symbols", "run", "--artifact", "com.example:demo-lib:1.0.0"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("SELECTOR");
     expect(run.stdout).toContain("SIGNATURE");
@@ -362,14 +362,31 @@ describe("search-symbols", () => {
   });
 
   it("--kind field filters rows", () => {
-    const run = cli(c, ["search-symbols", "NAME", "--kind", "field"]);
+    const run = cli(c, ["search-symbols", "NAME", "--artifact", "demo-lib", "--kind", "field"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("com.example.Demo");
   });
 
+  it("without --artifact exits 1 with commander's one-line usage error on stderr", () => {
+    const run = cli(c, ["search-symbols", "builder"]);
+    expect(run.code).toBe(1);
+    // commander's requiredOption miss: exactly one stderr line, no Usage block
+    expect(run.stderr).toBe("error: required option '--artifact <coords>' not specified\n");
+    expect(run.stdout).toBe("");
+  });
+
+  it("an unknown --artifact answers rows [] with the did-you-mean line, exit 0", () => {
+    const run = cli(c, ["search-symbols", "builder", "--artifact", "demo-li"]);
+    expect(run.code).toBe(0);
+    expect(run.stderr).toContain("unknown artifact");
+    expect(run.stderr).toContain("closest");
+  });
+
   it("--json deep-equals the in-process searchSymbols result", async () => {
-    const expected = await searchSymbols(c.ctx, "run", { limit: 10 });
-    expect(jsonRun(c, ["search-symbols", "run", "--limit", "10"])).toEqual(expected);
+    const expected = await searchSymbols(c.ctx, "run", { artifact: "demo-lib", limit: 10 });
+    expect(
+      jsonRun(c, ["search-symbols", "run", "--artifact", "demo-lib", "--limit", "10"]),
+    ).toEqual(expected);
   });
 });
 
@@ -508,7 +525,7 @@ describe("numeric flag validation", () => {
       expect(run.code).toBe(1);
       expect(run.stderr).toMatch(/positive integer/);
     }
-    const symbols = cli(c, ["search-symbols", "run", "--limit", "0"]);
+    const symbols = cli(c, ["search-symbols", "run", "--artifact", "demo-lib", "--limit", "0"]);
     expect(symbols.code).toBe(1);
     expect(symbols.stderr).toMatch(/positive integer/);
   });

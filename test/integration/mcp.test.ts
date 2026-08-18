@@ -242,7 +242,7 @@ describe("tool listing", () => {
     expect(props("read_member")).toEqual(["fqn", "selectors"]);
     expect(props("read_source")).toEqual(["fqn", "from", "mode", "to"]);
     expect(props("read_resource")).toEqual(["artifact", "glob"]);
-    expect(props("search_symbols")).toEqual(["kind", "limit", "query"]);
+    expect(props("search_symbols")).toEqual(["artifact", "kind", "limit", "query"]);
     expect(props("resolve")).toEqual([]);
     expect(props("status")).toEqual([]);
     expect(props("where")).toEqual(["coordinates"]);
@@ -356,8 +356,10 @@ describe("read_resource + search_symbols + where", () => {
     );
   });
 
-  it("search_symbols ranks the exact selector", async () => {
-    const parsed = payload(await call("search_symbols", { query: "run", limit: 10 }));
+  it("search_symbols ranks the exact selector within the requested artifact", async () => {
+    const parsed = payload(
+      await call("search_symbols", { query: "run", artifact: "demo-lib", limit: 10 }),
+    );
     expect(parsed.rows.length).toBeGreaterThan(0);
     expect(parsed.rows[0].selector).toBe("run");
   });

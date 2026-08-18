@@ -196,17 +196,20 @@ export function createMcpServer(ctx: QueryContext): McpServer {
   server.registerTool(
     "search_symbols",
     {
-      description: "Find declarations by member name across artifacts.",
+      description:
+        "Find declarations by member name in ONE artifact (g:a:v coordinates or unique artifact id).",
       inputSchema: {
         query: z.string(),
+        artifact: z.string(),
         limit: z.number().int().positive().optional(),
         kind: KIND_ENUM.optional(),
       },
     },
-    ({ query, limit, kind }) =>
+    ({ query, artifact, limit, kind }) =>
       run(ctx, async () =>
         ok(
           await searchSymbols(ctx, query, {
+            artifact,
             ...(limit !== undefined ? { limit } : {}),
             ...(kind !== undefined ? { kind } : {}),
           }),

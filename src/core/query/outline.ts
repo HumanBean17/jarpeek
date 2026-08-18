@@ -5,14 +5,12 @@
  * Lookup is listing-backed (Task 5): `locateClass` walks the manifest's
  * artifacts in order, and the first whose backing declares the fqn is parsed
  * from exactly one file — its own row, members, and directly nested class
- * rows come out of that parse. Later hits become `alternatives`; the store's
- * manifest ordering/shaping helpers stay exported for search-symbols until
- * Task 9 retires their last importer. Lookup misses are protocol, not errors
- * to print: `LookupMissError` carries the fqn so the miss layer can suggest
- * alternatives.
+ * rows come out of that parse. Later hits become `alternatives`. Lookup
+ * misses are protocol, not errors to print: `LookupMissError` carries the
+ * fqn so the miss layer can suggest alternatives.
  */
 import type { Declaration, DeclKind, Provenance, Visibility } from "../types.js";
-import { isStale, type Manifest } from "../../index/manifest.js";
+import { isStale } from "../../index/manifest.js";
 import type { QueryContext } from "./context.js";
 import { locateClass } from "./locate.js";
 
@@ -51,29 +49,6 @@ export interface OutlineResult {
   rows: Declaration[];
   alternatives?: Array<{ coordinates: string }>;
   degraded: string[];
-}
-
-/**
- * coordinates → position in the manifest's artifacts array; first occurrence
- * wins. (Store-era helper kept for search-symbols, Task 9's last importer.)
- */
-export function manifestOrder(manifest: Manifest | null): Map<string, number> {
-  const order = new Map<string, number>();
-  (manifest?.artifacts ?? []).forEach((artifact, index) => {
-    if (!order.has(artifact.coordinates)) order.set(artifact.coordinates, index);
-  });
-  return order;
-}
-
-/**
- * The manifest's artifact coordinates as a membership filter, or null only
- * when no manifest exists — the cache store is user-global and never pruned,
- * so with a manifest present queries serve only its artifacts. (Store-era
- * helper kept for search-symbols, Task 9's last importer.)
- */
-export function manifestScope(manifest: Manifest | null): Set<string> | null {
-  if (manifest === null) return null;
-  return new Set(manifest.artifacts.map((artifact) => artifact.coordinates));
 }
 
 /** True when the served manifest no longer matches the build files / artifact paths. */

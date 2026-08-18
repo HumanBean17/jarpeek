@@ -398,15 +398,17 @@ command("read-resource", "non-class jar entries (config, services, manifests)")
     });
   });
 
-command("search-symbols", "find declarations by member name across artifacts")
+command("search-symbols", "find declarations by member name in one artifact")
   .argument("<query>")
+  .requiredOption("--artifact <coords>", "g:a:v coordinates or unique artifact id")
   .option("--limit <n>", "max rows", parsePositiveInt, 50)
   .option("--kind <k>", "filter by declaration kind")
-  .action(async (query: string, cmd: { limit: number; kind?: string }) => {
+  .action(async (query: string, cmd: { artifact: string; limit: number; kind?: string }) => {
     const inv = invocation();
     const ctx = ctxFor(inv);
     await runQuery(inv, ctx, async () => {
       const result = await searchSymbols(ctx, query, {
+        artifact: cmd.artifact,
         limit: cmd.limit,
         ...(cmd.kind !== undefined ? { kind: cmd.kind as DeclKind } : {}),
       });

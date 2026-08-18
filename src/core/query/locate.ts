@@ -6,9 +6,9 @@
  * or its compiled class entry, plus one class row per directly nested class
  * entry. Later hits become `alternatives`; unreadable artifacts and entries
  * that failed to read or parse become aggregated `degraded` notes — the only
- * throw is the LookupMissError protocol. `recordsForArtifact` (Task 9) will
- * reuse this listing+parse plumbing to feed the search layer a whole
- * artifact at a time.
+ * throw is the LookupMissError protocol. `recordsForArtifact` reuses the same
+ * listing+parse plumbing to feed search_symbols a whole artifact at a time,
+ * memoized by coordinates+stamp.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,6 +18,44 @@ import type { Manifest } from "../../index/manifest.js";
 import { recordsFromClassBytes, recordsFromSourceText } from "../../parse/records.js";
 import { readTextEntry, readZipEntry, type ZipEntry } from "../../parse/zip.js";
 import { isClassKind, LookupMissError } from "./outline.js";
+
+/**
+ * Parse one artifact's whole backing: every source entry (sources/sourceDir
+ * backings) or every class entry (binary), the record set `search_symbols`
+ * ranks over. `unreadable` aggregates both a backing that would not list and
+ * per-entry parse failures (count + first labels) — a partial answer with an
+ * honest note beats a throw.
+ */
+export interface ArtifactRecords {
+  records: Declaration[];
+  provenance: Provenance;
+  unreadable?: string;
+}
+
+/**
+ * The per-entry parse seam: entry name in, that entry's records plus its
+ * diagnostics (source) or warning (class bytes) out. Injectable so the
+ * memoization tests can count parses; the default is the real parser pair.
+ */
+export type ParseEntries = (
+  entries: readonly string[],
+) => Promise<Array<{ entry: string; records: Declaration[]; diagnostics?: string[]; warning?: string }>>;
+
+export interface RecordsForArtifactOptions {
+  /** Test-only parse injection (memoization counts); default parses for real. */
+  parseEntries?: ParseEntries;
+}
+
+/**
+ * Memoized `recordsForArtifact` results by coordinates, each pinned to the
+ * listing stamp it was parsed from. A stamp change (rebuilt jar, edited
+ * source dir) re-parses; an unreadable cached result is retried the same way,
+ * so a fixed jar recovers on the next query.
+ */
+const recordsMemo = new Map<string, { stamp: string; value: ArtifactRecords }>();
+
+/** Default options literal shared by every caller that does not inject. */
+const NO_OPTIONS: RecordsForArtifactOptions = {};
 
 /** What locateClass needs from its host; QueryContext satisfies this structurally. */
 export interface LocateDeps {
@@ -347,4 +385,106 @@ function declaresFqn(listing: ArtifactListing, fqn: string): boolean {
   return listing.source === "sourceDir"
     ? findSourceDirHit(listing, fqn) !== null
     : findZipHit(listing, fqn) !== null;
+}
+
+/**
+ * Parse one entry of `artifact`'s `listing` into records. Source backings
+ * read text and lex it (a read throw degrades to a labeled failure, never
+ * aborts the artifact); binary backings read the class bytes. Diagnostics
+ * and warnings are returned, not thrown, so the caller aggregates.
+ */
+async function parseOneEntry(
+  artifact: DependencyArtifact,
+  listing: ArtifactListing,
+  entryName: string,
+): Promise<{ records: Declaration[]; diagnostics?: string[]; warning?: string }> {
+  if (listing.source === "sourceDir") {
+    const root = artifact.sourceDir!;
+    try {
+      // readFileSync throws sync on a vanished file; the async wrapper keeps
+      // one try/catch honest for both dir and jar backings
+      const text = await (async () => readFileSync(join(root, entryName), "utf8"))();
+      return recordsFromSourceText(text, entryName);
+    } catch {
+      return { records: [], diagnostics: [`failed to read ${entryName}`] };
+    }
+  }
+  const zipEntry = listing.entries.find((e) => e.name === entryName);
+  if (zipEntry === undefined) {
+    return { records: [], diagnostics: [`missing entry ${entryName}`] };
+  }
+  if (listing.source === "binary") {
+    const jar = artifact.binaryJar!;
+    try {
+      return recordsFromClassBytes(await readZipEntry(jar, zipEntry), entryName, entryName);
+    } catch {
+      return { records: [], warning: `failed to read ${entryName}` };
+    }
+  }
+  const jar = artifact.sourcesJar!;
+  try {
+    return recordsFromSourceText(await readTextEntry(jar, zipEntry), entryName);
+  } catch {
+    return { records: [], diagnostics: [`failed to read ${entryName}`] };
+  }
+}
+
+/**
+ * Every record of ONE artifact: sources/sourceDir backings parse every
+ * source entry (provenance `source`), binary backings every class entry
+ * (provenance `signature`). The result is memoized by coordinates against
+ * the listing's stamp — an unchanged jar costs nothing on the second query —
+ * and nothing here ever throws: an unreadable backing or per-entry parse
+ * failures land in `unreadable` (count + first labels) with whatever records
+ * did parse.
+ */
+export async function recordsForArtifact(
+  deps: LocateDeps,
+  artifact: DependencyArtifact,
+  opts: RecordsForArtifactOptions = NO_OPTIONS,
+): Promise<ArtifactRecords> {
+  const listing = await deps.listings.listing(artifact);
+  const cached = recordsMemo.get(artifact.coordinates);
+  // an unreadable listing carries no entries, so its stamp keys an empty
+  // result — retrying on every call would re-list for nothing; caching it is
+  // the same contract the ListingService itself gives unreadable results
+  if (cached !== undefined && cached.stamp === listing.stamp) {
+    return cached.value;
+  }
+
+  if (listing.unreadable !== undefined) {
+    const value: ArtifactRecords = { records: [], provenance: "signature", unreadable: listing.unreadable };
+    recordsMemo.set(artifact.coordinates, { stamp: listing.stamp, value });
+    return value;
+  }
+
+  const parseEntries =
+    opts.parseEntries ??
+    (async (entries: readonly string[]) =>
+      Promise.all(
+        entries.map(async (entry) => ({
+          entry,
+          ...(await parseOneEntry(artifact, listing, entry)),
+        })),
+      ));
+  const failures: string[] = [];
+  let failed = 0;
+  const records: Declaration[] = [];
+  for (const parsed of await parseEntries(listing.classes.map((cls) => cls.entry))) {
+    records.push(...parsed.records);
+    const problem = parsed.diagnostics?.[0] ?? parsed.warning;
+    if (parsed.diagnostics?.length || parsed.warning !== undefined) {
+      failed++;
+      if (problem !== undefined && failures.length < 3) failures.push(problem);
+    }
+  }
+  const value: ArtifactRecords = {
+    records,
+    provenance: listing.source === "binary" ? "signature" : "source",
+    ...(failed > 0
+      ? { unreadable: `${failed} entries failed to parse (${failures.join(", ")})` }
+      : {}),
+  };
+  recordsMemo.set(artifact.coordinates, { stamp: listing.stamp, value });
+  return value;
 }

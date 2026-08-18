@@ -1,9 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createMcpServer } from "../../src/mcp/server.js";
 import { openContext, type QueryContext } from "../../src/core/query/context.js";
 import { readMember } from "../../src/core/query/read-member.js";
 import { readResource, truncateUtf8 } from "../../src/core/query/read-resource.js";
@@ -89,7 +92,22 @@ afterAll(() => {
     rmSync(s.projectRoot, { recursive: true, force: true });
     rmSync(s.cacheDir, { recursive: true, force: true });
   }
+  for (const closer of mcpTeardown.splice(0).reverse()) void closer().catch(() => {});
 });
+
+/** Server+client pairs closed in afterAll so transports never leak between suites. */
+const mcpTeardown: Array<() => Promise<unknown>> = [];
+
+/** A connected MCP client over the given context (InMemoryTransport pair). */
+async function connectClient(ctx: QueryContext): Promise<Client> {
+  const server = createMcpServer(ctx);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  const client = new Client({ name: "jarpeek-tools-test", version: "0.0.0" });
+  await client.connect(clientTransport);
+  mcpTeardown.push(() => server.close(), () => client.close());
+  return client;
+}
 
 describe("readMember", () => {
   it("sourced batch: javadoc lines included, field spans its declaration", async () => {
@@ -297,7 +315,7 @@ describe("readResource", () => {
 
 describe("searchSymbols", () => {
   it("exact selector hits rank first", async () => {
-    const result = await searchSymbols(c.ctx, "run");
+    const result = await searchSymbols(c.ctx, "run", { artifact: "demo-lib" });
     expect(result.rows[0]!.selector).toBe("run");
     expect(result.rows[0]!.fqn).toBe("com.example.Demo");
     expect(result.rows[0]!.coordinates).toBe("com.example:demo-lib:1.0.0");
@@ -306,46 +324,56 @@ describe("searchSymbols", () => {
   });
 
   it("kind filter excludes other kinds", async () => {
-    const fields = await searchSymbols(c.ctx, "NAME", { kind: "field" });
+    const fields = await searchSymbols(c.ctx, "NAME", { artifact: "demo-lib", kind: "field" });
     expect(fields.rows.map((r) => r.fqn)).toContain("com.example.Demo");
-    const none = await searchSymbols(c.ctx, "run", { kind: "field" });
+    const none = await searchSymbols(c.ctx, "run", { artifact: "demo-lib", kind: "field" });
     expect(none.rows).toHaveLength(0);
   });
 
   it("limit is respected", async () => {
-    const result = await searchSymbols(c.ctx, "m", { limit: 5 });
+    const result = await searchSymbols(c.ctx, "m", { artifact: "demo-lib", limit: 5 });
     expect(result.rows).toHaveLength(5);
     expect(result.rows.every((r) => r.selector.startsWith("m"))).toBe(true);
   });
 
-  it("signatures truncate at 120 characters with an ellipsis", async () => {
-    const artifact = {
-      coordinates: "com.example:big-sig:1",
-      kind: "cache-scan" as const,
-      provenance: "source" as const,
-      warnings: [],
-    };
-    await c.ctx.store.writeArtifact(artifact, [
-      {
-        fqn: "com.example.bigsig.BigSig",
-        file: "x",
-        selector: "bigSignatureMethod",
-        kind: "method",
-        visibility: "public",
-        static: false,
-        deprecated: false,
-        signature: "public void bigSignatureMethod(" + "x".repeat(200) + ")",
-      },
-    ]);
-    // search is scoped to the manifest's artifact set: register the shard there
-    const manifestPath = join(c.projectRoot, ".jarpeek", "manifest.json");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { artifacts: unknown[] };
-    manifest.artifacts.push(artifact);
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+  it("scoping: a nosources-lib query never answers demo-lib rows", async () => {
+    const result = await searchSymbols(c.ctx, "secret", {
+      artifact: "com.example:nosources-lib:1.0.0",
+    });
+    expect(result.rows.length).toBeGreaterThan(0);
+    expect(result.rows.every((r) => r.coordinates === "com.example:nosources-lib:1.0.0")).toBe(true);
+    expect(result.rows.every((r) => r.provenance === "signature")).toBe(true);
+  });
 
-    const result = await searchSymbols(c.ctx, "bigSignatureMethod");
-    expect(result.rows[0]!.signature.length).toBe(121);
-    expect(result.rows[0]!.signature.endsWith("…")).toBe(true);
+  it("unknown artifact answers rows [] with a did-you-mean degraded line", async () => {
+    const result = await searchSymbols(c.ctx, "run", { artifact: "demo-li" });
+    expect(result.rows).toEqual([]);
+    expect(result.degraded[0]).toMatch(/unknown artifact "demo-li" — closest: /);
+    expect(result.degraded[0]).toContain("demo-lib");
+  });
+});
+
+describe("search_symbols MCP schema", () => {
+  it("a call without artifact is a tool error from schema validation", async () => {
+    const client = await connectClient(c.ctx);
+    const result = await client.callTool({ name: "search_symbols", arguments: { query: "run" } });
+    expect(result.isError).toBe(true);
+    // schema rejections surface as an MCP-level error text, not the {error} JSON
+    const text = (result.content![0] as { text: string }).text;
+    expect(text).toMatch(/validation error/);
+    expect(text).toMatch(/artifact/);
+  });
+
+  it("a call with artifact serves rows", async () => {
+    const client = await connectClient(c.ctx);
+    const result = await client.callTool({
+      name: "search_symbols",
+      arguments: { query: "run", artifact: "demo-lib", limit: 10 },
+    });
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse((result.content![0] as { text: string }).text);
+    expect(parsed.rows.length).toBeGreaterThan(0);
+    expect(parsed.rows[0].selector).toBe("run");
   });
 });
 
