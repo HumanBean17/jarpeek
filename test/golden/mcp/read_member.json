@@ -19,8 +19,8 @@
         "        return NAME + \":\" + input + \":\" + count;",
         "    }"
       ],
-      "startLine": 11,
-      "endLine": 21,
+      "startLine": 13,
+      "endLine": 23,
       "javadoc": [
         "    /**",
         "     * Runs the demo transformation over the given input.",

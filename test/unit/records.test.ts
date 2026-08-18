@@ -35,9 +35,9 @@ describe("recordsFromSourceText", () => {
     expect(demo.kind).toBe("class");
     expect(demo.signature).toBe("public class Demo");
     // source provenance: line ranges and javadoc survive the move
-    expect(demo.lineStart).toBe(7);
-    expect(demo.lineEnd).toBe(51);
-    expect(demo.javadocStart).toBe(3);
+    expect(demo.lineStart).toBe(9);
+    expect(demo.lineEnd).toBe(53);
+    expect(demo.javadocStart).toBe(5);
 
     // members carry the class's fqn and the file name, not their own nesting
     const members = records.filter((r) => r.fqn === "com.example.Demo" && r !== demo);
@@ -47,6 +47,24 @@ describe("recordsFromSourceText", () => {
     }
     const run = members.find((m) => m.selector === "run" && m.kind === "method")!;
     expect(run.signature).toBe("public Object run(String,int)");
+  });
+
+  it("returns the file's imports and threads javadoc into the flat records", () => {
+    const text = [
+      "package p;",
+      "import java.util.List;",
+      "/** Doc. */",
+      "public class Q {",
+      "    /** Counts. */",
+      "    int n;",
+      "}",
+    ].join("\n");
+    const { records, imports } = recordsFromSourceText(text, "p/Q.java");
+    expect(imports).toEqual(["import java.util.List;"]);
+    const q = records.find((r) => r.selector === "Q")!;
+    expect(q.javadoc).toBe("/** Doc. */");
+    const n = records.find((r) => r.selector === "n")!;
+    expect(n.javadoc).toBe("/** Counts. */");
   });
 
   it("routes .kt files to the Kotlin lexer", () => {
@@ -87,6 +105,12 @@ describe("classRecord", () => {
     expect(fromBytes.lineStart).toBeUndefined();
     expect(fromBytes.lineEnd).toBeUndefined();
     expect(fromBytes.javadocStart).toBeUndefined();
+    expect(fromBytes.javadoc).toBeUndefined();
+  });
+
+  it("threads the raw javadoc block onto the class record", () => {
+    const fromSource = classRecord({ ...base, javadoc: "/** C docs. */" }, "com/example/C.java");
+    expect(fromSource.javadoc).toBe("/** C docs. */");
   });
 });
 

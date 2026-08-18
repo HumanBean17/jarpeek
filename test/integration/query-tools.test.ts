@@ -116,16 +116,16 @@ describe("readMember", () => {
     const run = result.members.find((m) => m.selector === "run(String,int)")!;
     expect(run, "run(String,int) member present").toBeDefined();
     expect(run.lines[0]!.trim()).toBe("/**");
-    expect(run.startLine).toBe(11); // javadocStart from the Task 4 golden
-    expect(run.endLine).toBe(21);
+    expect(run.startLine).toBe(13); // javadocStart from the Task 4 golden
+    expect(run.endLine).toBe(23);
     expect(run.javadoc).toBeDefined();
     expect(run.javadoc![0]!.trim()).toBe("/**");
     expect(run.signature).toBe("public Object run(String,int)");
 
     const name = result.members.find((m) => m.selector === "NAME")!;
     expect(name, "NAME member present").toBeDefined();
-    expect(name.startLine).toBe(9);
-    expect(name.endLine).toBe(9);
+    expect(name.startLine).toBe(11);
+    expect(name.endLine).toBe(11);
     expect(name.lines).toEqual(['    private static final String NAME = "demo";']);
     expect(name.javadoc).toBeUndefined();
     expect(result.misses).toEqual([]);

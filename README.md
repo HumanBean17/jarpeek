@@ -29,9 +29,11 @@ went stale the moment the build moved. 0.2.0 is lazy instead:
 - **One-file parses.** A class lookup parses just the winning artifact's
   entry for that class — one source entry or class file (outline adds its
   directly nested classes) — never the jar around it.
-- **Outline first.** Declaration tables before source text; `read-source`
-  defaults to an outline, `read-member` returns only the requested method
-  spans.
+- **Skeleton outlines.** `outline` renders a Java-shaped skeleton —
+  package, imports, javadoc, members as code lines at nesting levels —
+  with `--minimal`/`--full` presets and per-section toggles (`--table`
+  keeps the legacy tabular view); `read-source` serves the whole file,
+  `read-member` returns only the requested method spans.
 - **Provenance on everything.** Every answer says whether it is `source`,
   `decompiled`, or `signature`, computed for that answer — so the agent
   knows what it is reading.
@@ -79,9 +81,9 @@ nine tools:
 | Tool | Arguments | Answers with |
 | --- | --- | --- |
 | `find_class` | `query`, `limit?` | Matching classes by FQN, suffix, simple, or fuzzy name |
-| `outline` | `fqn`, `kind?`, `visibility?` | Declaration rows — the frugal first look |
+| `outline` | `fqn`, `kind?`, `visibility?`, `preset?`, `sections?` | The class skeleton's declaration rows — the frugal first look |
 | `read_member` | `fqn`, `selectors[]` | Source slices for the named members |
-| `read_source` | `fqn`, `mode?` (`outline`\|`full`\|`lines`), `from?`, `to?` | Source text for one class |
+| `read_source` | `fqn`, `mode?` (`full`\|`lines`\|`outline`), `from?`, `to?` | Source text for one class — full by default; prefer outline |
 | `read_resource` | `artifact`, `glob` | Non-class jar entries (config, services, manifests) |
 | `search_symbols` | `query`, `artifact` (required), `limit?`, `kind?` | Declarations by member name in one artifact |
 | `resolve` | — | Forced re-resolve; one summary line (count, duration, warnings), plus the warnings when any |
@@ -118,6 +120,7 @@ Member selectors are `#name` or `#name(Type,...)` for overloads.
 ```
 jarpeek --json find-class StringJoiner --limit 5
 jarpeek outline java.util.StringJoiner --kind method
+jarpeek outline java.util.StringJoiner --minimal
 jarpeek read-member com.example.lib.ApiClient '#execute(Request,int)'
 jarpeek read-source com.example.lib.ApiClient --lines 40:80
 jarpeek read-resource com.example:demo-lib:1.0.0 'META-INF/**'
@@ -145,7 +148,8 @@ Every answer carries one of three provenance values, computed for that
 answer rather than stored anywhere:
 
 - `source` — the artifact ships a sources jar (or module source dir). The
-  real published code.
+  real published code — and the only provenance whose outlines carry
+  imports and javadoc (class files have neither).
 - `decompiled` — no sources jar; bytecode decompiled with the bundled CFR
   on the local JVM. Faithful in structure, but local names, generics, and
   control flow are the compiler's reconstruction. Treat fine detail

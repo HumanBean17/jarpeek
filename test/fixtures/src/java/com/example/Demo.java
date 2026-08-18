@@ -1,5 +1,7 @@
 package com.example;
 
+import java.util.List;
+
 /**
  * Demo fixture class for the jarpeek lexer golden tests. It exercises
  * javadoc, overloads, fields, deprecation, and nesting.

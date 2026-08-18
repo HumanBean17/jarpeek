@@ -479,6 +479,65 @@ describe("multi-declarator fields and interface-nested types (synthetic)", () =>
   });
 });
 
+describe("import capture and javadoc text (synthetic)", () => {
+  const source = [
+    "package a.b;",
+    "import java.net.URI;",
+    "import static java.util.Objects.requireNonNull;",
+    "import java.util.*;",
+    "",
+    "/** Holds things. */",
+    "public class Holder {",
+    "    /** The count of things. */",
+    "    private int count;",
+    "",
+    "    /**",
+    "     * Adds things.",
+    "     * @param n how many",
+    "     */",
+    "    public void add(int n) { }",
+    "",
+    "    void bare() { }",
+    "}",
+  ].join("\n");
+  const parsed = parseJavaSource(source, "a/b/Holder.java");
+
+  it("captures plain, static, and wildcard imports verbatim", () => {
+    expect(parsed.imports).toEqual([
+      "import java.net.URI;",
+      "import static java.util.Objects.requireNonNull;",
+      "import java.util.*;",
+    ]);
+    expect(parsed.diagnostics).toEqual([]);
+  });
+
+  it("carries the raw javadoc block on class, field, and method records", () => {
+    const holder = classByFqn(parsed, "a.b.Holder");
+    expect(holder.javadoc).toBe("/** Holds things. */");
+    expect(member(holder, "count").javadoc).toBe("/** The count of things. */");
+    expect(member(holder, "add").javadoc).toBe(
+      ["/**", "     * Adds things.", "     * @param n how many", "     */"].join("\n"),
+    );
+    expect(member(holder, "bare").javadoc).toBeUndefined();
+  });
+
+  it("yields no imports for a file without import statements", () => {
+    expect(parseJavaSource("package p;\npublic class A {}\n", "p/A.java").imports).toEqual([]);
+  });
+
+  it("captures imports from CRLF sources and an unterminated import at EOF", () => {
+    const crlf = parseJavaSource(
+      "package a.b;\r\nimport java.net.URI;\r\npublic class C {}\r\n",
+      "a/b/C.java",
+    );
+    expect(crlf.imports).toEqual(["import java.net.URI;"]);
+    expect(crlf.diagnostics).toEqual([]);
+    const eof = parseJavaSource("package p;\nimport a.b.C", "p/E.java");
+    expect(eof.imports).toEqual(["import a.b.C;"]);
+    expect(eof.diagnostics).toEqual([]);
+  });
+});
+
 describe("generic-qualified types (Outer<T>.Inner)", () => {
   it("a field or parameter typed Outer<T>.Inner parses instead of being dropped", () => {
     const source = [

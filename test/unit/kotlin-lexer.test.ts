@@ -403,6 +403,49 @@ describe("graceful degradation", () => {
   });
 });
 
+describe("import capture and KDoc text (synthetic)", () => {
+  const source = [
+    "package p",
+    "import a.b.C",
+    "import a.b.C as D",
+    "import x.y.*",
+    "",
+    "/** Keeps state. */",
+    "class Keeper {",
+    "    /** Bumps the counter. */",
+    "    fun bump() {}",
+    "",
+    "    val plain: Int = 0",
+    "}",
+  ].join("\n");
+  const parsed = parseKotlinSource(source, "p/Keeper.kt");
+
+  it("captures imports verbatim, alias included, without semicolons", () => {
+    expect(parsed.imports).toEqual(["import a.b.C", "import a.b.C as D", "import x.y.*"]);
+    expect(parsed.diagnostics).toEqual([]);
+  });
+
+  it("carries the raw KDoc block on class and member records", () => {
+    const keeper = classByFqn(parsed, "p.Keeper");
+    expect(keeper.javadoc).toBe("/** Keeps state. */");
+    expect(member(keeper, "bump").javadoc).toBe("/** Bumps the counter. */");
+    expect(member(keeper, "plain").javadoc).toBeUndefined();
+  });
+
+  it("yields no imports for a file without import statements", () => {
+    expect(parseKotlinSource("class Solo\n", "Solo.kt").imports).toEqual([]);
+  });
+
+  it("captures imports from CRLF sources and an import at EOF without a newline", () => {
+    const crlf = parseKotlinSource("package p\r\nimport a.b.C\r\nclass K {}", "K.kt");
+    expect(crlf.imports).toEqual(["import a.b.C"]);
+    expect(crlf.diagnostics).toEqual([]);
+    const eof = parseKotlinSource("package p\nimport a.b.C as D", "E.kt");
+    expect(eof.imports).toEqual(["import a.b.C as D"]);
+    expect(eof.diagnostics).toEqual([]);
+  });
+});
+
 describe("interface-nested declarations are implicitly static (synthetic)", () => {
   const source = [
     "package p",

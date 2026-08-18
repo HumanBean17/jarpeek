@@ -2,6 +2,9 @@
   "fqn": "com.example.Demo",
   "coordinates": "com.example:demo-lib:1.0.0",
   "provenance": "source",
+  "imports": [
+    "import java.util.List;"
+  ],
   "rows": [
     {
       "fqn": "com.example.Demo",
@@ -12,9 +15,10 @@
       "static": false,
       "deprecated": false,
       "signature": "public class Demo",
-      "lineStart": 7,
-      "lineEnd": 51,
-      "javadocStart": 3
+      "lineStart": 9,
+      "lineEnd": 53,
+      "javadocStart": 5,
+      "javadoc": "/**\n * Demo fixture class for the jarpeek lexer golden tests. It exercises\n * javadoc, overloads, fields, deprecation, and nesting.\n */"
     },
     {
       "fqn": "com.example.Demo",
@@ -25,8 +29,8 @@
       "static": true,
       "deprecated": false,
       "signature": "private static final String NAME",
-      "lineStart": 9,
-      "lineEnd": 9,
+      "lineStart": 11,
+      "lineEnd": 11,
       "modifiers": [
         "private",
         "static",
@@ -42,9 +46,10 @@
       "static": false,
       "deprecated": false,
       "signature": "public Object run(String,int)",
-      "lineStart": 19,
-      "lineEnd": 21,
-      "javadocStart": 11,
+      "lineStart": 21,
+      "lineEnd": 23,
+      "javadocStart": 13,
+      "javadoc": "/**\n     * Runs the demo transformation over the given input.\n     *\n     * @param input the raw input text\n     * @param count how many passes to apply\n     * @return the transformed result\n     * @throws Exception if the transformation fails\n     */",
       "modifiers": [
         "public"
       ]
@@ -58,9 +63,10 @@
       "static": false,
       "deprecated": false,
       "signature": "void run()",
-      "lineStart": 24,
-      "lineEnd": 31,
-      "javadocStart": 23
+      "lineStart": 26,
+      "lineEnd": 33,
+      "javadocStart": 25,
+      "javadoc": "/** Overload with no arguments, kept package-private on purpose. */"
     },
     {
       "fqn": "com.example.Demo",
@@ -71,26 +77,10 @@
       "static": false,
       "deprecated": true,
       "signature": "void old()",
-      "lineStart": 38,
-      "lineEnd": 41,
-      "javadocStart": 33
-    },
-    {
-      "fqn": "com.example.Demo",
-      "file": "com/example/Demo.java",
-      "selector": "Worker",
-      "kind": "class",
-      "visibility": "public",
-      "static": true,
-      "deprecated": false,
-      "signature": "public static class Worker",
-      "lineStart": 44,
-      "lineEnd": 51,
-      "javadocStart": 43,
-      "modifiers": [
-        "public",
-        "static"
-      ]
+      "lineStart": 40,
+      "lineEnd": 43,
+      "javadocStart": 35,
+      "javadoc": "/**\n     * Old entry point kept for compatibility.\n     *\n     * @deprecated use {@link #run(String, int)} instead\n     */"
     },
     {
       "fqn": "com.example.Demo.Worker",
@@ -101,9 +91,27 @@
       "static": true,
       "deprecated": false,
       "signature": "public static class Worker",
-      "lineStart": 44,
-      "lineEnd": 50,
-      "javadocStart": 43
+      "lineStart": 46,
+      "lineEnd": 52,
+      "javadocStart": 45,
+      "javadoc": "/** Nested worker used by {@link Demo#run(String, int)}. */"
+    },
+    {
+      "fqn": "com.example.Demo.Worker",
+      "file": "com/example/Demo.java",
+      "selector": "work",
+      "kind": "method",
+      "visibility": "protected",
+      "static": false,
+      "deprecated": false,
+      "signature": "protected int work()",
+      "lineStart": 49,
+      "lineEnd": 51,
+      "javadocStart": 48,
+      "javadoc": "/** Performs one unit of work and reports its cost. */",
+      "modifiers": [
+        "protected"
+      ]
     }
   ],
   "alternatives": [

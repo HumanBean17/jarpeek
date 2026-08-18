@@ -232,7 +232,7 @@ describe("tool listing", () => {
     const props = (name: string): string[] =>
       Object.keys((list.tools.find((t) => t.name === name)!.inputSchema as any).properties ?? {}).sort();
     expect(props("find_class")).toEqual(["limit", "query"]);
-    expect(props("outline")).toEqual(["fqn", "kind", "visibility"]);
+    expect(props("outline")).toEqual(["fqn", "kind", "preset", "sections", "visibility"]);
     expect(props("read_member")).toEqual(["fqn", "selectors"]);
     expect(props("read_source")).toEqual(["fqn", "from", "mode", "to"]);
     expect(props("read_resource")).toEqual(["artifact", "glob"]);
@@ -283,6 +283,27 @@ describe("outline", () => {
     const parsed = JSON.parse((result.content![0] as { text: string }).text);
     expect(parsed.found === false || Array.isArray(parsed.hits)).toBe(true);
   });
+
+  it("preset param mirrors the CLI's --minimal exactly", async () => {
+    const parsed = payload(await call("outline", { fqn: "com.example.Demo", preset: "minimal" }));
+    const expected = await outline(c.ctx, "com.example.Demo", { preset: "minimal" });
+    expect(parsed).toEqual(expected);
+    expect(parsed.imports).toBeUndefined();
+    expect(parsed.rows.some((r: any) => r.kind === "field")).toBe(false);
+  });
+
+  it("sections params mirror the CLI's toggles exactly", async () => {
+    const parsed = payload(
+      await call("outline", {
+        fqn: "com.example.Demo",
+        sections: { fields: false, javadoc: false },
+      }),
+    );
+    const expected = await outline(c.ctx, "com.example.Demo", {
+      sections: { fields: false, javadoc: false },
+    });
+    expect(parsed).toEqual(expected);
+  });
 });
 
 describe("read_member", () => {
@@ -324,6 +345,20 @@ describe("read_source", () => {
     expect(parsed).toEqual(expected);
     expect(parsed.lines).toHaveLength(2);
     expectGolden("read_source-lines", parsed);
+  });
+
+  it("no mode serves the full source by default", async () => {
+    const parsed = payload(await call("read_source", { fqn: "com.example.Demo" }));
+    expect(parsed.mode).toBe("full");
+    expect(parsed.content).toContain("public Object run(String input, int count) throws Exception {");
+  });
+
+  it("explicit outline mode still returns the outline-shaped payload", async () => {
+    const parsed = payload(await call("read_source", { fqn: "com.example.Demo", mode: "outline" }));
+    const expected = await readSource(c.ctx, "com.example.Demo", { mode: "outline" });
+    expect(parsed).toEqual(expected);
+    expect(parsed.mode).toBe("outline");
+    expect(Array.isArray(parsed.rows)).toBe(true);
   });
 
   it("lines mode without from/to is a tool error", async () => {
