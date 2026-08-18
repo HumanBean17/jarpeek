@@ -99,6 +99,10 @@ function emitMiss(miss: MissResult, label: string, inv: Invocation): void {
   }
   const searched = miss.searchedArtifacts.length > 0 ? miss.searchedArtifacts.join("\n  ") : "(none)";
   process.stdout.write(`${label} ${miss.note}\nsearched:\n  ${searched}\n`);
+  // a miss born of a failed resolve carries the reason (spec decision #1):
+  // the negative's degraded set warns through the same budgeted channel the
+  // hits path uses, so "(none)" searched never reads as "nothing to resolve"
+  if (miss.degraded.length > 0) warn(...miss.degraded);
 }
 
 /**

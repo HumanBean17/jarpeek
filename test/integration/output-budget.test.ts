@@ -206,6 +206,45 @@ describe("more than two warnings collapse into one aggregate line", () => {
   });
 });
 
+describe("a failed auto-resolve answers the miss with its reason (spec decision #1)", () => {
+  // fresh project + failing build: the bootstrap fails (no manifest to serve
+  // stale), the query answers as a miss, and the miss must carry the reason
+  // on stderr — not just in the JSON object where the agent never looks
+  const projectRoot = freshProject();
+
+  beforeAll(() => {
+    writeFailingGradlew(projectRoot, "resolve-me-not");
+  });
+
+  it("prints the failure warning after the notice, the miss on stdout, exit 0", () => {
+    const run = cli(projectRoot, ["find-class", "ZzzzZzzNoMatch"], { JAVA_HOME: "" });
+    expect(run.code).toBe(0);
+    // stdout is still the miss answer, never the warning
+    expect(run.stdout.startsWith("ZzzzZzzNoMatch")).toBe(true);
+    expect(run.stdout).toContain("not found");
+    // the warnings the bootstrap collected: the gradle failure, the cache-scan
+    // fallback — first verbatim, the rest collapsed; all inside the budget
+    const err = expectWithinBudget(run);
+    expect(err[0]).toBe(NOTICE_FIRST_RUN);
+    expect(err.slice(1).every((line) => line.startsWith("warning: "))).toBe(true);
+    expect(run.stderr).toContain("warning: gradle: gradle-failed:resolve-me-not");
+    expect(run.stderr).toContain("warning: +1 more (see: jarpeek status)");
+  });
+
+  it("--json carries degraded on the negative object", () => {
+    const run = cli(projectRoot, ["--json", "find-class", "ZzzzZzzNoMatch"], { JAVA_HOME: "" });
+    expect(run.code).toBe(0);
+    const parsed = JSON.parse(run.stdout) as {
+      found: boolean;
+      via: string;
+      degraded?: string[];
+    };
+    expect(parsed.found).toBe(false);
+    expect(parsed.via).toBe("negative");
+    expect(parsed.degraded).toContain("resolution failed: degraded to cache-scan; run jarpeek resolve");
+  });
+});
+
 afterAll(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });

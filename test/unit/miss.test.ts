@@ -129,5 +129,19 @@ describe("handleMiss negative", () => {
     expect(result.via).toBe("negative");
     // no manifest was written for the heuristic set: nothing was searched
     expect(result.searchedArtifacts).toEqual([]);
+    // ... and the miss carries the failure's reason (spec decision #1: a
+    // failed resolve answers as a miss, reason included) — the same channel
+    // the hits path surfaces its degraded[] through
+    expect(result.degraded).toContain("resolution failed: degraded to cache-scan; run jarpeek resolve");
+  });
+
+  it("a negative over a healthy manifest carries an empty degraded set", async () => {
+    // shape parity: the field exists on every negative, empty when nothing
+    // degraded — callers print warnings without a special case
+    const ctx = await contextWith([DEMO_SOURCES]);
+    const result = await handleMiss(ctx, new LookupMissError("com.example.Nowhere"));
+    expect(result.found).toBe(false);
+    if (result.found) throw new Error("unreachable");
+    expect(result.degraded).toEqual([]);
   });
 });

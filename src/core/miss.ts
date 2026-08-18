@@ -16,7 +16,19 @@ import { LookupMissError } from "./query/outline.js";
 
 export type MissResult =
   | { found: true; via: "fuzzy-candidates"; hits: ClassHit[] }
-  | { found: false; via: "negative"; searchedArtifacts: string[]; note: string };
+  | {
+      found: false;
+      via: "negative";
+      searchedArtifacts: string[];
+      note: string;
+      /**
+       * Why the answer may be hollow — a failed auto-resolve above all: spec
+       * decision #1 says a failed resolve answers as a miss carrying its
+       * reason, so the negative pulls the same bootstrap-warnings channel the
+       * hits path surfaces through `degraded`.
+       */
+      degraded: string[];
+    };
 
 /** Nothing to inject anymore: suggestions read the same listings, negatives read the manifest. */
 export interface HandleMissOptions {}
@@ -47,8 +59,9 @@ export async function handleMiss(
   // 2. negative: report the searched set honestly and stop
   const manifest = await ctx.manifest();
   const searchedArtifacts = (manifest?.artifacts ?? []).map((artifact) => artifact.coordinates);
-  if ((await ctx.bootstrapWarnings()).includes("degraded-to-cache-scan")) {
+  const degraded = [...new Set(await ctx.bootstrapWarnings())];
+  if (degraded.includes("degraded-to-cache-scan")) {
     searchedArtifacts.push(CACHE_SCAN_NOTE);
   }
-  return { found: false, via: "negative", searchedArtifacts, note: NEGATIVE_NOTE };
+  return { found: false, via: "negative", searchedArtifacts, note: NEGATIVE_NOTE, degraded };
 }
