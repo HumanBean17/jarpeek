@@ -22,7 +22,13 @@ import { clipCell, numberLines, renderTable } from "./render.js";
 import { handleMiss, type MissResult } from "../core/miss.js";
 import { openContext, type QueryContext } from "../core/query/context.js";
 import { findClass, type FindClassResult } from "../core/query/find-class.js";
-import { LookupMissError, outline } from "../core/query/outline.js";
+import {
+  LookupMissError,
+  outline,
+  resolveSections,
+  type OutlinePreset,
+  type Sections,
+} from "../core/query/outline.js";
 import { readMember, type MemberSlice, type ReadMemberResult } from "../core/query/read-member.js";
 import { readResource, type ReadResourceResult } from "../core/query/read-resource.js";
 import { readSource, type ReadSourceResult } from "../core/query/read-source.js";
@@ -35,6 +41,7 @@ import type { Declaration, DeclKind, Visibility } from "../core/types.js";
 import { runInit, type InitResult } from "../harness/init.js";
 import { registerMcpCommand } from "./mcp-command.js";
 import { prime, type PrimeOptions } from "../prime/command.js";
+import { renderSkeleton } from "./skeleton.js";
 
 /** Per-invocation flags of the prime subcommand. */
 interface PrimeFlags extends PrimeOptions {
@@ -174,9 +181,10 @@ function renderReadMember(result: ReadMemberResult): string {
 
 function renderReadSource(result: ReadSourceResult): string {
   if (result.mode === "outline") {
+    // unreachable from CLI flags (no flag selects outline mode) — kept so a
+    // future flag and the MCP surface render the same skeleton, never a table
     return [
-      `${result.fqn}  ${result.coordinates}  provenance ${result.provenance}`,
-      renderOutlineRows(result.rows),
+      renderSkeleton(result, resolveSections("outline", undefined), "summary"),
       ...(result.alternatives?.map((alt) => `alternative: ${alt.coordinates}`) ?? []),
     ].join("\n");
   }
@@ -349,25 +357,79 @@ command("find-class", "find classes by FQN, suffix, simple name, or fuzzy name")
     });
   });
 
-command("outline", "declaration rows for one class")
+/** Flags of the outline subcommand: presets, section toggles, legacy table. */
+interface OutlineCmd {
+  kind?: string;
+  visibility?: string;
+  minimal?: boolean;
+  full?: boolean;
+  imports?: boolean;
+  fields?: boolean;
+  methods?: boolean;
+  inner?: boolean;
+  javadoc?: boolean;
+  table?: boolean;
+}
+
+command(
+  "outline",
+  "java-shaped class skeleton (presets + section toggles; --table for the legacy view)",
+)
   .argument("<fqn>")
   .option("--kind <k>", "filter by declaration kind")
   .option("--visibility <v>", "filter by visibility")
-  .action(async (fqn: string, cmd: { kind?: string; visibility?: string }) => {
+  .option("--minimal", "preset: no imports, no fields, no javadoc")
+  .option("--full", "preset: everything, javadoc blocks and body markers")
+  .option("--imports", "show imports (overrides the preset)")
+  .option("--no-imports", "hide imports (overrides the preset)")
+  .option("--fields", "show fields/properties/enum constants (overrides the preset)")
+  .option("--no-fields", "hide fields/properties/enum constants (overrides the preset)")
+  .option("--methods", "show methods/constructors (overrides the preset)")
+  .option("--no-methods", "hide methods/constructors (overrides the preset)")
+  .option("--inner", "show nested classes (overrides the preset)")
+  .option("--no-inner", "hide nested classes (overrides the preset)")
+  .option("--javadoc", "show javadoc (overrides the preset)")
+  .option("--no-javadoc", "hide javadoc (overrides the preset)")
+  .option("--table", "the legacy tabular view over the same rows")
+  .action(async (fqn: string, cmd: OutlineCmd) => {
+    if (cmd.minimal && cmd.full) {
+      throw new InvalidArgumentError("--minimal and --full are mutually exclusive");
+    }
     const inv = invocation();
     const ctx = ctxFor(inv);
     await runQuery(inv, ctx, async () => {
+      const preset: OutlinePreset = cmd.minimal ? "minimal" : cmd.full ? "full" : "outline";
+      // each declared toggle overrides its preset section; commander leaves
+      // absent flags undefined, so only spelled-out pairs land here
+      const toggles: Partial<Sections> = {
+        ...(cmd.imports !== undefined ? { imports: cmd.imports } : {}),
+        ...(cmd.fields !== undefined ? { fields: cmd.fields } : {}),
+        ...(cmd.methods !== undefined ? { methods: cmd.methods } : {}),
+        ...(cmd.inner !== undefined ? { inner: cmd.inner } : {}),
+        ...(cmd.javadoc !== undefined ? { javadoc: cmd.javadoc } : {}),
+      };
+      const hasToggles = Object.values(toggles).length > 0;
       const result = await outline(ctx, fqn, {
         ...(cmd.kind !== undefined ? { kind: cmd.kind as DeclKind } : {}),
         ...(cmd.visibility !== undefined ? { visibility: cmd.visibility as Visibility } : {}),
+        preset,
+        ...(hasToggles ? { sections: toggles } : {}),
       });
-      emit(result, inv, () =>
-        [
-          `${result.fqn}  ${result.coordinates}  provenance ${result.provenance}`,
-          renderOutlineRows(result.rows),
+      emit(result, inv, () => {
+        if (cmd.table) {
+          return [
+            `${result.fqn}  ${result.coordinates}  provenance ${result.provenance}`,
+            renderOutlineRows(result.rows),
+            ...(result.alternatives?.map((alt) => `alternative: ${alt.coordinates}`) ?? []),
+          ].join("\n");
+        }
+        // the skeleton: same rows, code-shaped — full adds javadoc blocks
+        // and body markers over the identical section booleans
+        return [
+          renderSkeleton(result, resolveSections(preset, hasToggles ? toggles : undefined), preset === "full" ? "full" : "summary"),
           ...(result.alternatives?.map((alt) => `alternative: ${alt.coordinates}`) ?? []),
-        ].join("\n"),
-      );
+        ].join("\n");
+      });
       if (result.degraded.length > 0) warn(...result.degraded);
     });
   });

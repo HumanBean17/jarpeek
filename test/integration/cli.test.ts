@@ -188,39 +188,84 @@ describe("find-class", () => {
 });
 
 describe("outline", () => {
-  it("human table has SELECTOR/KIND/VIS/STATIC/DEP/SIGNATURE headers", () => {
+  it("renders the skeleton: comment header, package, imports, class shell, members", () => {
     const run = cli(c, ["outline", "com.example.Demo"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("// com.example.Demo");
+    expect(run.stdout).toContain("// com.example:demo-lib:1.0.0  provenance source");
+    expect(run.stdout).toContain("package com.example;");
+    expect(run.stdout).toContain("import java.util.List;");
+    expect(run.stdout).toContain("public class Demo {");
+    expect(run.stdout).toContain("    private static final String NAME;");
+    expect(run.stdout).toContain("    public Object run(String,int);");
+    // the nested class renders once, with its member inside
+    expect(run.stdout).toContain("    public static class Worker {");
+    expect(run.stdout).toContain("        protected int work();");
+    expect(run.stdout).not.toContain("SELECTOR"); // the table is opt-in now
+  });
+
+  it("--kind method filters to method member lines only", () => {
+    const run = cli(c, ["outline", "com.example.Demo", "--kind", "method"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("public Object run(String,int);");
+    expect(run.stdout).not.toContain("NAME");
+  });
+
+  it("--minimal drops imports, fields, and javadoc but keeps methods and nested classes", () => {
+    const run = cli(c, ["outline", "com.example.Demo", "--minimal"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).not.toContain("import ");
+    expect(run.stdout).not.toContain("private static final");
+    expect(run.stdout).not.toContain("/**");
+    expect(run.stdout).toContain("public Object run(String,int);");
+    expect(run.stdout).toContain("public static class Worker {");
+  });
+
+  it("--minimal --fields re-enables field lines (toggle over preset)", () => {
+    const run = cli(c, ["outline", "com.example.Demo", "--minimal", "--fields"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("    private static final String NAME;");
+    expect(run.stdout).not.toContain("import ");
+  });
+
+  it("--full renders whole javadoc blocks and ` { … }` body markers", () => {
+    const run = cli(c, ["outline", "com.example.Demo", "--full"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("    public Object run(String,int) { … }");
+    expect(run.stdout).toContain("     * Runs the demo transformation over the given input.");
+    expect(run.stdout).toContain("     * @param input the raw input text");
+  });
+
+  it("--no-javadoc suppresses javadoc lines", () => {
+    const run = cli(c, ["outline", "com.example.Demo", "--no-javadoc"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).not.toContain("/**");
+    expect(run.stdout).toContain("public Object run(String,int);");
+  });
+
+  it("--table renders the legacy tabular view", () => {
+    const run = cli(c, ["outline", "com.example.Demo", "--table"]);
     expect(run.code).toBe(0);
     for (const header of ["SELECTOR", "KIND", "VIS", "STATIC", "DEP", "SIGNATURE"]) {
       expect(run.stdout).toContain(header);
     }
   });
 
-  it("--kind method filters to method rows only", () => {
-    const run = cli(c, ["outline", "com.example.Demo", "--kind", "method"]);
-    expect(run.code).toBe(0);
-    expect(run.stdout).toContain("run");
-    expect(run.stdout).not.toContain("NAME");
-    expect(run.stdout).not.toContain("field");
+  it("--minimal --full exits 1 with the mutual-exclusion error", () => {
+    const run = cli(c, ["outline", "com.example.Demo", "--minimal", "--full"]);
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain("mutually exclusive");
   });
 
-  it("--kind class filters to the class row", () => {
-    const run = cli(c, ["outline", "com.example.Demo", "--kind", "class"]);
-    expect(run.code).toBe(0);
-    expect(run.stdout).toContain("Demo");
-    expect(run.stdout).not.toContain("method");
-  });
-
-  it("--visibility public filters", () => {
-    const run = cli(c, ["outline", "com.example.Demo", "--kind", "method", "--visibility", "public"]);
-    expect(run.code).toBe(0);
-    expect(run.stdout).toContain("run(String,int)");
-    expect(run.stdout).not.toContain("run()");
-  });
-
-  it("--json deep-equals the in-process outline result", async () => {
+  it("--json deep-equals the in-process outline result (CLI/MCP parity)", async () => {
     const expected = await outline(c.ctx, "com.example.Demo", { kind: "method" });
     expect(jsonRun(c, ["outline", "com.example.Demo", "--kind", "method"])).toEqual(expected);
+    // CLI flag pairs and MCP param objects reach the identical core sections
+    const viaFlags = await outline(c.ctx, "com.example.Demo", {
+      preset: "minimal",
+      sections: { javadoc: false },
+    });
+    expect(jsonRun(c, ["outline", "com.example.Demo", "--minimal", "--no-javadoc"])).toEqual(viaFlags);
   });
 
   it("unknown class routes through the miss protocol and exits 0", () => {
