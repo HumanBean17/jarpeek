@@ -183,10 +183,12 @@ interface Scan {
  * Family filter over source-parsed records: the target's own row and its
  * members carry `fqn` and pass as equal; every record of a nested class (the
  * lexers nest by dots) belongs to the family too — the outline skeleton
- * renders nested bodies, not just their headers. The outer class's member
- * row for a retained nested class is dropped in favor of that class's own
- * family row, so each nested class appears exactly once (the RestTemplate
- * duplication).
+ * renders nested bodies, not just their headers. Every family class row
+ * shadows its declaring class's member row for it — at ANY nesting depth
+ * (the target's row for a child, a child's row for its own child) — so each
+ * nested class appears exactly once (the RestTemplate duplication, one level
+ * down included). The target's own class row is never dropped, even when a
+ * nested class shares its simple name.
  */
 function familyRecords(
   records: Declaration[],
@@ -197,16 +199,26 @@ function familyRecords(
     (record) => record.fqn === fqn || (includeNested && classFamily(record.fqn, fqn)),
   );
   if (!includeNested) return family;
-  const nestedSelectors = new Set(
+  const classRowFqns = new Set(
     family
       .filter((record) => record.fqn !== fqn && isClassKind(record.kind))
-      .map((record) => record.selector),
+      .map((record) => record.fqn),
   );
-  if (nestedSelectors.size === 0) return family;
-  return family.filter(
-    (record) =>
-      !(record.fqn === fqn && isClassKind(record.kind) && nestedSelectors.has(record.selector)),
-  );
+  if (classRowFqns.size === 0) return family;
+  const simple = fqn.slice(fqn.lastIndexOf(".") + 1);
+  let rootClassRowKept = false;
+  return family.filter((record) => {
+    if (
+      record.fqn === fqn &&
+      isClassKind(record.kind) &&
+      record.selector === simple &&
+      !rootClassRowKept
+    ) {
+      rootClassRowKept = true;
+      return true;
+    }
+    return !(isClassKind(record.kind) && classRowFqns.has(`${record.fqn}.${record.selector}`));
+  });
 }
 
 /**

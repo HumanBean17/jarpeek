@@ -211,6 +211,14 @@ describe("outline", () => {
     expect(run.stdout).not.toContain("NAME");
   });
 
+  it("--kind method renders rootless output: no class shell, members at column 0", () => {
+    const run = cli(c, ["outline", "com.example.Demo", "--kind", "method"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("package com.example;");
+    expect(run.stdout).not.toContain("public class Demo {");
+    expect(run.stdout).not.toContain("    public Object run");
+  });
+
   it("--minimal drops imports, fields, and javadoc but keeps methods and nested classes", () => {
     const run = cli(c, ["outline", "com.example.Demo", "--minimal"]);
     expect(run.code).toBe(0);
@@ -249,6 +257,14 @@ describe("outline", () => {
     for (const header of ["SELECTOR", "KIND", "VIS", "STATIC", "DEP", "SIGNATURE"]) {
       expect(run.stdout).toContain(header);
     }
+  });
+
+  it("--table composes with --minimal: sections filter the table too", () => {
+    const run = cli(c, ["outline", "com.example.Demo", "--table", "--minimal"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("SELECTOR");
+    expect(run.stdout).not.toContain("NAME");
+    expect(run.stdout).toContain("run(String,int)");
   });
 
   it("--minimal --full exits 1 with the mutual-exclusion error", () => {

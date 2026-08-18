@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { ListingService } from "../../src/core/listing.js";
 import { classFamily, locateClass, type LocateDeps } from "../../src/core/query/locate.js";
 import { LookupMissError } from "../../src/core/query/outline.js";
+import { renderSkeleton } from "../../src/cli/skeleton.js";
 import type { DependencyArtifact } from "../../src/core/types.js";
 import type { Manifest } from "../../src/index/manifest.js";
 
@@ -451,6 +452,85 @@ describe("full-family retention (outline skeleton data)", () => {
     expect(workerRows[0]!.fqn).toBe("com.example.Demo.Worker");
   });
 
+  it("a class nested two levels deep appears once, at its own depth", async () => {
+    const dir = tempDir();
+    try {
+      mkdirSync(join(dir, "a", "b"), { recursive: true });
+      writeFileSync(
+        join(dir, "a/b/Outer.java"),
+        [
+          "package a.b;",
+          "public class Outer {",
+          "    public class A { void aM() {} }",
+          "    public class Inner {",
+          "        public class A { void deepM() {} }",
+          "    }",
+          "}",
+        ].join("\n"),
+      );
+      const result = await locateClass(
+        deps([artifact({ coordinates: "test:deep:1", sourceDir: dir })]),
+        "a.b.Outer",
+      );
+      const records = result.winner.records;
+      // exactly one class-kind row per family fqn: Inner's member row for its
+      // own nested A must not survive beside Inner.A's own class row
+      expect(records.filter((r) => r.kind === "class").map((r) => r.fqn).sort()).toEqual([
+        "a.b.Outer",
+        "a.b.Outer.A",
+        "a.b.Outer.Inner",
+        "a.b.Outer.Inner.A",
+      ]);
+      // members at both nested depths survive
+      expect(records.some((r) => r.selector === "aM" && r.fqn === "a.b.Outer.A")).toBe(true);
+      expect(records.some((r) => r.selector === "deepM" && r.fqn === "a.b.Outer.Inner.A")).toBe(true);
+      // and the skeleton nests them correctly: Inner is NOT empty, deepM sits
+      // two levels deep under Inner's own A
+      const skeleton = renderSkeleton(
+        {
+          fqn: "a.b.Outer",
+          coordinates: result.winner.artifact.coordinates,
+          provenance: result.winner.provenance,
+          rows: records,
+        },
+        { imports: true, fields: true, methods: true, inner: true, javadoc: true },
+        "summary",
+      );
+      expect(skeleton).toContain(
+        [
+          "    public class Inner {",
+          "        public class A {",
+          "            void deepM();",
+          "        }",
+          "    }",
+        ].join("\n"),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a nested class sharing the outer's simple name never shadows the target's own class row", async () => {
+    const dir = tempDir();
+    try {
+      mkdirSync(join(dir, "a", "b"), { recursive: true });
+      writeFileSync(
+        join(dir, "a/b/Same.java"),
+        ["package a.b;", "public class Same {", "    class Same { void inner() {} }", "}"].join("\n"),
+      );
+      const result = await locateClass(
+        deps([artifact({ coordinates: "test:same:1", sourceDir: dir })]),
+        "a.b.Same",
+      );
+      const own = result.winner.records.filter((r) => r.fqn === "a.b.Same" && r.kind === "class");
+      expect(own).toHaveLength(1);
+      expect(own[0]!.signature).toBe("public class Same");
+      expect(result.winner.records.some((r) => r.fqn === "a.b.Same.Same")).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("includeNested: false keeps only the target's own rows (resolveContent path)", async () => {
     const result = await locateClass(deps([DEMO_SOURCES]), "com.example.Demo", {
       includeNested: false,
@@ -470,8 +550,7 @@ describe("full-family retention (outline skeleton data)", () => {
     expect(binary.winner.imports).toBeUndefined();
   });
 
-  it("binary nested entries contribute their member rows too", async () => {
-    const dir = tempDir();
+  it("binary nested entries contribute their member rows too", async () => {    const dir = tempDir();
     try {
       const jar = join(dir, "nested-members.jar");
       writeFileSync(

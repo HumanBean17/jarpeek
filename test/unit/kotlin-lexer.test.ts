@@ -435,6 +435,15 @@ describe("import capture and KDoc text (synthetic)", () => {
   it("yields no imports for a file without import statements", () => {
     expect(parseKotlinSource("class Solo\n", "Solo.kt").imports).toEqual([]);
   });
+
+  it("captures imports from CRLF sources and an import at EOF without a newline", () => {
+    const crlf = parseKotlinSource("package p\r\nimport a.b.C\r\nclass K {}", "K.kt");
+    expect(crlf.imports).toEqual(["import a.b.C"]);
+    expect(crlf.diagnostics).toEqual([]);
+    const eof = parseKotlinSource("package p\nimport a.b.C as D", "E.kt");
+    expect(eof.imports).toEqual(["import a.b.C as D"]);
+    expect(eof.diagnostics).toEqual([]);
+  });
 });
 
 describe("interface-nested declarations are implicitly static (synthetic)", () => {

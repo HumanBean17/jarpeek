@@ -408,12 +408,14 @@ command(
         ...(cmd.inner !== undefined ? { inner: cmd.inner } : {}),
         ...(cmd.javadoc !== undefined ? { javadoc: cmd.javadoc } : {}),
       };
-      const hasToggles = Object.values(toggles).length > 0;
+      const hasOverrides = Object.values(toggles).length > 0;
+      const overrides = hasOverrides ? toggles : undefined;
+      const sections = resolveSections(preset, overrides);
       const result = await outline(ctx, fqn, {
         ...(cmd.kind !== undefined ? { kind: cmd.kind as DeclKind } : {}),
         ...(cmd.visibility !== undefined ? { visibility: cmd.visibility as Visibility } : {}),
         preset,
-        ...(hasToggles ? { sections: toggles } : {}),
+        ...(overrides !== undefined ? { sections: overrides } : {}),
       });
       emit(result, inv, () => {
         if (cmd.table) {
@@ -426,7 +428,7 @@ command(
         // the skeleton: same rows, code-shaped — full adds javadoc blocks
         // and body markers over the identical section booleans
         return [
-          renderSkeleton(result, resolveSections(preset, hasToggles ? toggles : undefined), preset === "full" ? "full" : "summary"),
+          renderSkeleton(result, sections, preset === "full" ? "full" : "summary"),
           ...(result.alternatives?.map((alt) => `alternative: ${alt.coordinates}`) ?? []),
         ].join("\n");
       });

@@ -23,7 +23,7 @@ export interface SkeletonInput {
 /** Indentation step per nesting level, in spaces. */
 const INDENT = 4;
 
-/** Hard cap for a javadoc summary line; longer first sentences get `…`. */
+/** Hard cap for a javadoc summary's visible characters; a cut appends `…` (181 total). */
 const SUMMARY_MAX = 180;
 
 /**

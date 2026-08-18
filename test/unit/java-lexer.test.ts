@@ -524,6 +524,18 @@ describe("import capture and javadoc text (synthetic)", () => {
   it("yields no imports for a file without import statements", () => {
     expect(parseJavaSource("package p;\npublic class A {}\n", "p/A.java").imports).toEqual([]);
   });
+
+  it("captures imports from CRLF sources and an unterminated import at EOF", () => {
+    const crlf = parseJavaSource(
+      "package a.b;\r\nimport java.net.URI;\r\npublic class C {}\r\n",
+      "a/b/C.java",
+    );
+    expect(crlf.imports).toEqual(["import java.net.URI;"]);
+    expect(crlf.diagnostics).toEqual([]);
+    const eof = parseJavaSource("package p;\nimport a.b.C", "p/E.java");
+    expect(eof.imports).toEqual(["import a.b.C;"]);
+    expect(eof.diagnostics).toEqual([]);
+  });
 });
 
 describe("generic-qualified types (Outer<T>.Inner)", () => {
