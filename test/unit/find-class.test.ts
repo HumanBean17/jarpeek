@@ -200,6 +200,18 @@ describe("findClass tiers over listings", () => {
     expect(inner.hits.map((h) => h.fqn)).toContain("com.example.Outer.Inner");
   });
 
+  it("a bare-name query finds a nested class by its inner simple name (v1 tier parity)", async () => {
+    // v1's store fqns were dotted, so `Worker` matched com.example.Demo.Worker
+    // in the SIMPLE tier; listing fqns keep `$`, and the simple name of
+    // `Demo$Worker` must still be `Worker` — not a fuzzy-tier afterthought
+    const ctx = await contextWith([DEMO_BINARY]);
+    const result = await findClass(ctx, "Worker");
+    expect(result.hits.map((h) => h.fqn)).toContain("com.example.Demo.Worker");
+    // and a name query does NOT sweep the nested class in under fuzzy
+    const demo = await findClass(ctx, "Demo");
+    expect(demo.hits.map((h) => h.fqn)).not.toContain("com.example.Demo.Worker");
+  });
+
   it("two artifacts declaring the same class each hit, in manifest order", async () => {
     const ctx = await contextWith([DEMO_SOURCES, DEMO_BINARY]);
     const result = await findClass(ctx, "com.example.Demo");

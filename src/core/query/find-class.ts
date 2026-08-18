@@ -54,8 +54,19 @@ const KIND_REFINEMENT_CAP = 24;
 
 const UNORDERED = Number.MAX_SAFE_INTEGER;
 
-/** Simple name of a listing fqn: after the last `.`, so `Outer$Inner` for nested (v1 parity). */
-const simpleNameOf = (fqn: string): string => fqn.slice(fqn.lastIndexOf(".") + 1);
+/**
+ * Simple name of a listing fqn, v1 semantics: the segment after the last `.`
+ * — and then after the last `$` when what follows that `$` starts a Java
+ * identifier (`com.example.Demo$Worker` → `Worker`, the name a bare-name
+ * query means). Digit tails (`Outer$1`) never reach here: the listing filter
+ * already dropped them.
+ */
+const simpleNameOf = (fqn: string): string => {
+  const afterDot = fqn.slice(fqn.lastIndexOf(".") + 1);
+  const dollar = afterDot.lastIndexOf("$");
+  const ident = dollar === -1 ? afterDot : afterDot.slice(dollar + 1);
+  return /^[A-Za-z_]/.test(ident) ? ident : afterDot;
+};
 
 /** Dotted display form: the listing fqn with `$` nesting spelled as `.`. */
 const displayFqn = (fqn: string): string => fqn.replaceAll("$", ".");
