@@ -117,7 +117,8 @@ export function createMcpServer(ctx: QueryContext): McpServer {
       instructions:
         "Context-frugal navigation into JVM dependency sources: find_class to locate, " +
         "outline to see members without source, then read_member/read_source for exactly " +
-        "the slice needed. Misses return suggestions, never errors.",
+        "the slice needed — read_source serves the whole file by default, so prefer " +
+        "outline and read_member first. Misses return suggestions, never errors.",
     },
   );
 
@@ -133,19 +134,32 @@ export function createMcpServer(ctx: QueryContext): McpServer {
   server.registerTool(
     "outline",
     {
-      description: "Declaration rows for one class — the frugal first look.",
+      description:
+        "Class skeleton data — declaration rows, imports, javadoc — with preset and per-section control mirroring the CLI.",
       inputSchema: {
         fqn: z.string(),
         kind: KIND_ENUM.optional(),
         visibility: VISIBILITY_ENUM.optional(),
+        preset: z.enum(["minimal", "outline", "full"]).optional(),
+        sections: z
+          .object({
+            imports: z.boolean().optional(),
+            fields: z.boolean().optional(),
+            methods: z.boolean().optional(),
+            inner: z.boolean().optional(),
+            javadoc: z.boolean().optional(),
+          })
+          .optional(),
       },
     },
-    ({ fqn, kind, visibility }) =>
+    ({ fqn, kind, visibility, preset, sections }) =>
       run(ctx, async () =>
         ok(
           await outline(ctx, fqn, {
             ...(kind !== undefined ? { kind } : {}),
             ...(visibility !== undefined ? { visibility } : {}),
+            ...(preset !== undefined ? { preset } : {}),
+            ...(sections !== undefined ? { sections } : {}),
           }),
         ),
       ),
@@ -164,7 +178,8 @@ export function createMcpServer(ctx: QueryContext): McpServer {
   server.registerTool(
     "read_source",
     {
-      description: "Source text for one class (outline | full | lines).",
+      description:
+        "Source text for one class (full | lines | outline) — default full; prefer outline for the frugal first look.",
       inputSchema: {
         fqn: z.string(),
         mode: z.enum(["outline", "full", "lines"]).optional(),
