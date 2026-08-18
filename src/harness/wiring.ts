@@ -75,9 +75,8 @@ export interface WireCliResult {
 
 /**
  * Resolve a descriptor target: `~/` → home, else under the project root.
- * `JARPEEK_HOME` overrides the home directory (same pattern as
- * JARPEEK_CACHE_DIR) so user-scope writes stay testable — without it a test
- * would touch the real `~/.codex/config.toml`.
+ * `JARPEEK_HOME` overrides the home directory so user-scope writes stay
+ * testable — without it a test would touch the real `~/.codex/config.toml`.
  */
 export function resolveTarget(target: string, projectRoot: string): string {
   const home = process.env.JARPEEK_HOME ?? homedir();

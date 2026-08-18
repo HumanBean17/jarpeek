@@ -1,13 +1,22 @@
+/**
+ * The miss protocol after Task 8: suggest-or-negative, nothing between.
+ *
+ * The manifest is the only state — ensureReady already re-resolves on
+ * staleness, and there is no index to be missing — so a lookup miss either
+ * finds fuzzy/simple-name candidates for what was probably meant or reports
+ * the searched set honestly and stops. The JDK-namespace and staleness
+ * re-resolve steps are gone; these tests pin that they stay gone.
+ */
 import { afterAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { handleMiss } from "../../src/core/miss.js";
+import { handleMiss, type MissResult } from "../../src/core/miss.js";
 import { openContext, type QueryContext } from "../../src/core/query/context.js";
 import { LookupMissError } from "../../src/core/query/outline.js";
-import type { Declaration, DependencyArtifact } from "../../src/core/types.js";
-import { computeDependencySetHash, writeManifest, type Manifest } from "../../src/index/manifest.js";
+import { computeDependencySetHash, writeManifest } from "../../src/index/manifest.js";
+import type { DependencyArtifact } from "../../src/core/types.js";
 
 const DEMO_SOURCES_JAR = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -17,34 +26,9 @@ const DEMO_SOURCES_JAR = join(
   "demo-lib-1.0.0-sources.jar",
 );
 
-interface ShardHit {
-  safe: string;
-  meta: DependencyArtifact;
-  records: Declaration[];
-}
-
-/**
- * Duck-typed QueryContext: only the methods handleMiss (and the findClass /
- * orderedLookup it calls) consume. Tests wire lookup/forEachRecord/manifest
- * per scenario.
- */
-interface StubCtx {
-  projectRoot: string;
-  cacheDir: string;
-  store: {
-    lookup(fqn: string): Promise<ShardHit[]>;
-    forEachRecord(fn: (rec: Declaration, safe: string) => void | Promise<void>): Promise<string[]>;
-  };
-  manifest(): Promise<Manifest | null>;
-  ensureReady(): Promise<{ bootstrapped: boolean; stale: boolean }>;
-  bootstrapWarnings(): string[];
-}
-
-const asCtx = (stub: StubCtx): QueryContext => stub as unknown as QueryContext;
-
 const roots: string[] = [];
-function stubRoot(): string {
-  const dir = mkdtempSync(join(tmpdir(), "jarpeek-miss-stub-"));
+function freshRoot(): string {
+  const dir = mkdtempSync(join(tmpdir(), "jarpeek-miss-"));
   roots.push(dir);
   return dir;
 }
@@ -52,324 +36,112 @@ afterAll(() => {
   for (const dir of roots) rmSync(dir, { recursive: true, force: true });
 });
 
-function manifestOf(artifacts: DependencyArtifact[], dependencySetHash = "stub-hash"): Manifest {
-  return { version: 1, resolvedAt: new Date().toISOString(), dependencySetHash, artifacts };
+/** Open a context over a manifest written BEFORE construction (fresh, served without resolving). */
+async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContext> {
+  const projectRoot = freshRoot();
+  writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+  await writeManifest(projectRoot, {
+    version: 2,
+    resolvedAt: "",
+    dependencySetHash: await computeDependencySetHash(projectRoot),
+    artifacts,
+  });
+  return openContext(projectRoot, { onNotice: () => {} });
 }
 
-function artifact(coordinates: string, kind: DependencyArtifact["kind"] = "external"): DependencyArtifact {
-  return { coordinates, kind, provenance: "source", warnings: [] };
-}
-
-const noRecords = async (): Promise<string[]> => [];
+const DEMO_SOURCES: DependencyArtifact = {
+  coordinates: "com.example:demo-lib:1.0.0",
+  kind: "external",
+  sourcesJar: DEMO_SOURCES_JAR,
+};
 
 describe("handleMiss step 1: fuzzy candidates", () => {
   it("a class-lookup miss with findClass hits returns them via fuzzy-candidates", async () => {
-    const zzzHelper: Declaration = {
-      fqn: "com.example.ZzzHelper",
-      file: "com/example/ZzzHelper.java",
-      selector: "ZzzHelper",
-      kind: "class",
-      visibility: "public",
-      static: false,
-      deprecated: false,
-      signature: "public class ZzzHelper",
-    };
-    const stub: StubCtx = {
-      projectRoot: stubRoot(),
-      cacheDir: "/tmp/irrelevant",
-      store: {
-        lookup: async () => [],
-        forEachRecord: async (fn) => {
-          await fn(zzzHelper, "com.example%3Aother%3A1");
-          return [];
-        },
-      },
-      manifest: async () => manifestOf([artifact("com.example:other:1")]),
-      ensureReady: async () => ({ bootstrapped: false, stale: false }),
-      bootstrapWarnings: async () => [],
-    };
-
-    const result = await handleMiss(asCtx(stub), new LookupMissError("com.example.Zzz"));
+    const ctx = await contextWith([DEMO_SOURCES]);
+    // "Dmo" is a subsequence of Demo: the fuzzy tier finds what was meant
+    const result: MissResult = await handleMiss(ctx, new LookupMissError("com.example.Dmo"));
     expect(result).toMatchObject({ found: true, via: "fuzzy-candidates" });
-    if (!result.found) throw new Error("unreachable");
-    expect(result.hits.map((h) => h.fqn)).toContain("com.example.ZzzHelper");
+    if (!result.found || result.via !== "fuzzy-candidates") throw new Error("unreachable");
+    expect(result.hits.map((h) => h.fqn)).toContain("com.example.Demo");
   });
 });
 
-describe("handleMiss step 2: JDK namespace routing", () => {
-  it("java.* miss retries the lookup and reports via jdk when the JDK artifact is indexed", async () => {
-    const fakeMiss: Declaration = {
-      fqn: "java.util.FakeMiss",
-      file: "java.base/java/util/FakeMiss.java",
-      selector: "FakeMiss",
-      kind: "class",
-      visibility: "public",
-      static: false,
-      deprecated: false,
-      signature: "public class FakeMiss",
-    };
-    const jdk = { ...artifact("jdk:25", "jdk"), sourcesJar: "/jdk/lib/src.zip" };
-    const stub: StubCtx = {
-      projectRoot: stubRoot(),
-      cacheDir: "/tmp/irrelevant",
-      store: {
-        lookup: async (fqn) =>
-          fqn === "java.util.FakeMiss"
-            ? [{ safe: "jdk%3A25", meta: jdk, records: [fakeMiss] }]
-            : [],
-        forEachRecord: noRecords,
-      },
-      manifest: async () => manifestOf([jdk]),
-      ensureReady: async () => ({ bootstrapped: false, stale: false }),
-      bootstrapWarnings: async () => [],
-    };
-
-    const result = await handleMiss(asCtx(stub), new LookupMissError("java.util.FakeMiss"));
-    expect(result).toEqual({ found: true, via: "jdk", coordinates: "jdk:25", provenance: "source" });
-  });
-
-  it("javax/jdk/sun/org.w3c.dom/org.xml.sax/org.ietf.jgss prefixes all route", async () => {
-    for (const fqn of [
-      "javax.script.Fake",
-      "jdk.nio.Fake",
-      "sun.net.Fake",
-      "org.w3c.dom.Fake",
-      "org.xml.sax.Fake",
-      "org.ietf.jgss.Fake",
-    ]) {
-      const stub: StubCtx = {
-        projectRoot: stubRoot(),
-        cacheDir: "/tmp/irrelevant",
-        store: { lookup: async () => [], forEachRecord: noRecords },
-        manifest: async () => manifestOf([]),
-        ensureReady: async () => ({ bootstrapped: false, stale: false }),
-        bootstrapWarnings: async () => [],
-      };
-      const result = await handleMiss(asCtx(stub), new LookupMissError(fqn), {
-        // injected so the unit test never touches a real JDK install
-        resolvers: { jdk: async () => ({ artifact: null, warnings: [] }) },
-      });
-      expect(result.found, fqn).toBe(false);
-    }
-  });
-});
-
-describe("handleMiss step 3: staleness re-resolve", () => {
-  it("stale manifest triggers ensureReady then a retry, reported via re-resolve", async () => {
-    const late: Declaration = {
-      fqn: "com.example.Late",
-      file: "com/example/Late.java",
-      selector: "Late",
-      kind: "class",
-      visibility: "public",
-      static: false,
-      deprecated: false,
-      signature: "public class Late",
-    };
-    let ensureReadyCalls = 0;
-    const stub: StubCtx = {
-      projectRoot: stubRoot(),
-      cacheDir: "/tmp/irrelevant",
-      store: {
-        lookup: async (fqn) =>
-          ensureReadyCalls > 0 && fqn === "com.example.Late"
-            ? [{ safe: "com.example%3Alate%3A1", meta: artifact("com.example:late:1"), records: [late] }]
-            : [],
-        forEachRecord: noRecords,
-      },
-      manifest: async () => manifestOf([artifact("com.example:late:1")], "deliberately-stale-hash"),
-      ensureReady: async () => {
-        ensureReadyCalls++;
-        return { bootstrapped: true, stale: false };
-      },
-      bootstrapWarnings: async () => [],
-    };
-
-    const result = await handleMiss(asCtx(stub), new LookupMissError("com.example.Late"));
-    expect(result).toEqual({
-      found: true,
-      via: "re-resolve",
-      coordinates: "com.example:late:1",
-      provenance: "source",
-    });
-  });
-});
-
-describe("handleMiss step 4: negative", () => {
-  it("exhausted protocol returns searched artifacts, cache-scan note, and the extension note", async () => {
-    const stub: StubCtx = {
-      projectRoot: stubRoot(),
-      cacheDir: "/tmp/irrelevant",
-      store: { lookup: async () => [], forEachRecord: noRecords },
-      manifest: async () =>
-        manifestOf([artifact("com.example:demo-lib:1.0.0"), artifact("com.example:nosources-lib:1.0.0")]),
-      ensureReady: async () => ({ bootstrapped: false, stale: false }),
-      bootstrapWarnings: async () => ["degraded-to-cache-scan"],
-    };
-
-    const result = await handleMiss(asCtx(stub), new LookupMissError("com.example.Nowhere"));
+describe("handleMiss negative", () => {
+  it("a miss with no candidates lists the searched artifacts and the planned-extension note", async () => {
+    const ctx = await contextWith([
+      DEMO_SOURCES,
+      { coordinates: "com.example:nosources-lib:1.0.0", kind: "external" },
+    ]);
+    const result = await handleMiss(ctx, new LookupMissError("com.example.Nowhere"));
     expect(result.found).toBe(false);
     if (result.found) throw new Error("unreachable");
     expect(result.via).toBe("negative");
     expect(result.searchedArtifacts).toContain("com.example:demo-lib:1.0.0");
     expect(result.searchedArtifacts).toContain("com.example:nosources-lib:1.0.0");
-    expect(result.searchedArtifacts.some((s) => s.includes("cache-scan"))).toBe(true);
-    expect(result.note).toContain("planned extension");
+    expect(result.note).toBe(
+      "not found in resolved artifacts; remote artifact search is a planned extension",
+    );
   });
 
-  it("a query-shaped miss (no fqn) skips the class steps and reports negative", async () => {
-    const stub: StubCtx = {
-      projectRoot: stubRoot(),
-      cacheDir: "/tmp/irrelevant",
-      store: { lookup: async () => [], forEachRecord: noRecords },
-      manifest: async () => manifestOf([artifact("com.example:demo-lib:1.0.0")]),
-      ensureReady: async () => ({ bootstrapped: false, stale: false }),
-      bootstrapWarnings: async () => [],
-    };
-    const result = await handleMiss(asCtx(stub), { query: "some-resource-glob" });
+  it("a query-shaped miss (no fqn) skips the suggestion step and reports negative", async () => {
+    const ctx = await contextWith([DEMO_SOURCES]);
+    const result = await handleMiss(ctx, { query: "some-resource-glob" });
     expect(result.found).toBe(false);
     if (result.found) throw new Error("unreachable");
     expect(result.via).toBe("negative");
     expect(result.searchedArtifacts).toEqual(["com.example:demo-lib:1.0.0"]);
   });
-});
 
-describe("handleMiss staleness snapshot (fix round 1)", () => {
-  it("stale manifest + JDK absent + failed jdk retry still reaches the re-resolve step", async () => {
-    let ensureReadyCalls = 0;
-    let jdkResolves = 0;
-    const stub: StubCtx = {
-      projectRoot: stubRoot(),
-      cacheDir: "/tmp/irrelevant",
-      store: { lookup: async () => [], forEachRecord: noRecords },
-      manifest: async () => manifestOf([artifact("com.example:demo-lib:1.0.0")], "gone-stale"),
-      ensureReady: async () => {
-        ensureReadyCalls++;
-        return { bootstrapped: true, stale: false };
-      },
-      bootstrapWarnings: async () => [],
-    };
-
-    const result = await handleMiss(asCtx(stub), new LookupMissError("java.util.Gone"), {
-      resolvers: {
-        jdk: async () => {
-          jdkResolves++;
-          return { artifact: null, warnings: [] };
-        },
-      },
-    });
-
-    expect(result.found).toBe(false);
-    if (result.found) throw new Error("unreachable");
-    expect(result.via).toBe("negative");
-    expect(jdkResolves).toBe(1);
-    // one ensureReady from step 1's findClass, at least one from step 3's
-    // re-resolve — the negative answer comes only after that retry
-    expect(ensureReadyCalls).toBeGreaterThanOrEqual(2);
+  it("a JDK-namespace miss goes straight to negative (the JDK step is gone)", async () => {
+    // v1 indexed the JDK pseudo-artifact and retried; the manifest is the only
+    // state now, so java.* names miss exactly like any other fqn
+    const ctx = await contextWith([DEMO_SOURCES]);
+    const result = await handleMiss(ctx, new LookupMissError("java.util.FakeMiss"));
+    expect(result).toMatchObject({ found: false, via: "negative" });
   });
 
-  it("fresh manifest + JDK absent: step 2 success skips step 3 entirely", async () => {
-    const projectRoot = stubRoot();
-    let ensureReadyCalls = 0;
-    const freshHash = await computeDependencySetHash(projectRoot);
-    const fake: Declaration = {
-      fqn: "java.util.Fresh",
-      file: "java.base/java/util/Fresh.java",
-      selector: "Fresh",
-      kind: "class",
-      visibility: "public",
-      static: false,
-      deprecated: false,
-      signature: "public class Fresh",
-    };
-    const stub: StubCtx = {
-      projectRoot,
-      cacheDir: "/tmp/irrelevant",
-      store: {
-        lookup: async (fqn) =>
-          fqn === "java.util.Fresh"
-            ? [{ safe: "jdk%3A25", meta: artifact("jdk:25", "jdk"), records: [fake] }]
-            : [],
-        forEachRecord: noRecords,
-      },
-      manifest: async () => manifestOf([], freshHash),
-      ensureReady: async () => {
-        ensureReadyCalls++;
-        return { bootstrapped: false, stale: false };
-      },
-      bootstrapWarnings: async () => [],
-    };
-
-    const result = await handleMiss(asCtx(stub), new LookupMissError("java.util.Fresh"), {
-      resolvers: { jdk: async () => ({ artifact: null, warnings: [] }) },
-    });
-    expect(result).toMatchObject({ found: true, via: "jdk" });
-    // only step 1's findClass ensureReady ran — step 3 was skipped
-    expect(ensureReadyCalls).toBe(1);
-  });
-
-  it("step 2's JDK indexing cannot mask a pre-existing staleness (forced re-resolve still runs)", async () => {
-    // real context + real manifest: a failed resolve left a stale manifest
-    // without the JDK; step 2 then indexes the JDK over that stale artifact
-    // set, which re-stamps the manifest fresh — step 3 must re-resolve anyway
-    const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-miss-mask-p-"));
-    const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-miss-mask-c-"));
-    roots.push(projectRoot, cacheDir);
+  it("a cache-scan bootstrap (no manifest) answers a bare negative: nothing was searched", async () => {
+    // the real degradation path: every detected build system fails and the
+    // resolver cascade falls back to the local caches — injected gradle +
+    // maven failures and a fake cacheScan serving the fixture artifact.
+    // Resolve-only semantics: queries never adopt a heuristic artifact set,
+    // so with no manifest the bootstrap FAILS and the miss reports an empty
+    // searched set instead of presenting the cache scan as resolved
+    const projectRoot = freshRoot();
     writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
-    const classesDir = mkdtempSync(join(tmpdir(), "jarpeek-miss-mask-jdk-"));
-    roots.push(classesDir);
-
-    const demo: DependencyArtifact = {
-      coordinates: "com.example:demo-lib:1.0.0",
-      kind: "external",
-      sourcesJar: DEMO_SOURCES_JAR,
-      provenance: "source",
-      warnings: [],
-    };
-    await writeManifest(projectRoot, {
-      version: 1,
-      resolvedAt: new Date(0).toISOString(),
-      dependencySetHash: "deliberately-stale",
-      artifacts: [demo],
+    const ctx = openContext(projectRoot, {
+      resolvers: {
+        gradle: async () => ({ ok: false, artifacts: [], reason: "network down" }),
+        maven: async () => ({ ok: false, artifacts: [], reason: "no pom" }),
+        cacheScan: async () => ({ artifacts: [DEMO_SOURCES], warnings: [] }),
+        includeJdk: false,
+      },
+      onNotice: () => {},
     });
+    await ctx.ensureReady();
+    expect(await ctx.bootstrapWarnings()).toContain(
+      "resolution failed: degraded to cache-scan; run jarpeek resolve",
+    );
 
-    let gradleCalls = 0;
-    let jdkResolves = 0;
-    const resolvers = {
-      gradle: async () => {
-        gradleCalls++;
-        throw new Error("gradle exploded");
-      },
-      jdk: async () => {
-        jdkResolves++;
-        return {
-          artifact: {
-            coordinates: "jdk:fake",
-            kind: "jdk" as const,
-            provenance: "signature" as const,
-            classesDir,
-            noDecompile: true,
-            warnings: [],
-          },
-          warnings: [],
-        };
-      },
-      includeJdk: false as const,
-    };
-    const ctx = openContext(projectRoot, { resolvers, cacheDir, onProgress: () => {} });
-
-    const result = await handleMiss(ctx, new LookupMissError("java.util.Absent"), { resolvers });
-
+    const result = await handleMiss(ctx, new LookupMissError("com.example.Nowhere"));
     expect(result.found).toBe(false);
     if (result.found) throw new Error("unreachable");
     expect(result.via).toBe("negative");
-    expect(jdkResolves).toBe(1); // step 2 resolved the JDK over the stale set
-    // call 1: step 1's ensureReady re-resolve attempt (gradle threw);
-    // call 2: step 3's forced re-resolve — this is the regression assertion:
-    // it must happen even though step 2 re-stamped the manifest fresh
-    expect(gradleCalls).toBe(2);
-    // step 4 reports the manifest as it now stands (demo + the JDK step 2 added)
-    expect(result.searchedArtifacts).toContain("com.example:demo-lib:1.0.0");
-    expect(result.searchedArtifacts).toContain("jdk:fake");
+    // no manifest was written for the heuristic set: nothing was searched
+    expect(result.searchedArtifacts).toEqual([]);
+    // ... and the miss carries the failure's reason (spec decision #1: a
+    // failed resolve answers as a miss, reason included) — the same channel
+    // the hits path surfaces its degraded[] through
+    expect(result.degraded).toContain("resolution failed: degraded to cache-scan; run jarpeek resolve");
+  });
+
+  it("a negative over a healthy manifest carries an empty degraded set", async () => {
+    // shape parity: the field exists on every negative, empty when nothing
+    // degraded — callers print warnings without a special case
+    const ctx = await contextWith([DEMO_SOURCES]);
+    const result = await handleMiss(ctx, new LookupMissError("com.example.Nowhere"));
+    expect(result.found).toBe(false);
+    if (result.found) throw new Error("unreachable");
+    expect(result.degraded).toEqual([]);
   });
 });

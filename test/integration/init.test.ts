@@ -1,13 +1,13 @@
 /**
  * init flow integration tests: runInit with injected prompts and resolvers
  * over tmp projects (a build.gradle marker makes the real cascade inside
- * resolveDependencies take the injected gradle resolver; the index runs
- * against the fixture jars with the cache pinned to tmp). Every scenario
- * ends in the idempotency check the init contract promises: same answers,
- * zero byte changes.
+ * resolveDependencies take the injected gradle resolver). init no longer
+ * indexes anything: it wires harnesses and hands resolution to the first
+ * query (or `jarpeek resolve`). Every scenario ends in the idempotency
+ * check the init contract promises: same answers, zero byte changes.
  */
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -15,14 +15,10 @@ import { fileURLToPath } from "node:url";
 import { runInit, type InitResolvers, type PromptIo } from "../../src/harness/init.js";
 import { defaultPrimeContent } from "../../src/prime/content.js";
 import { prime } from "../../src/prime/command.js";
-import type { DependencyArtifact } from "../../src/core/types.js";
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const JARS = join(PKG_ROOT, "test", "fixtures", "jars");
 
 const roots: string[] = [];
-let cacheDir: string;
-let previousCacheEnv: string | undefined;
 
 /** A tmp project root carrying a gradle marker so detection and the cascade agree. */
 function tmpProject(): string {
@@ -32,42 +28,20 @@ function tmpProject(): string {
   return dir;
 }
 
-function fixtureArtifacts(): DependencyArtifact[] {
-  return [
-    {
-      coordinates: "com.example:demo-lib:1.0.0",
-      kind: "external",
-      binaryJar: join(JARS, "demo-lib-1.0.0.jar"),
-      sourcesJar: join(JARS, "demo-lib-1.0.0-sources.jar"),
-      provenance: "source",
-      warnings: [],
-    },
-    {
-      coordinates: "com.example:nosources-lib:1.0.0",
-      kind: "external",
-      binaryJar: join(JARS, "nosources-lib-1.0.0.jar"),
-      provenance: "signature",
-      warnings: [],
-    },
-  ];
-}
-
-/** Resolvers that answer instantly: gradle serves the fixtures, no JDK side effects. */
+/** Resolvers that answer instantly; nothing resolves unless a query asks. */
 function fakeResolvers(commandOnPathResult = true): InitResolvers {
   return {
-    gradle: async () => ({ ok: true, artifacts: fixtureArtifacts() }),
-    includeJdk: false,
     jdk: async () => ({ artifact: null, warnings: [] }),
     commandOnPath: () => commandOnPathResult,
   };
 }
 
 /** PromptIo replaying fixed answers. */
-function fakePrompts(answers: { harnesses?: string[]; mode?: "mcp" | "cli"; index?: boolean }): PromptIo {
+function fakePrompts(answers: { harnesses?: string[]; mode?: "mcp" | "cli" }): PromptIo {
   return {
     multiselect: async () => answers.harnesses ?? ["claude"],
     select: async () => answers.mode ?? "mcp",
-    confirm: async () => answers.index ?? false,
+    confirm: async () => true,
   };
 }
 
@@ -81,24 +55,15 @@ function hashAll(root: string, rels: string[]): string {
   return parts.join("|");
 }
 
-beforeAll(() => {
-  cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-init-cache-"));
-  roots.push(cacheDir);
-  previousCacheEnv = process.env.JARPEEK_CACHE_DIR;
-  process.env.JARPEEK_CACHE_DIR = cacheDir;
-});
-
 afterAll(() => {
-  if (previousCacheEnv === undefined) delete process.env.JARPEEK_CACHE_DIR;
-  else process.env.JARPEEK_CACHE_DIR = previousCacheEnv;
   for (const dir of roots) rmSync(dir, { recursive: true, force: true });
 });
 
 describe("interactive mcp wiring", () => {
-  it("wires claude and gemini, writes primeMode, indexes on confirm", async () => {
+  it("wires claude and gemini, writes primeMode, and resolves nothing", async () => {
     const root = tmpProject();
     const result = await runInit(root, {
-      prompts: fakePrompts({ harnesses: ["claude", "gemini"], mode: "mcp", index: true }),
+      prompts: fakePrompts({ harnesses: ["claude", "gemini"], mode: "mcp" }),
       resolvers: fakeResolvers(),
     });
 
@@ -116,15 +81,17 @@ describe("interactive mcp wiring", () => {
       primeMode: "mcp",
     });
     expect(readFileSync(join(root, ".gitignore"), "utf8")).toContain(".jarpeek/");
-    expect(existsSync(join(root, ".jarpeek", "manifest.json"))).toBe(true);
+    expect(existsSync(join(root, ".jarpeek", "manifest.json"))).toBe(false);
     expect(existsSync(join(root, ".jarpeek", "gradle-init.gradle"))).toBe(true);
-    expect(result.indexed).toBe(true);
+    // the index prompt and the index call are both gone
+    expect(result.notes.some((note) => note.includes("indexed"))).toBe(false);
+    expect(result.notes).toContain("first query auto-resolves (or run: jarpeek resolve)");
   });
 
   it("prime() serves the short mcp card after init (config.json source)", async () => {
     const root = tmpProject();
     await runInit(root, {
-      prompts: fakePrompts({ harnesses: ["claude"], mode: "mcp", index: false }),
+      prompts: fakePrompts({ harnesses: ["claude"], mode: "mcp" }),
       resolvers: fakeResolvers(),
     });
     try {
@@ -140,11 +107,10 @@ describe("cli wiring", () => {
   it("wires the instructions pointer and hook, no mcp entry", async () => {
     const root = tmpProject();
     const result = await runInit(root, {
-      prompts: fakePrompts({ harnesses: ["claude"], mode: "cli", index: false }),
+      prompts: fakePrompts({ harnesses: ["claude"], mode: "cli" }),
       resolvers: fakeResolvers(),
     });
 
-    expect(result.indexed).toBe(false);
     expect(existsSync(join(root, ".mcp.json"))).toBe(false);
     expect(existsSync(join(root, ".jarpeek", "config.json"))).toBe(false);
     expect(readFileSync(join(root, "CLAUDE.md"), "utf8")).toContain("<!-- jarpeek -->");
@@ -157,7 +123,7 @@ describe("idempotency", () => {
   it("a second run with the same answers changes no target bytes", async () => {
     const root = tmpProject();
     const opts = {
-      prompts: fakePrompts({ harnesses: ["claude", "gemini"], mode: "mcp", index: true }),
+      prompts: fakePrompts({ harnesses: ["claude", "gemini"], mode: "mcp" }),
       resolvers: fakeResolvers(),
     };
     const first = await runInit(root, opts);
@@ -174,7 +140,6 @@ describe("idempotency", () => {
 
     expect(hashAll(root, targets)).toBe(before);
     expect(second.wired.map((w) => w.harness)).toEqual(["claude", "gemini"]);
-    expect(second.indexed).toBe(true); // re-index allowed; files still identical
 
     const settings = JSON.parse(readFileSync(join(root, ".gemini", "settings.json"), "utf8"));
     expect(Object.keys(settings.mcpServers)).toEqual(["jarpeek"]);
@@ -184,7 +149,7 @@ describe("idempotency", () => {
 });
 
 describe("non-interactive", () => {
-  it("applies defaults (claude + mcp), skips the index, and says so", async () => {
+  it("applies defaults (claude + mcp), resolves nothing, and says so", async () => {
     const root = tmpProject();
     const result = await runInit(root, { resolvers: fakeResolvers() });
 
@@ -196,18 +161,7 @@ describe("non-interactive", () => {
       "jarpeek",
     );
     expect(existsSync(join(root, ".jarpeek", "manifest.json"))).toBe(false);
-    expect(result.indexed).toBe(false);
-  });
-
-  it("skipIndex forces the skip even when prompts would confirm", async () => {
-    const root = tmpProject();
-    const result = await runInit(root, {
-      prompts: fakePrompts({ harnesses: ["claude"], mode: "mcp", index: true }),
-      resolvers: fakeResolvers(),
-      skipIndex: true,
-    });
-    expect(result.indexed).toBe(false);
-    expect(existsSync(join(root, ".jarpeek", "manifest.json"))).toBe(false);
+    expect(result.notes).toContain("first query auto-resolves (or run: jarpeek resolve)");
   });
 });
 

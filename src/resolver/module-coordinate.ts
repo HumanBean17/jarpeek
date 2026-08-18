@@ -1,13 +1,13 @@
 /**
- * Module coordinates: build-module identity for the user-global index cache.
+ * Module coordinates: build-module identity that stays unique across
+ * projects.
  *
- * The cache store is shared by every project on the machine and keyed by
- * coordinates alone, so a bare Gradle project path (`:app`) would collide
- * with every other project's identically named `:app` — one shard silently
- * overwriting the other's records. Module coordinates therefore carry a
- * namespace derived from the build root's absolute path: same project → same
- * namespace (shards survive re-resolves), different projects → different
- * namespaces (shards never collide).
+ * Coordinates are keyed by string alone, so a bare Gradle project path
+ * (`:app`) would collide with every other project's identically named
+ * `:app`. Module coordinates therefore carry a namespace derived from the
+ * build root's absolute path: same project → same namespace (coordinates
+ * survive re-resolves), different projects → different namespaces (never
+ * collide).
  */
 import { createHash } from "node:crypto";
 import { basename, resolve } from "node:path";

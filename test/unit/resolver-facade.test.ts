@@ -26,7 +26,7 @@ afterEach(() => {
 
 /** Minimal artifact for coordinate-level assertions. */
 function artifact(coordinates: string, kind: DependencyArtifact["kind"] = "external"): DependencyArtifact {
-  return { coordinates, kind, provenance: "source", warnings: [] };
+  return { coordinates, kind };
 }
 
 interface FakeSpec {
@@ -231,8 +231,6 @@ describe("resolveDependencies", () => {
       coordinates: "org.example:mod:1.0",
       kind: "module",
       sourceDir: "/work/mod",
-      provenance: "source",
-      warnings: [],
     };
     const f = fakes({
       gradle: { ok: true, artifacts: [moduleFirst, artifact("org.example:mod:1.0")] },

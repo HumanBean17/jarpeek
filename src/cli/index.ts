@@ -9,7 +9,8 @@
  * nothing) walks handleMiss and exits 0 with its answer; SelectorError and
  * IO failures are the only fatal paths (exit 1). Everything diagnostic —
  * bootstrap progress, warnings, degradations — goes to stderr so stdout
- * stays parseable.
+ * stays parseable, under a hard three-line budget per invocation (one
+ * bootstrap notice plus the two warning lines `warn` prints).
  */
 import { Command, InvalidArgumentError } from "commander";
 import { VERSION } from "../version.js";
@@ -52,16 +53,28 @@ interface Invocation {
   project: string;
 }
 
-/** Context with bootstrap progress lines routed to stderr. */
+/** Context with the bootstrap's one notice line routed to stderr. */
 function ctxFor(inv: Invocation): QueryContext {
   return openContext(inv.project, {
-    onProgress: (msg) => process.stderr.write(`[jarpeek] ${msg}\n`),
+    onNotice: (msg) => process.stderr.write(`[jarpeek] ${msg}...\n`),
   });
 }
 
-/** Print `warning: <msg>` lines (degradations, partial misses) to stderr. */
+/**
+ * Print warnings to stderr under the output budget: the first warning
+ * verbatim, everything after it collapsed into ONE aggregate line pointing
+ * at `jarpeek status`. Deduplicated (order-preserving) before counting, so
+ * the same degradation named twice costs nothing. Together with the single
+ * bootstrap notice this keeps any invocation at ≤3 stderr lines — the number
+ * is the product feature (v1 printed one line per artifact).
+ */
 function warn(...messages: string[]): void {
-  for (const message of messages) process.stderr.write(`warning: ${message}\n`);
+  const unique = [...new Set(messages)];
+  if (unique.length === 0) return;
+  process.stderr.write(`warning: ${unique[0]}\n`);
+  if (unique.length > 1) {
+    process.stderr.write(`warning: +${unique.length - 1} more (see: jarpeek status)\n`);
+  }
 }
 
 /** Emit the result object in the mode the invocation asked for. */
@@ -84,14 +97,12 @@ function emitMiss(miss: MissResult, label: string, inv: Invocation): void {
     );
     return;
   }
-  if (miss.found) {
-    process.stdout.write(
-      `found ${label} in ${miss.coordinates} via ${miss.via} (provenance ${miss.provenance})\n`,
-    );
-    return;
-  }
   const searched = miss.searchedArtifacts.length > 0 ? miss.searchedArtifacts.join("\n  ") : "(none)";
   process.stdout.write(`${label} ${miss.note}\nsearched:\n  ${searched}\n`);
+  // a miss born of a failed resolve carries the reason (spec decision #1):
+  // the negative's degraded set warns through the same budgeted channel the
+  // hits path uses, so "(none)" searched never reads as "nothing to resolve"
+  if (miss.degraded.length > 0) warn(...miss.degraded);
 }
 
 /**
@@ -206,14 +217,20 @@ function renderSearchSymbols(result: SymbolResult): string {
   ]);
 }
 
+/** Warnings a human `resolve` prints before collapsing the rest into one line. */
+const RESOLVE_WARNING_LINES = 5;
+
 function renderResolve(result: ResolveNowResult): string {
+  const warnings = result.warnings.length > 0 ? ` (${result.warnings.length} warnings)` : "";
+  // the cap is presentation-only: --json prints the full array, a human gets
+  // the first few and a pointer — a cache-scan resolve can carry one warning
+  // per ambiguous g:a, and v1's line-spew must not come back through stdout
+  const shown = result.warnings.slice(0, RESOLVE_WARNING_LINES);
+  const rest = result.warnings.length - shown.length;
   return [
-    renderTable([
-      ["STATUS", "COORDINATES", "REASON"],
-      ...result.indexed.map((coordinates): string[] => ["indexed", coordinates, ""]),
-      ...result.skipped.map((skip): string[] => ["skipped", skip.coordinates, clipCell(skip.reason)]),
-    ]),
-    `resolve: indexed ${result.indexed.length}, skipped ${result.skipped.length} in ${result.durationMs}ms`,
+    `resolved ${result.artifactCount} artifacts in ${result.durationMs}ms${warnings}`,
+    ...shown,
+    ...(rest > 0 ? [`+${rest} more (see: jarpeek status)`] : []),
   ].join("\n");
 }
 
@@ -221,27 +238,22 @@ function renderStatus(result: StatusResult): string {
   return renderTable([
     ["KEY", "VALUE"],
     ["projectRoot", result.projectRoot],
-    ["cacheDir", result.cacheDir],
     ["manifest.present", String(result.manifest.present)],
     ["manifest.resolvedAt", result.manifest.resolvedAt ?? ""],
     ["manifest.stale", String(result.manifest.stale)],
     ["manifest.artifactCount", String(result.manifest.artifactCount)],
     ["manifest.dependencySetHash", result.manifest.dependencySetHash ?? ""],
-    ["index.artifactCount", String(result.index.artifactCount)],
-    ["index.fqnCount", String(result.index.fqnCount)],
     ["jvm.available", String(result.jvm.available)],
     ["jvm.version", result.jvm.version ?? ""],
   ]);
 }
 
 function renderWhere(result: WhereResult): string {
-  // key-value lines, not a table: the dir is the payload and must never be
-  // clipped by the 60-char column cap
+  // one line per path, not a table: the paths are the payload and must never
+  // be clipped by the 60-char column cap
   return [
     `coordinates ${result.coordinates}`,
-    `dir ${result.dir}`,
-    `files ${result.fileCount}`,
-    ...(result.note !== undefined ? [`note ${result.note}`] : []),
+    ...result.paths.map((row) => `${row.role} ${row.path} (${row.exists ? "exists" : "missing"})`),
   ].join("\n");
 }
 
@@ -281,7 +293,6 @@ function renderInit(result: InitResult): string {
     ...result.wired.map(
       (entry) => `wired ${entry.harness} (${entry.mode}): ${entry.targets.join(", ")}`,
     ),
-    `indexed: ${result.indexed ? "yes" : "no"}`,
     ...result.notes.map((note) => `note: ${note}`),
   ].join("\n");
 }
@@ -366,8 +377,12 @@ command("read-member", "source slices for member selectors (#name, #name(T1,T2))
       // space-separated args and one comma-joined string are the same list
       const result = await readMember(ctx, fqn, selectors.join(","));
       emit(result, inv, () => renderReadMember(result));
-      for (const miss of result.misses) warn(`${miss.selector}: ${miss.reason}`);
-      if (result.degraded.length > 0) warn(...result.degraded);
+      // one warn call for the whole invocation: the budget is per run, not
+      // per warn site, so misses and degradations share the two-line ceiling
+      warn(
+        ...result.misses.map((miss) => `${miss.selector}: ${miss.reason}`),
+        ...result.degraded,
+      );
     });
   });
 
@@ -404,15 +419,17 @@ command("read-resource", "non-class jar entries (config, services, manifests)")
     });
   });
 
-command("search-symbols", "find declarations by member name across artifacts")
+command("search-symbols", "find declarations by member name in one artifact")
   .argument("<query>")
+  .requiredOption("--artifact <coords>", "g:a:v coordinates or unique artifact id")
   .option("--limit <n>", "max rows", parsePositiveInt, 50)
   .option("--kind <k>", "filter by declaration kind")
-  .action(async (query: string, cmd: { limit: number; kind?: string }) => {
+  .action(async (query: string, cmd: { artifact: string; limit: number; kind?: string }) => {
     const inv = invocation();
     const ctx = ctxFor(inv);
     await runQuery(inv, ctx, async () => {
       const result = await searchSymbols(ctx, query, {
+        artifact: cmd.artifact,
         limit: cmd.limit,
         ...(cmd.kind !== undefined ? { kind: cmd.kind as DeclKind } : {}),
       });
@@ -425,25 +442,22 @@ command("search-symbols", "find declarations by member name across artifacts")
     });
   });
 
-command("resolve", "force a resolve + index pass").action(async () => {
+command("resolve", "force a dependency resolve pass").action(async () => {
   const inv = invocation();
   const ctx = ctxFor(inv);
-  const result = await resolveNow(ctx, {
-    onProgress: (msg) => process.stderr.write(`[jarpeek] ${msg}\n`),
-  });
+  const result = await resolveNow(ctx);
   emit(result, inv, () => renderResolve(result));
-  if (result.warnings.length > 0) warn(...result.warnings);
-  for (const entry of result.degraded) warn(`${entry.from}: ${entry.reason}`);
+  warn(...result.degraded.map((entry) => `${entry.from}: ${entry.reason}`));
 });
 
-command("status", "manifest, index, and JVM report").action(async () => {
+command("status", "manifest and JVM report").action(async () => {
   const inv = invocation();
   const result = await status(ctxFor(inv));
   emit(result, inv, () => renderStatus(result));
   if (result.degraded.length > 0) warn(...result.degraded);
 });
 
-command("where", "on-disk sources for one artifact")
+command("where", "on-disk paths for one artifact")
   .argument("<coordinates>")
   .action(async (coordinates: string) => {
     const inv = invocation();
@@ -476,13 +490,10 @@ command("prime", "the jarpeek cheatsheet for agents (this file)")
   });
 
 command("init", "wire AI harnesses (MCP server or CLI hints) for this project")
-  .option("--yes", "non-interactive: claude + mcp defaults, skip the first index")
+  .option("--yes", "non-interactive: claude + mcp defaults")
   .action(async (cmd: { yes?: boolean }) => {
     const inv = invocation();
-    const result = await runInit(inv.project, {
-      yes: cmd.yes === true,
-      onProgress: (msg) => process.stderr.write(`[jarpeek] ${msg}\n`),
-    });
+    const result = await runInit(inv.project, { yes: cmd.yes === true });
     emit(result, inv, () => renderInit(result));
   });
 

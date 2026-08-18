@@ -37,13 +37,13 @@ describe("scanCaches", () => {
     expect(lib?.kind).toBe("cache-scan");
     expect(lib?.configuration).toBeUndefined();
     expect(lib?.sourcesJar).toBeUndefined();
-    expect(lib?.provenance).toBe("signature");
-    expect(lib?.warnings).toEqual([
+    expect(lib?.provenance).toBeUndefined();
+    expect(lib?.warnings).toBeUndefined();
+    expect(artifacts.find((a) => a.coordinates === "org.a:lib:1.0.0")).toBeUndefined();
+    // ambiguity now rides on the scan's warnings, not the artifact
+    expect(warnings).toEqual([
       "multiple-versions:org.a:lib (kept 2.0.0, also saw 1.0.0)",
     ]);
-    expect(artifacts.find((a) => a.coordinates === "org.a:lib:1.0.0")).toBeUndefined();
-    // ambiguity warnings ride on the artifact, not the global array
-    expect(warnings).toEqual([]);
   });
 
   it("pairs a sibling -sources.jar and marks provenance source (m2)", async () => {
@@ -56,8 +56,8 @@ describe("scanCaches", () => {
     expect(artifacts[0].coordinates).toBe("com.b:c:1.0");
     expect(artifacts[0].binaryJar).toBe(join(m2, "com/b/c/1.0/c-1.0.jar"));
     expect(artifacts[0].sourcesJar).toBe(join(m2, "com/b/c/1.0/c-1.0-sources.jar"));
-    expect(artifacts[0].provenance).toBe("source");
-    expect(artifacts[0].warnings).toEqual([]);
+    expect(artifacts[0].provenance).toBeUndefined();
+    expect(artifacts[0].warnings).toBeUndefined();
     expect(warnings).toEqual([]);
   });
 
@@ -81,7 +81,7 @@ describe("scanCaches", () => {
 
     expect(artifacts).toHaveLength(1);
     expect(artifacts[0].sourcesJar).toBe(join(gradle, "com.g/art/0.9/def456/art-0.9-sources.jar"));
-    expect(artifacts[0].provenance).toBe("source");
+    expect(artifacts[0].provenance).toBeUndefined();
   });
 
   it("merges duplicate coordinates across roots with m2 winning", async () => {
@@ -96,7 +96,7 @@ describe("scanCaches", () => {
     expect(dups[0].binaryJar).toBe(join(m2, "com/dup/d/1.2/d-1.2.jar"));
     // the gradle-only sources jar still pairs onto the merged artifact
     expect(dups[0].sourcesJar).toBe(join(gradle, "com.dup/d/1.2/a1b2c3/d-1.2-sources.jar"));
-    expect(dups[0].provenance).toBe("source");
+    expect(dups[0].provenance).toBeUndefined();
   });
 
   it("skips javadoc jars, checksums, metadata files, and non-jars", async () => {

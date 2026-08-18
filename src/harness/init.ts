@@ -1,12 +1,13 @@
 /**
  * The init flow: detect the project, ask which harnesses to wire and how,
- * write the configs, and optionally run the first dependency index.
+ * and write the configs. Nothing resolves or indexes here — the first query
+ * pays for resolution (or `jarpeek resolve` does it eagerly).
  *
  * Everything user-facing is injected: PromptIo wraps @clack/prompts (tests
- * replay fixed answers), and the resolver/index seams accept fakes so the
- * flow never shells out to gradle or touches the JDK in tests. All writes
- * go through the idempotent wiring helpers, so re-running init with the
- * same answers changes nothing.
+ * replay fixed answers), and the seams accept fakes so the flow never
+ * shells out to gradle or touches the JDK in tests. All writes go through
+ * the idempotent wiring helpers, so re-running init with the same answers
+ * changes nothing.
  */
 import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -14,10 +15,9 @@ import { dirname, join } from "node:path";
 import * as clack from "@clack/prompts";
 import { HARNESSES, type HarnessDescriptor, type HarnessId } from "./descriptors.js";
 import { ensureGitignoreJarpeek, hookSettingsTarget, resolveTarget, wireCli, wireMcp } from "./wiring.js";
-import { detectBuildSystems, resolveDependencies, type BuildSystem, type ResolveDependenciesOptions } from "../resolver/index.js";
+import { detectBuildSystems, type BuildSystem, type ResolveDependenciesOptions } from "../resolver/index.js";
 import { resolveJdk } from "../resolver/jdk.js";
 import { ensureGradleInitScript } from "../resolver/gradle-init.js";
-import { indexArtifacts } from "../index/indexer.js";
 import { commandOnPath } from "../util/path-probe.js";
 import { PRIME_CONFIG_PATH } from "../prime/command.js";
 
@@ -28,11 +28,10 @@ export interface PromptIo {
   confirm(message: string, dflt: boolean): Promise<boolean>;
 }
 
-/** Resolver seams injectable per call; doubles as resolveDependencies opts. */
+/** Seams injectable per call. */
 export interface InitResolvers extends ResolveDependenciesOptions {
   detectBuildSystems?: typeof detectBuildSystems;
   ensureGradleInitScript?: typeof ensureGradleInitScript;
-  indexArtifacts?: typeof indexArtifacts;
   /** PATH probe for the wired command; defaults to the real one. */
   commandOnPath?: typeof commandOnPath;
 }
@@ -42,22 +41,19 @@ export interface InitOptions {
   resolvers?: InitResolvers;
   /** Executable to register in harness configs (default "jarpeek"). */
   command?: string;
-  /** Force-skip the first index even when prompts would confirm it. */
-  skipIndex?: boolean;
-  /** Non-interactive defaults: claude + mcp, no index (the CLI's --yes). */
+  /** Non-interactive defaults: claude + mcp (the CLI's --yes). */
   yes?: boolean;
-  /** Progress sink for the first index (the CLI routes it to stderr). */
-  onProgress?: (msg: string) => void;
 }
 
 export interface InitResult {
   detected: { buildSystems: BuildSystem[]; jdk: string | null };
   wired: Array<{ harness: string; mode: string; targets: string[] }>;
-  indexed: boolean;
   notes: string[];
 }
 
 const NOTE_NON_INTERACTIVE = "non-interactive: defaults applied";
+/** Where resolution moved to: the first query, or the explicit command. */
+const NOTE_AUTO_RESOLVE = "first query auto-resolves (or run: jarpeek resolve)";
 /** The npx trap: configs invoke `jarpeek`, which only exists once installed. */
 const NOTE_NOT_ON_PATH = (command: string): string =>
   `'${command}' not on PATH — installed configs invoke it; run npm install -g jarpeek`;
@@ -164,7 +160,6 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
   const interactive = opts.yes !== true && (opts.prompts !== undefined || process.stdout.isTTY === true);
   let harnessIds: HarnessId[];
   let mode: "mcp" | "cli";
-  let doIndex = false;
   if (interactive) {
     const prompts = opts.prompts ?? clackPromptIo();
     const ids = HARNESSES.map((d) => d.id);
@@ -175,7 +170,6 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
       notes.push("no harness selected; defaulting to claude");
     }
     mode = (await prompts.select("Wire as MCP server or CLI hints?", ["mcp", "cli"], "mcp")) === "cli" ? "cli" : "mcp";
-    if (opts.skipIndex !== true) doIndex = await prompts.confirm("Run the first dependency index now?", true);
   } else {
     harnessIds = ["claude"];
     mode = "mcp";
@@ -205,20 +199,7 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
     notes.push(`gradle init script: ${script}`);
   }
 
-  let indexed = false;
-  if (doIndex) {
-    try {
-      const outcome = await resolveDependencies(projectRoot, resolvers);
-      notes.push(...outcome.warnings.map((warning) => `resolve: ${warning}`));
-      const result = await (resolvers.indexArtifacts ?? indexArtifacts)(projectRoot, outcome.artifacts, {
-        ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
-      });
-      indexed = true;
-      notes.push(`indexed ${result.indexed.length} artifacts, skipped ${result.skipped.length}`);
-    } catch (e) {
-      notes.push(`index failed: ${(e as Error).message}`);
-    }
-  }
+  notes.push(NOTE_AUTO_RESOLVE);
 
-  return { detected: { buildSystems, jdk }, wired, indexed, notes };
+  return { detected: { buildSystems, jdk }, wired, notes };
 }

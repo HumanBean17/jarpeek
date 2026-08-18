@@ -106,5 +106,10 @@
       "javadocStart": 43
     }
   ],
+  "alternatives": [
+    {
+      "coordinates": "com.example:demo-lib-bin:1.0.0"
+    }
+  ],
   "degraded": []
 }

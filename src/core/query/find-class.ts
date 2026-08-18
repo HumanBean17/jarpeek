@@ -1,23 +1,42 @@
 /**
  * findClass: name → class hits, in the cheapest tier that answers.
  *
- * One streaming pass over class-kind records (member records are skipped in
- * flight): exact FQN, then suffix on full dot-segments, then simple name —
- * those tiers are collected fully — then fuzzy over simple names through a
- * bounded collector that keeps at most a small multiple of `limit` entries
- * and sorts once at the end. Hits carry the artifact's coordinates/version/
- * provenance, ordered by the manifest's artifacts position within a tier.
- * When a manifest scopes the index, records of shards it does not list are
- * skipped in flight — the store is user-global, so unscoped answers would be
- * other projects' (or stale) dependencies.
+ * Listing-backed (Task 8): the manifest's artifacts are listed in order —
+ * nothing streamed from disk state — and each listing's class entries run the v1 tier
+ * ladder: exact FQN, segment-aligned suffix, simple name (collected fully),
+ * then fuzzy over simple names through a bounded keep-`limit` collector.
+ * Hits carry the artifact's coordinates/version; the fqn is displayed
+ * DOTTED (nesting spelled with `.`, the query layer's canonical form) while
+ * tier matching runs on the listing fqn, which keeps `$`.
+ *
+ * Kind and provenance are refined for the RETURNED hits only, capped: a
+ * binary hit parses one class file, a source hit one entry text, and beyond
+ * a small constant the defaults stand — refinement is a display nicety, not
+ * a reason to parse a whole dependency set. The provenance is a promise
+ * (source when a source backing exists, decompiled when the JVM can get
+ * there, signature otherwise), so it asks the JVM once per call through the
+ * injectable `opts.jvm` seam.
  */
-import type { ClassHit, DeclKind, Provenance } from "../types.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { ArtifactListing, ClassEntry } from "../listing.js";
+import type { ClassHit, DeclKind, DependencyArtifact, Provenance } from "../types.js";
 import { fuzzyScore } from "../fuzzy.js";
+import { recordsFromClassBytes, recordsFromSourceText } from "../../parse/records.js";
+import { readTextEntry, readZipEntry, type ZipEntry } from "../../parse/zip.js";
+import { probeJvmOnce } from "../../util/jvm.js";
 import type { QueryContext } from "./context.js";
-import { isClassKind, manifestOrder, manifestScope, mergedDegraded, servedStale } from "./outline.js";
+import { classFamily } from "./locate.js";
+import { mergedDegraded, servedStale } from "./outline.js";
 
 export interface FindClassOptions {
   limit?: number;
+  /**
+   * JVM availability for the provenance promise — injectable so tests (and
+   * any caller that already knows) never spawn `java`. Defaults to the
+   * shared memoized probe.
+   */
+  jvm?: () => Promise<{ available: boolean }>;
 }
 
 export interface FindClassResult {
@@ -25,15 +44,32 @@ export interface FindClassResult {
   degraded: string[];
 }
 
+/**
+ * How many returned hits may be read+parsed for kind refinement. A constant,
+ * not a multiple of limit: a broad query returning hundreds of hits must not
+ * turn a name search into a whole-dependency-set parse. Hits beyond it keep
+ * the unrefined `"class"` kind.
+ */
+const KIND_REFINEMENT_CAP = 24;
+
 const UNORDERED = Number.MAX_SAFE_INTEGER;
 
-interface Candidate {
-  fqn: string;
-  coordinates: string;
-  kind: DeclKind;
-  /** Stream position; the stable tiebreaker after manifest position. */
-  seq: number;
-}
+/**
+ * Simple name of a listing fqn, v1 semantics: the segment after the last `.`
+ * — and then after the last `$` when what follows that `$` starts a Java
+ * identifier (`com.example.Demo$Worker` → `Worker`, the name a bare-name
+ * query means). Digit tails (`Outer$1`) never reach here: the listing filter
+ * already dropped them.
+ */
+const simpleNameOf = (fqn: string): string => {
+  const afterDot = fqn.slice(fqn.lastIndexOf(".") + 1);
+  const dollar = afterDot.lastIndexOf("$");
+  const ident = dollar === -1 ? afterDot : afterDot.slice(dollar + 1);
+  return /^[A-Za-z_]/.test(ident) ? ident : afterDot;
+};
+
+/** Dotted display form: the listing fqn with `$` nesting spelled as `.`. */
+const displayFqn = (fqn: string): string => fqn.replaceAll("$", ".");
 
 /** `query` equals the last N dot-segments of `fqn` (segment-aligned suffix). */
 function suffixMatches(fqn: string, query: string): boolean {
@@ -46,79 +82,168 @@ function versionOf(coordinates: string): string {
   return parts[parts.length - 1] ?? "";
 }
 
+/** One tier entry: which artifact's which listing entry. */
+interface Candidate {
+  artifact: DependencyArtifact;
+  listing: ArtifactListing;
+  entry: ClassEntry;
+  /** Position across all listings, in manifest order — the stable tiebreaker. */
+  seq: number;
+}
+
+/** The zip entry named `name` in a listing, or undefined (readZipEntry needs the whole record). */
+function zipEntryNamed(listing: ArtifactListing, name: string): ZipEntry | undefined {
+  return listing.entries.find((e) => e.name === name);
+}
+
 /**
- * Stream class records once, filling the exact/suffix/simple tiers fully and
- * the fuzzy tier through a bounded keep-`limit` collector. Shards that went
- * unreadable mid-iteration surface as warnings, never as a throw.
+ * Fill the exact/suffix/simple tiers fully (deduped per coordinates+fqn) and
+ * the fuzzy tier through a bounded keep-`limit` collector — v1's ordering
+ * semantics: tier concatenation, manifest position first, iteration order
+ * breaking ties. Listing fqns keep `$`, so exact-tier and suffix-tier queries
+ * match either spelling (`Outer$Inner` entry = `Outer.Inner` query).
  */
-async function collectCandidates(
+async function collectTiers(
   ctx: QueryContext,
   query: string,
   limit: number,
-  order: Map<string, number>,
-  scope: Set<string> | null,
-): Promise<{ tiers: Candidate[][]; warnings: string[] }> {
+): Promise<{ tiers: Candidate[][]; unreadable: string[] }> {
+  const manifest = await ctx.manifest();
+  const order = new Map<string, number>();
+  (manifest?.artifacts ?? []).forEach((artifact, index) => {
+    if (!order.has(artifact.coordinates)) order.set(artifact.coordinates, index);
+  });
+
   const exact = new Map<string, Candidate>();
   const suffix = new Map<string, Candidate>();
   const simple = new Map<string, Candidate>();
   const fuzzy: Array<{ candidate: Candidate; score: number }> = [];
+  const unreadable: string[] = [];
   let seq = 0;
 
+  const manifestRank = (c: Candidate): number => order.get(c.artifact.coordinates) ?? UNORDERED;
   const byRank = (
     a: { candidate: Candidate; score: number },
     b: { candidate: Candidate; score: number },
-  ): number =>
-    b.score - a.score ||
-    (order.get(a.candidate.coordinates) ?? UNORDERED) -
-      (order.get(b.candidate.coordinates) ?? UNORDERED) ||
-    a.candidate.seq - b.candidate.seq;
+  ): number => b.score - a.score || manifestRank(a.candidate) - manifestRank(b.candidate) || a.candidate.seq - b.candidate.seq;
 
-  const streamWarnings = await ctx.store.forEachRecord((record, safe) => {
-    if (!isClassKind(record.kind)) return;
-    const fqn = record.fqn;
-    const simpleName = record.selector || fqn.slice(fqn.lastIndexOf(".") + 1);
-    const coordinates = decodeURIComponent(safe);
-    // a manifest scopes the (user-global, never pruned) cache store: shards
-    // it does not list — stale dep versions, other projects' artifacts —
-    // are not this project's search results
-    if (scope !== null && !scope.has(coordinates)) return;
-    const key = `${coordinates} ${fqn}`;
-    const seqNum = seq++;
+  for (const artifact of manifest?.artifacts ?? []) {
+    const listing = await ctx.listings.listing(artifact);
+    if (listing.unreadable !== undefined) {
+      unreadable.push(artifact.coordinates);
+      continue;
+    }
+    for (const entry of listing.classes) {
+      const fqn = entry.fqn;
+      const simpleName = simpleNameOf(fqn);
+      const candidate: Candidate = { artifact, listing, entry, seq: seq++ };
+      const key = `${artifact.coordinates} ${fqn}`;
 
-    if (fqn === query) {
-      exact.set(key, { fqn, coordinates, kind: record.kind, seq: seqNum });
-    } else if (suffixMatches(fqn, query)) {
-      suffix.set(key, { fqn, coordinates, kind: record.kind, seq: seqNum });
-    } else if (simpleName === query) {
-      simple.set(key, { fqn, coordinates, kind: record.kind, seq: seqNum });
-    } else {
-      const score = fuzzyScore(query, simpleName);
-      if (score === null) return;
-      if (fuzzy.some((e) => e.candidate.fqn === fqn && e.candidate.coordinates === coordinates)) return;
-      fuzzy.push({ candidate: { fqn, coordinates, kind: record.kind, seq: seqNum }, score });
-      if (fuzzy.length > Math.max(64, limit * 8)) {
-        // bound memory: the survivors are provably ahead of everything dropped
-        fuzzy.sort(byRank);
-        fuzzy.length = limit;
+      if (fqn === query || fqn.replaceAll("$", ".") === query) {
+        exact.set(key, candidate);
+      } else if (suffixMatches(fqn, query) || suffixMatches(displayFqn(fqn), query)) {
+        // dotted suffixes (`Outer.Inner` of `com.example.Outer$Inner`) matched
+        // in v1; the raw check keeps `$`-spelled suffix queries working too
+        suffix.set(key, candidate);
+      } else if (simpleName === query) {
+        simple.set(key, candidate);
+      } else {
+        const score = fuzzyScore(query, simpleName);
+        if (score === null) continue;
+        if (
+          fuzzy.some(
+            (e) =>
+              e.candidate.artifact.coordinates === artifact.coordinates &&
+              e.candidate.entry.fqn === fqn,
+          )
+        ) {
+          continue;
+        }
+        fuzzy.push({ candidate, score });
+        if (fuzzy.length > Math.max(64, limit * 8)) {
+          // bound memory: the survivors are provably ahead of everything dropped
+          fuzzy.sort(byRank);
+          fuzzy.length = limit;
+        }
       }
     }
-  });
+  }
 
   fuzzy.sort(byRank);
+  const byManifestPosition = (a: Candidate, b: Candidate): number =>
+    manifestRank(a) - manifestRank(b) || a.seq - b.seq;
   return {
     tiers: [
-      [...exact.values()],
-      [...suffix.values()],
-      [...simple.values()],
+      [...exact.values()].sort(byManifestPosition),
+      [...suffix.values()].sort(byManifestPosition),
+      [...simple.values()].sort(byManifestPosition),
       fuzzy.map((e) => e.candidate),
     ],
-    warnings: streamWarnings,
+    unreadable,
   };
 }
 
 /**
+ * The kind of one returned hit, parsed from exactly its own entry. Binary
+ * backings parse the class bytes and keep the equal-dotted-fqn class row's
+ * kind (the class-file reader maps `$` to `.`, so the rows match the dotted
+ * display form); source backings parse the entry text and keep the
+ * `classFamily`-matching row's kind (a source file declares its nested
+ * classes too). No matching record → the `"class"` default stands.
+ */
+async function refinedKind(candidate: Candidate): Promise<DeclKind> {
+  const { artifact, listing, entry } = candidate;
+  const dotted = displayFqn(entry.fqn);
+  const want = (record: { fqn: string; selector: string }): boolean =>
+    record.selector === simpleNameOf(dotted) && classFamily(record.fqn, dotted);
+  try {
+    if (listing.source === "binary") {
+      const zipEntry = zipEntryNamed(listing, entry.entry);
+      if (zipEntry === undefined) return "class";
+      const { records } = recordsFromClassBytes(
+        await readZipEntry(artifact.binaryJar!, zipEntry),
+        entry.entry,
+        entry.entry,
+      );
+      return records.find(want)?.kind ?? "class";
+    }
+    if (listing.source === "sourceDir") {
+      // readFileSync throws sync; the async wrapper keeps one try/catch honest
+      const text = await (async () => readFileSync(join(artifact.sourceDir!, entry.entry), "utf8"))();
+      return recordsFromSourceText(text, entry.entry).records.find(want)?.kind ?? "class";
+    }
+    const zipEntry = zipEntryNamed(listing, entry.entry);
+    if (zipEntry === undefined) return "class";
+    const text = await readTextEntry(artifact.sourcesJar!, zipEntry);
+    return recordsFromSourceText(text, entry.entry).records.find(want)?.kind ?? "class";
+  } catch {
+    // a read or parse failure degrades to the default kind: the hit still
+    // answers WHERE the class is
+    return "class";
+  }
+}
+
+/**
+ * The provenance PROMISE per hit, not a per-artifact memo: which artifact and
+ * backing the hit came from decides what reading it fully would yield. The
+ * JVM is asked at most once per call (lazily — an all-source answer never
+ * spawns).
+ */
+async function promisedProvenance(
+  candidate: Candidate,
+  jvmAvailable: () => Promise<boolean>,
+): Promise<Provenance> {
+  const { artifact } = candidate;
+  if (artifact.sourcesJar !== undefined || artifact.sourceDir !== undefined) return "source";
+  if (artifact.binaryJar !== undefined && (await jvmAvailable())) return "decompiled";
+  return "signature";
+}
+
+/**
  * Find classes by exact FQN, segment-aligned suffix, simple name, or fuzzy
- * simple-name subsequence — in that order. Bootstraps the index first.
+ * simple-name subsequence — in that order. Bootstraps (manifest ensureReady)
+ * first; tiers concatenate with v1 ordering semantics, the fuzzy tier sliced
+ * to `limit`.
  */
 export async function findClass(
   ctx: QueryContext,
@@ -126,51 +251,62 @@ export async function findClass(
   opts: FindClassOptions = {},
 ): Promise<FindClassResult> {
   const limit = opts.limit ?? 20;
+  const jvm = opts.jvm ?? probeJvmOnce;
   await ctx.ensureReady();
 
-  // read once: tier ordering, fuzzy pruning, scoping, and provenance all use it
-  const manifest = await ctx.manifest();
-  const order = manifestOrder(manifest);
-  const scope = manifestScope(manifest);
-  const provenanceByCoordinates = new Map<string, Provenance>();
-  for (const artifact of manifest?.artifacts ?? []) {
-    provenanceByCoordinates.set(artifact.coordinates, artifact.provenance);
-  }
+  const { tiers, unreadable } = await collectTiers(ctx, query, limit);
 
-  const { tiers, warnings: streamWarnings } = await collectCandidates(ctx, query, limit, order, scope);
-
-  // shards the manifest does not list (e.g. manually injected): one lookup
-  // per distinct fqn recovers their shard metadata
-  const unmapped = tiers.flat().filter((c) => !provenanceByCoordinates.has(c.coordinates));
-  for (const fqn of new Set(unmapped.map((c) => c.fqn))) {
-    for (const hit of await ctx.store.lookup(fqn)) {
-      if (!provenanceByCoordinates.has(hit.meta.coordinates)) {
-        provenanceByCoordinates.set(hit.meta.coordinates, hit.meta.provenance);
-      }
+  // ordered tier-concatenated hits; refinement values key on (coordinates, fqn)
+  const candidates: Candidate[] = [];
+  const seen = new Set<string>();
+  const keyOf = (c: Candidate): string => `${c.artifact.coordinates} ${displayFqn(c.entry.fqn)}`;
+  for (const [tierIndex, tier] of tiers.entries()) {
+    for (const candidate of tierIndex === 3 ? tier.slice(0, limit) : tier) {
+      const key = keyOf(candidate);
+      // first occurrence wins for refinement; the hit itself still lists once
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(candidate);
     }
   }
 
-  const byManifestPosition = (a: Candidate, b: Candidate): number =>
-    (order.get(a.coordinates) ?? UNORDERED) - (order.get(b.coordinates) ?? UNORDERED) || a.seq - b.seq;
+  // refine only the returned hits, and only up to the cap — beyond it the
+  // "class" default stands (a name search must not parse a whole dependency set)
+  const kinds = new Map<string, DeclKind>();
+  for (const candidate of candidates.slice(0, KIND_REFINEMENT_CAP)) {
+    kinds.set(keyOf(candidate), await refinedKind(candidate));
+  }
 
-  const hits: ClassHit[] = tiers.flatMap((tier, tierIndex) =>
-    (tierIndex === 3 ? tier.slice(0, limit) : [...tier].sort(byManifestPosition)).map(
-      (candidate): ClassHit => ({
-        fqn: candidate.fqn,
-        coordinates: candidate.coordinates,
-        version: versionOf(candidate.coordinates),
-        kind: candidate.kind,
-        provenance: provenanceByCoordinates.get(candidate.coordinates) ?? "signature",
-      }),
-    ),
+  // the JVM question decides every binary-only hit the same way: one probe
+  let probed: Promise<boolean> | undefined;
+  const jvmAvailable = (): Promise<boolean> =>
+    (probed ??= jvm().then((r) => r.available));
+  const provenances = new Map<string, Promise<Provenance>>();
+  for (const candidate of candidates) {
+    const key = keyOf(candidate);
+    if (!provenances.has(key)) {
+      provenances.set(key, promisedProvenance(candidate, jvmAvailable));
+    }
+  }
+
+  const hits: ClassHit[] = await Promise.all(
+    candidates.map(async (candidate): Promise<ClassHit> => {
+      const coordinates = candidate.artifact.coordinates;
+      const fqn = displayFqn(candidate.entry.fqn);
+      return {
+        fqn,
+        coordinates,
+        version: versionOf(coordinates),
+        kind: kinds.get(keyOf(candidate)) ?? "class",
+        provenance: await provenances.get(keyOf(candidate))!,
+      };
+    }),
   );
 
   const stale = await servedStale(ctx);
-  return {
-    hits,
-    degraded: await mergedDegraded(ctx, [
-      ...(stale ? ["stale index served"] : []),
-      ...streamWarnings,
-    ]),
-  };
+  const extra: string[] = [...(stale ? ["stale index served"] : [])];
+  if (unreadable.length > 0) {
+    extra.push(`${unreadable.length} artifacts unreadable (${unreadable.slice(0, 3).join(", ")})`);
+  }
+  return { hits, degraded: await mergedDegraded(ctx, extra) };
 }

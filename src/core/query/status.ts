@@ -1,27 +1,25 @@
 /**
- * status: the one-call health report — manifest freshness, index size, and
- * whether a JVM is available for decompilation. Nothing here bootstraps or
- * mutates: it reports what is on disk right now, so a fresh project shows
- * `manifest.present: false` until something queries or primes.
+ * status: the one-call health report — manifest freshness and whether a JVM
+ * is available for decompilation. Nothing here bootstraps or mutates, and
+ * nothing reads the index: it reports what is on disk right now, so a fresh
+ * project shows `manifest.present: false` until something queries or primes.
+ * The JVM probe defaults to the shared per-process `probeJvmOnce`; tests
+ * inject their own through the `opts.jvm` seam so they do not depend on the
+ * host machine.
  */
 import { isStale } from "../../index/manifest.js";
-import { runWithTimeout } from "../../util/exec.js";
+import { probeJvmOnce, type JvmProbe } from "../../util/jvm.js";
 import type { QueryContext } from "./context.js";
 import { mergedDegraded } from "./outline.js";
 
 export interface StatusResult {
   projectRoot: string;
-  cacheDir: string;
   manifest: {
     present: boolean;
     resolvedAt?: string;
     stale: boolean;
     artifactCount: number;
     dependencySetHash?: string;
-  };
-  index: {
-    artifactCount: number;
-    fqnCount: number;
   };
   jvm: {
     available: boolean;
@@ -30,36 +28,25 @@ export interface StatusResult {
   degraded: string[];
 }
 
-/** `java -version` probes once per process; the answer cannot change under us. */
-let jvmProbe: Promise<{ available: boolean; version?: string }> | undefined;
-
-function probeJvm(): Promise<{ available: boolean; version?: string }> {
-  return runWithTimeout("java", ["-version"], { timeoutMs: 15_000 })
-    .then((run): { available: boolean; version?: string } => {
-      // modern JVMs print the version line to stderr; older ones to stdout
-      const match = /version "([^"]+)"/.exec(`${run.stderr}\n${run.stdout}`);
-      return match === null ? { available: true } : { available: true, version: match[1] };
-    })
-    .catch((): { available: boolean } => ({ available: false }));
+/** Test injection point for the JVM probe; defaults to the shared memoized one. */
+export interface StatusOptions {
+  jvm?: () => Promise<JvmProbe>;
 }
 
-/** Report manifest, index, and JVM state. Never throws on a missing manifest. */
-export async function status(ctx: QueryContext): Promise<StatusResult> {
+/** Report manifest and JVM state. Never throws on a missing manifest. */
+export async function status(ctx: QueryContext, opts: StatusOptions = {}): Promise<StatusResult> {
   const manifest = await ctx.manifest();
   const stale = manifest !== null && (await isStale(ctx.projectRoot, manifest));
-  const stats = await ctx.store.stats();
 
   return {
     projectRoot: ctx.projectRoot,
-    cacheDir: ctx.cacheDir,
     manifest: {
       present: manifest !== null,
       ...(manifest !== null ? { resolvedAt: manifest.resolvedAt, dependencySetHash: manifest.dependencySetHash } : {}),
       stale,
       artifactCount: manifest?.artifacts.length ?? 0,
     },
-    index: { artifactCount: stats.artifactCount, fqnCount: stats.fqnCount },
-    jvm: await (jvmProbe ??= probeJvm()),
+    jvm: await (opts.jvm ?? probeJvmOnce)(),
     degraded: await mergedDegraded(ctx, stale ? ["stale index served"] : []),
   };
 }

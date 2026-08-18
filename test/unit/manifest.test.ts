@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   utimesSync,
@@ -14,7 +15,6 @@ import { join } from "node:path";
 import type { DependencyArtifact } from "../../src/core/types.js";
 import {
   computeDependencySetHash,
-  computeSourceDirSignature,
   isStale,
   readManifest,
   writeManifest,
@@ -28,11 +28,11 @@ function tmpProjectRoot(): string {
 }
 
 function artifact(overrides: Partial<DependencyArtifact>): DependencyArtifact {
-  return { coordinates: "g:a:1", kind: "external", provenance: "source", warnings: [], ...overrides };
+  return { coordinates: "g:a:1", kind: "external", ...overrides };
 }
 
 function manifestFor(dependencySetHash: string, artifacts: DependencyArtifact[]): Manifest {
-  return { version: 1, resolvedAt: new Date().toISOString(), dependencySetHash, artifacts };
+  return { version: 2, resolvedAt: new Date().toISOString(), dependencySetHash, artifacts };
 }
 
 function touchPlusOneSecond(path: string): void {
@@ -124,9 +124,8 @@ describe("readManifest / writeManifest", () => {
           binaryJar: "/cache/a-1.0.jar",
           sourcesJar: "/cache/a-1.0-sources.jar",
           noDecompile: true,
-          warnings: ["w"],
         }),
-        artifact({ coordinates: ":mod", kind: "module", sourceDir: join(root, "mod"), warnings: [] }),
+        artifact({ coordinates: ":mod", kind: "module", sourceDir: join(root, "mod") }),
       ]);
       await writeManifest(root, m);
 
@@ -143,6 +142,51 @@ describe("readManifest / writeManifest", () => {
       mkdirSync(join(root, ".jarpeek"));
       writeFileSync(join(root, ".jarpeek", "manifest.json"), "{not json");
       expect(await readManifest(root)).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a v1-shaped manifest reads as null (layout bumps force a re-resolve)", async () => {
+    const root = tmpProjectRoot();
+    try {
+      mkdirSync(join(root, ".jarpeek"));
+      const v1 = {
+        version: 1,
+        resolvedAt: new Date().toISOString(),
+        dependencySetHash: EMPTY_SHA256,
+        artifacts: [
+          {
+            coordinates: "com.example:old:1",
+            kind: "external",
+            binaryJar: "/cache/old-1.jar",
+            provenance: "source",
+            warnings: [],
+          },
+        ],
+      };
+      writeFileSync(join(root, ".jarpeek", "manifest.json"), JSON.stringify(v1));
+      expect(await readManifest(root)).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the written JSON omits absent optional fields", async () => {
+    const root = tmpProjectRoot();
+    try {
+      const jar = join(root, "lib.jar");
+      writeFileSync(jar, "fake jar");
+      await writeManifest(root, manifestFor("deadbeef", [artifact({ binaryJar: jar })]));
+
+      const raw = JSON.parse(readFileSync(join(root, ".jarpeek", "manifest.json"), "utf8")) as Record<
+        string,
+        unknown
+      >;
+      const artifacts = raw.artifacts as Array<Record<string, unknown>>;
+      expect(artifacts[0]!.binaryJar).toBe(jar);
+      expect(artifacts[0]!.sourcesJar).toBeUndefined();
+      expect(artifacts[0]!.sourceDir).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -174,101 +218,49 @@ describe("isStale", () => {
     }
   });
 
-  it("flags missing sourcesJar, sourceDir, and classesDir even when the hash matches", async () => {
+  it("flags missing sourcesJar and sourceDir even when the hash matches", async () => {
     const root = tmpProjectRoot();
     try {
       const hash = await computeDependencySetHash(root);
       const allPresent: Manifest = manifestFor(hash, [
-        artifact({ sourcesJar: join(root, "a-sources.jar"), warnings: [] }),
-        artifact({ coordinates: ":mod", kind: "module", sourceDir: join(root, "mod"), warnings: [] }),
-        artifact({ coordinates: ":cls", kind: "module", classesDir: join(root, "classes"), warnings: [] }),
+        artifact({ sourcesJar: join(root, "a-sources.jar") }),
+        artifact({ coordinates: ":mod", kind: "module", sourceDir: join(root, "mod") }),
       ]);
       mkdirSync(join(root, "mod"));
-      mkdirSync(join(root, "classes"));
       writeFileSync(join(root, "a-sources.jar"), "jar");
       expect(await isStale(root, allPresent)).toBe(false);
 
       const anyMissing: Manifest = manifestFor(hash, [
         artifact({ sourcesJar: join(root, "gone-sources.jar") }),
         artifact({ coordinates: ":mod2", kind: "module", sourceDir: join(root, "gone-mod") }),
-        artifact({ coordinates: ":cls2", kind: "module", classesDir: join(root, "gone-classes") }),
       ]);
       expect(await isStale(root, anyMissing)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
-});
 
-describe("module source signature (sourceSig)", () => {
-  function moduleDir(): string {
+  it("a module whose sources changed after resolving is NOT stale", async () => {
+    // source-tree contents are not fingerprinted: a sibling-file edit
+    // without a build-file move leaves the manifest fresh, because the
+    // resolve-only manifest only promises WHICH artifacts back the project
     const root = tmpProjectRoot();
-    mkdirSync(join(root, "src", "main", "java", "com", "mod"), { recursive: true });
-    writeFileSync(
-      join(root, "src", "main", "java", "com", "mod", "Thing.java"),
-      "package com.mod;\n\npublic class Thing {\n  int x = 1;\n}\n",
-    );
-    writeFileSync(join(root, "src", "main", "java", "com", "mod", "Helper.kt"), "package com.mod\n\nclass Helper\n");
-    return root;
-  }
-
-  it("is stable across calls and changes on edit, add, and remove", async () => {
-    const root = moduleDir();
-    try {
-      const dir = join(root, "src", "main", "java");
-      const first = await computeSourceDirSignature(dir);
-      expect(first).toBeTruthy();
-      expect(await computeSourceDirSignature(dir)).toBe(first);
-
-      const java = join(dir, "com", "mod", "Thing.java");
-      writeFileSync(java, "package com.mod;\n\npublic class Thing {\n  int x = 2;\n}\n");
-      touchPlusOneSecond(java);
-      expect(await computeSourceDirSignature(dir)).not.toBe(first);
-
-      const afterEdit = await computeSourceDirSignature(dir);
-      writeFileSync(join(dir, "com", "mod", "Extra.java"), "package com.mod;\n\npublic class Extra {}\n");
-      expect(await computeSourceDirSignature(dir)).not.toBe(afterEdit);
-
-      const afterAdd = await computeSourceDirSignature(dir);
-      rmSync(join(dir, "com", "mod", "Extra.java"));
-      expect(await computeSourceDirSignature(dir)).not.toBe(afterAdd);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("isStale flags a module whose sources changed even though no build file did", async () => {
-    const root = moduleDir();
     try {
       const sourceDir = join(root, "src", "main", "java");
+      mkdirSync(join(sourceDir, "com", "mod"), { recursive: true });
+      writeFileSync(
+        join(sourceDir, "com", "mod", "Thing.java"),
+        "package com.mod;\n\npublic class Thing {\n  int x = 1;\n}\n",
+      );
       const hash = await computeDependencySetHash(root);
       const m: Manifest = manifestFor(hash, [
-        artifact({
-          coordinates: ":app",
-          kind: "module",
-          sourceDir,
-          sourceSig: await computeSourceDirSignature(sourceDir),
-        }),
+        artifact({ coordinates: ":app", kind: "module", sourceDir }),
       ]);
       expect(await isStale(root, m)).toBe(false);
 
-      // the agent-edit workflow: a sibling module source changes after indexing
       const helper = join(sourceDir, "com", "mod", "Helper.kt");
       writeFileSync(helper, "package com.mod\n\nclass Helper(val extra: Int)\n");
       touchPlusOneSecond(helper);
-      expect(await isStale(root, m)).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("tolerates manifests written before sourceSig existed (no false staleness)", async () => {
-    const root = moduleDir();
-    try {
-      const hash = await computeDependencySetHash(root);
-      const m: Manifest = manifestFor(hash, [
-        artifact({ coordinates: ":app", kind: "module", sourceDir: join(root, "src", "main", "java") }),
-      ]);
       expect(await isStale(root, m)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });

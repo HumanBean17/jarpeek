@@ -1,153 +1,71 @@
 /**
- * where: the on-disk answer to "which sources am I actually reading?".
- * Sources jars are unpacked once per artifact under the cache dir — a marker
- * file's mtime, written after extraction, decides whether the zip needs
- * opening again — so an agent or a human can open the exact file read_source
- * slices from. Artifacts without sources point at what does exist: the
- * module's source dir, the binary jar itself, or the JDK's install layout.
+ * where: the on-disk answer to "which paths does this artifact occupy?".
+ * Every path the manifest recorded is listed with an existence flag — no
+ * unpacking, no entry counting — so an agent or a human can see exactly what
+ * is where, and what has vanished since the last resolve. All paths missing
+ * is a degraded answer (the manifest no longer describes the disk), not a
+ * throw; unknown or ambiguous artifact queries stay fatal.
  */
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
-import { listZipEntries, readZipEntry } from "../../parse/zip.js";
+import { existsSync } from "node:fs";
 import type { QueryContext } from "./context.js";
 import { mergedDegraded, servedStale } from "./outline.js";
 import { resolveArtifactQuery } from "./read-resource.js";
 
 export interface WhereResult {
   coordinates: string;
-  dir: string;
-  fileCount: number;
-  note?: string;
+  paths: Array<{
+    role: "binaryJar" | "sourcesJar" | "sourceDir";
+    path: string;
+    exists: boolean;
+  }>;
   /** Present (and true) only when a stale index had to be served. */
   stale?: boolean;
   /** Bootstrap + staleness degradations, same channel as the sibling tools. */
   degraded: string[];
 }
 
-/** Marker written after a complete extraction; its mtime is the freshness clock. */
-const UNPACK_MARKER = ".jarpeek-unpacked";
-
-/** Regular files under `dir`, excluding the unpack marker itself. */
-function countFiles(dir: string): number {
-  let count = 0;
-  for (const item of readdirSync(dir, { withFileTypes: true })) {
-    if (item.isDirectory()) count += countFiles(join(dir, item.name));
-    else if (item.isFile() && item.name !== UNPACK_MARKER) count++;
-  }
-  return count;
-}
+const ALL_MISSING = "artifact files missing on disk; run resolve";
 
 /**
- * Unpack `sourcesJar` under `<cacheDir>/v1/unpacked/<safe>/`, reusing a
- * previous extraction whose marker postdates the jar. Entry paths are
- * resolved-and-checked against the target root so a hostile archive cannot
- * write outside it.
+ * The artifact's recorded backings as path rows, sources first — the same
+ * preference order the provenance ladder uses when it decides what to read.
  */
-async function unpackSources(ctx: QueryContext, jar: string, safeDir: string): Promise<number> {
-  if (!existsSync(jar)) {
-    // a vanished jar is a named error, not a raw ENOENT from statSync
-    throw new Error(`sources jar ${jar} is missing on disk (manifest is stale; re-resolve)`);
+function recordedPaths(artifact: {
+  sourcesJar?: string;
+  sourceDir?: string;
+  binaryJar?: string;
+}): WhereResult["paths"] {
+  const rows: WhereResult["paths"] = [];
+  if (artifact.sourcesJar !== undefined) {
+    rows.push({ role: "sourcesJar", path: artifact.sourcesJar, exists: existsSync(artifact.sourcesJar) });
   }
-  const marker = join(safeDir, UNPACK_MARKER);
-  const jarMtime = statSync(jar).mtimeMs;
-  if (existsSync(marker) && statSync(marker).mtimeMs > jarMtime) {
-    return countFiles(safeDir);
+  if (artifact.sourceDir !== undefined) {
+    rows.push({ role: "sourceDir", path: artifact.sourceDir, exists: existsSync(artifact.sourceDir) });
   }
-
-  mkdirSync(safeDir, { recursive: true });
-  const root = resolve(safeDir);
-  let count = 0;
-  for (const zipEntry of await listZipEntries(jar)) {
-    if (zipEntry.isDirectory) continue;
-    const target = resolve(safeDir, zipEntry.name);
-    if (target !== root && !target.startsWith(root + sep)) {
-      throw new Error(`refusing to extract unsafe entry ${zipEntry.name} from ${jar}`);
-    }
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, await readZipEntry(jar, zipEntry));
-    count++;
+  if (artifact.binaryJar !== undefined) {
+    rows.push({ role: "binaryJar", path: artifact.binaryJar, exists: existsSync(artifact.binaryJar) });
   }
-  // written last: its presence means the extraction finished
-  writeFileSync(marker, `${Date.now()}\n`);
-  return count;
+  return rows;
 }
 
 /**
- * Locate an artifact's sources on disk. Sources jars unpack lazily into the
- * cache; everything else reports its existing location with a note when it
- * is not a sources tree.
+ * List an artifact's recorded on-disk paths with an existence flag each.
+ * Reads nothing but the manifest and `stat`s nothing but those paths.
  */
 export async function where(ctx: QueryContext, coordinates: string): Promise<WhereResult> {
   await ctx.ensureReady();
   const artifact = await resolveArtifactQuery(ctx, coordinates);
   const stale = await servedStale(ctx);
-  const honesty = {
+  const paths = recordedPaths(artifact);
+  const allMissing = paths.length > 0 && paths.every((row) => !row.exists);
+
+  return {
+    coordinates: artifact.coordinates,
+    paths,
     ...(stale ? { stale: true as const } : {}),
-    degraded: await mergedDegraded(ctx, stale ? ["stale index served"] : []),
+    degraded: await mergedDegraded(ctx, [
+      ...(stale ? ["stale index served"] : []),
+      ...(allMissing ? [ALL_MISSING] : []),
+    ]),
   };
-
-  if (artifact.sourceDir !== undefined && existsSync(artifact.sourceDir)) {
-    return {
-      coordinates: artifact.coordinates,
-      dir: artifact.sourceDir,
-      fileCount: countFiles(artifact.sourceDir),
-      ...honesty,
-    };
-  }
-
-  // JDK sources are not unpacked: src.zip is browsable in place and the
-  // extracted module tree already is a directory
-  if (artifact.kind === "jdk") {
-    if (artifact.sourcesJar !== undefined && existsSync(artifact.sourcesJar)) {
-      const entries = (await listZipEntries(artifact.sourcesJar)).filter((e) => !e.isDirectory).length;
-      return {
-        coordinates: artifact.coordinates,
-        dir: dirname(artifact.sourcesJar),
-        fileCount: entries,
-        note: `jdk src.zip (${artifact.sourcesJar})`,
-        ...honesty,
-      };
-    }
-    if (artifact.classesDir !== undefined && existsSync(artifact.classesDir)) {
-      return {
-        coordinates: artifact.coordinates,
-        dir: dirname(artifact.classesDir),
-        fileCount: countFiles(artifact.classesDir),
-        note: "jdk jimage-extracted class files (signatures only)",
-        ...honesty,
-      };
-    }
-  }
-
-  if (artifact.sourcesJar !== undefined && existsSync(artifact.sourcesJar)) {
-    const safe = encodeURIComponent(artifact.coordinates);
-    const dir = join(ctx.cacheDir, "v1", "unpacked", safe);
-    const fileCount = await unpackSources(ctx, artifact.sourcesJar, dir);
-    return { coordinates: artifact.coordinates, dir, fileCount, ...honesty };
-  }
-
-  if (artifact.binaryJar !== undefined && existsSync(artifact.binaryJar)) {
-    const entries = (await listZipEntries(artifact.binaryJar)).filter((e) => !e.isDirectory).length;
-    return {
-      coordinates: artifact.coordinates,
-      dir: artifact.binaryJar,
-      fileCount: entries,
-      note: "no sources jar; binary jar path",
-      ...honesty,
-    };
-  }
-
-  if (artifact.classesDir !== undefined && existsSync(artifact.classesDir)) {
-    return {
-      coordinates: artifact.coordinates,
-      dir: dirname(artifact.classesDir),
-      fileCount: countFiles(artifact.classesDir),
-      note: "classes directory (parent of classesDir)",
-      ...honesty,
-    };
-  }
-
-  throw new Error(
-    `no source location for ${artifact.coordinates} (indexed paths are missing on disk; re-resolve)`,
-  );
 }

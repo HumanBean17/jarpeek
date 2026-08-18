@@ -1,16 +1,11 @@
 {
   "projectRoot": "<projectRoot>",
-  "cacheDir": "<cacheDir>",
   "manifest": {
     "present": true,
     "resolvedAt": "<resolvedAt>",
     "dependencySetHash": "<hash>",
     "stale": false,
-    "artifactCount": 2
-  },
-  "index": {
-    "artifactCount": 2,
-    "fqnCount": 9
+    "artifactCount": 3
   },
   "jvm": {
     "available": "<jvmAvailable>",

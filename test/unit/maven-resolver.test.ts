@@ -171,8 +171,8 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     expect(springTx.sourcesJar).toBe(
       join(m2, "org", "springframework", "spring-tx", "6.1.4", "spring-tx-6.1.4-sources.jar"),
     );
-    expect(springTx.provenance).toBe("source");
-    expect(springTx.warnings).toEqual([]);
+    // exact shape: the legacy per-artifact metadata fields no longer exist
+    expect(Object.keys(springTx).sort()).toEqual(["binaryJar", "configuration", "coordinates", "kind", "sourcesJar"]);
 
     const junit = lookup(JUNIT);
     expect(junit.kind).toBe("external");
@@ -180,7 +180,6 @@ describe("resolveMaven: parsing the build-classpath output", () => {
       join(m2, "org", "junit", "jupiter", "junit-jupiter", "5.10.2", "junit-jupiter-5.10.2.jar"),
     );
     expect(junit.sourcesJar).toBeUndefined();
-    expect(junit.provenance).toBe("signature");
 
     // invocation shape: bare mvn (no wrapper in scratch, probe passed), the
     // goal pins, cwd projectRoot, default timeout, output under os.tmpdir;
@@ -217,7 +216,7 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     expect(b.configuration).toBe("compile+runtime+test");
     expect(b.binaryJar).toBe("C:\\Users\\dev\\.m2\\repository\\org\\a\\b\\1.0\\b-1.0.jar");
     expect(b.sourcesJar).toBeUndefined(); // no sibling in the fixture m2
-    expect(b.provenance).toBe("signature");
+    expect(b.provenance).toBeUndefined();
     expect(calls[0].args).toContain("--non-recursive");
     expect(calls[0].args[3]).toBe("dependency:build-classpath");
   });
@@ -237,7 +236,7 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     expect(resolution.artifacts).toHaveLength(1); // not split at "C:" into two duds
     const b = indexBy(resolution.artifacts)("org.a:b:1.0");
     expect(b.binaryJar).toBe(single);
-    expect(b.provenance).toBe("signature");
+    expect(b.provenance).toBeUndefined();
   });
 
   it("keeps unix splitting for a lone entry with no separator at all", async () => {
@@ -470,7 +469,7 @@ describe("resolveMaven: multi-module", () => {
     // root's 2 m2 entries + the module's 1, all distinct coordinates
     expect(resolution.artifacts).toHaveLength(3);
     const lookup = indexBy(resolution.artifacts);
-    expect(lookup(SPRING_TX).provenance).toBe("source"); // sources sibling survived the merge
+    expect(lookup(SPRING_TX).sourcesJar).toBeDefined(); // sources sibling survived the merge
     expect(lookup(JUNIT)).toBeDefined();
     expect(lookup(LIB)).toBeDefined();
 
@@ -561,7 +560,8 @@ describe("resolveMaven: multi-module", () => {
     const module = lookup(moduleCoordinates(projectRoot, "mod"));
     expect(module.kind).toBe("module");
     expect(module.sourceDir).toBe(mod); // indexed in place, like a Gradle module
-    expect(module.provenance).toBe("source");
+    expect(module.provenance).toBeUndefined();
+    expect(module.warnings).toBeUndefined();
     expect(lookup(LIB)).toBeDefined(); // the m2 jar alongside it survives
   });
 });

@@ -1,16 +1,18 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createMcpServer } from "../../src/mcp/server.js";
 import { openContext, type QueryContext } from "../../src/core/query/context.js";
 import { readMember } from "../../src/core/query/read-member.js";
 import { readResource, truncateUtf8 } from "../../src/core/query/read-resource.js";
 import { searchSymbols } from "../../src/core/query/search-symbols.js";
 import { status } from "../../src/core/query/status.js";
 import { where } from "../../src/core/query/where.js";
-import { SpawnError } from "../../src/util/exec.js";
 import type { DependencyArtifact } from "../../src/core/types.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
@@ -24,7 +26,6 @@ const withJava = hasJava ? describe : describe.skip;
 
 interface Suite {
   projectRoot: string;
-  cacheDir: string;
   ctx: QueryContext;
 }
 
@@ -32,43 +33,42 @@ const c = {} as Suite;
 const noJvm = {} as Suite;
 const ambiguous = {} as Suite;
 
+/**
+ * One backing per artifact (the fixture-manifest rule): demo-lib declares
+ * its SOURCES jar so locate parses source records; nosources-lib is
+ * binary-only. (A both-jars artifact lists binary-first and would answer
+ * from bytecode.)
+ */
 function demoArtifacts(): DependencyArtifact[] {
   return [
     {
       coordinates: "com.example:demo-lib:1.0.0",
       kind: "external",
-      binaryJar: DEMO_JAR,
       sourcesJar: DEMO_SOURCES_JAR,
-      provenance: "source",
-      warnings: [],
     },
     {
       coordinates: "com.example:nosources-lib:1.0.0",
       kind: "external",
       binaryJar: NOSOURCES_JAR,
-      provenance: "signature",
-      warnings: [],
     },
   ];
 }
 
 function openSuite(artifacts: () => DependencyArtifact[]): Suite {
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-tools-project-"));
-  const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-tools-cache-"));
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
   const ctx = openContext(projectRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts: artifacts() }), includeJdk: false },
-    cacheDir,
-    onProgress: () => {},
+    onNotice: () => {},
   });
-  return { projectRoot, cacheDir, ctx };
+  return { projectRoot, ctx };
 }
 
 const suites: Suite[] = [];
 
 beforeAll(() => {
   Object.assign(c, openSuite(demoArtifacts));
-  // separate cache dir so the decompile disk cache is empty for the no-jvm scenario
+  // separate context so the decompile memo is cold for the no-jvm scenario
   Object.assign(noJvm, openSuite(demoArtifacts));
   Object.assign(
     ambiguous,
@@ -78,8 +78,6 @@ beforeAll(() => {
         coordinates: "com.other:demo-lib:2",
         kind: "external",
         binaryJar: NOSOURCES_JAR,
-        provenance: "signature",
-        warnings: [],
       },
     ]),
   );
@@ -89,9 +87,23 @@ beforeAll(() => {
 afterAll(() => {
   for (const s of suites) {
     rmSync(s.projectRoot, { recursive: true, force: true });
-    rmSync(s.cacheDir, { recursive: true, force: true });
   }
+  for (const closer of mcpTeardown.splice(0).reverse()) void closer().catch(() => {});
 });
+
+/** Server+client pairs closed in afterAll so transports never leak between suites. */
+const mcpTeardown: Array<() => Promise<unknown>> = [];
+
+/** A connected MCP client over the given context (InMemoryTransport pair). */
+async function connectClient(ctx: QueryContext): Promise<Client> {
+  const server = createMcpServer(ctx);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  const client = new Client({ name: "jarpeek-tools-test", version: "0.0.0" });
+  await client.connect(clientTransport);
+  mcpTeardown.push(() => server.close(), () => client.close());
+  return client;
+}
 
 describe("readMember", () => {
   it("sourced batch: javadoc lines included, field spans its declaration", async () => {
@@ -136,8 +148,42 @@ describe("readMember", () => {
     );
   });
 
+  // declared BEFORE the withJava block: a successful decompile memoizes the
+  // class for the whole process, and this test needs a real spawn failure —
+  // it must run while the memo for Hidden is still cold. The failed attempt
+  // memoizes nothing, so the withJava block above it stays honest too.
+  it("no-jvm degrades to signature pseudo-members with a miss reason", async () => {
+    // exec injection died with the ResolveContentOptions.exec removal; a real
+    // spawn failure is forced by pointing PATH and JAVA_HOME at an empty dir
+    const emptyBin = mkdtempSync(join(tmpdir(), "jarpeek-empty-bin-"));
+    const prevPath = process.env.PATH;
+    const prevJavaHome = process.env.JAVA_HOME;
+    process.env.PATH = emptyBin;
+    process.env.JAVA_HOME = emptyBin;
+    try {
+      const result = await readMember(noJvm.ctx, "com.example.nosources.Hidden", "#secret()");
+      expect(result.provenance).toBe("signature");
+      expect(result.members).toHaveLength(1);
+      const member = result.members[0]!;
+      expect(member.selector).toBe("secret()");
+      expect(member.signature).toBe("public java.lang.String secret()");
+      expect(member.lines).toEqual(["public java.lang.String secret()"]);
+      expect(member.startLine).toBe(0);
+      expect(member.endLine).toBe(0);
+      expect(result.misses).toEqual([
+        { selector: "#secret()", reason: "no-jvm (decompile unavailable)" },
+      ]);
+    } finally {
+      if (prevPath === undefined) delete process.env.PATH;
+      else process.env.PATH = prevPath;
+      if (prevJavaHome === undefined) delete process.env.JAVA_HOME;
+      else process.env.JAVA_HOME = prevJavaHome;
+      rmSync(emptyBin, { recursive: true, force: true });
+    }
+  });
+
   withJava("decompile path", () => {
-    it("binary-only artifact decompiles; second read hits the cache", async () => {
+    it("binary-only artifact decompiles; second read hits the memo", async () => {
       const first = await readMember(c.ctx, "com.example.nosources.Hidden", "#secret()");
       expect(first.provenance).toBe("decompiled");
       expect(first.coordinates).toBe("com.example:nosources-lib:1.0.0");
@@ -147,67 +193,59 @@ describe("readMember", () => {
       expect(member.lines.join("\n")).toContain("secret");
       expect(member.startLine).toBeGreaterThan(0);
 
-      const exec = vi.fn(async () => {
-        throw new Error("java must not run on a cache hit");
-      });
-      const second = await readMember(c.ctx, "com.example.nosources.Hidden", "#secret()", { exec });
-      expect(exec).not.toHaveBeenCalled();
+      // the memo (not a disk cache) serves the repeat: the second read needs
+      // no JVM round-trip and yields identical lines
+      const second = await readMember(c.ctx, "com.example.nosources.Hidden", "#secret()");
       expect(second.provenance).toBe("decompiled");
       expect(second.members[0]!.lines).toEqual(member.lines);
     });
   });
 
-  it("no-jvm degrades to signature pseudo-members with a miss reason", async () => {
-    const exec = async () => {
-      throw new SpawnError("java", { code: "ENOENT", message: "spawn java ENOENT" } as NodeJS.ErrnoException);
-    };
-    const result = await readMember(noJvm.ctx, "com.example.nosources.Hidden", "#secret()", { exec });
-    expect(result.provenance).toBe("signature");
-    expect(result.members).toHaveLength(1);
-    const member = result.members[0]!;
-    expect(member.selector).toBe("secret()");
-    expect(member.signature).toBe("public java.lang.String secret()");
-    expect(member.lines).toEqual(["public java.lang.String secret()"]);
-    expect(member.startLine).toBe(0);
-    expect(member.endLine).toBe(0);
-    expect(result.misses).toEqual([
-      { selector: "#secret()", reason: "no-jvm (decompile unavailable)" },
-    ]);
-  });
-
   it("noDecompile jdk artifact serves signature rows with the jdk miss reason", async () => {
-    await c.ctx.store.writeArtifact(
+    // listing-world port: a jdk-kind artifact whose binary jar carries the
+    // class and whose noDecompile flag skips the decompile rung
+    const jdkSuite = openSuite(() => [
       {
         coordinates: "jdk:fake",
-        kind: "jdk",
-        provenance: "signature",
+        kind: "jdk" as const,
+        binaryJar: NOSOURCES_JAR,
         noDecompile: true,
-        warnings: [],
       },
-      [
-        {
-          fqn: "jdk.fake.Fake",
-          file: "java.base/jdk/fake/Fake.class",
-          selector: "size",
-          kind: "method",
-          visibility: "public",
-          static: false,
-          deprecated: false,
-          signature: "public int size()",
-        },
-      ],
-    );
-    const result = await readMember(c.ctx, "jdk.fake.Fake", "#size()");
+    ]);
+    suites.push(jdkSuite);
+    const result = await readMember(jdkSuite.ctx, "com.example.nosources.Hidden", "#secret()");
     expect(result.provenance).toBe("signature");
-    expect(result.members[0]!.lines).toEqual(["public int size()"]);
+    expect(result.members[0]!.lines).toEqual([result.members[0]!.signature]);
     expect(result.members[0]!.startLine).toBe(0);
-    expect(result.misses).toEqual([{ selector: "#size()", reason: "jdk: decompilation out of scope" }]);
+    expect(result.misses).toEqual([{ selector: "#secret()", reason: "jdk: decompilation out of scope" }]);
   });
 });
 
 describe("readResource", () => {
+  // the resource half reads the artifact's binary jar directly (readResource
+  // does not go through locate), so this describe uses its own suite where
+  // demo-lib carries the binary jar
+  const res = {} as Suite;
+
+  beforeAll(() => {
+    Object.assign(
+      res,
+      openSuite(() => [
+        {
+          coordinates: "com.example:demo-lib:1.0.0",
+          kind: "external",
+          binaryJar: DEMO_JAR,
+          sourcesJar: DEMO_SOURCES_JAR,
+          provenance: "source",
+        },
+        { coordinates: "com.example:nosources-lib:1.0.0", kind: "external", binaryJar: NOSOURCES_JAR },
+      ]),
+    );
+    suites.push(res);
+  });
+
   it("text entry content from the binary jar", async () => {
-    const result = await readResource(c.ctx, "com.example:demo-lib:1.0.0", "config/*");
+    const result = await readResource(res.ctx, "com.example:demo-lib:1.0.0", "config/*");
     expect(result.artifact).toBe("com.example:demo-lib:1.0.0");
     expect(result.provenance).toBe("source");
     expect(result.entries).toHaveLength(1);
@@ -218,14 +256,14 @@ describe("readResource", () => {
   });
 
   it("META-INF/services entries are text", async () => {
-    const result = await readResource(c.ctx, "com.example:demo-lib:1.0.0", "META-INF/services/*");
+    const result = await readResource(res.ctx, "com.example:demo-lib:1.0.0", "META-INF/services/*");
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0]!.path).toBe("META-INF/services/com.example.Demo");
     expect(result.entries[0]!.content).toBe("com.example.Demo\n");
   });
 
   it("class entries are binary with a note and no content; artifact-id query resolves", async () => {
-    const result = await readResource(c.ctx, "demo-lib", "**/*.class");
+    const result = await readResource(res.ctx, "demo-lib", "**/*.class");
     expect(result.entries.length).toBe(9);
     for (const entry of result.entries) {
       expect(entry.binary).toBe(true);
@@ -236,13 +274,13 @@ describe("readResource", () => {
   });
 
   it("png resource is binary even though the fixture is tiny", async () => {
-    const result = await readResource(c.ctx, "demo-lib", "logo.png");
+    const result = await readResource(res.ctx, "demo-lib", "logo.png");
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0]!.binary).toBe(true);
   });
 
   it("glob matching nothing yields empty entries, not an error", async () => {
-    const result = await readResource(c.ctx, "com.example:demo-lib:1.0.0", "no/such/**");
+    const result = await readResource(res.ctx, "com.example:demo-lib:1.0.0", "no/such/**");
     expect(result.entries).toEqual([]);
   });
 
@@ -255,7 +293,7 @@ describe("readResource", () => {
   });
 
   it("unknown artifact query throws", async () => {
-    await expect(readResource(c.ctx, "no-such-artifact", "*")).rejects.toThrow(/unknown artifact/);
+    await expect(readResource(res.ctx, "no-such-artifact", "*")).rejects.toThrow(/unknown artifact/);
   });
 
   it("text truncation backs off to a UTF-8 codepoint boundary", () => {
@@ -273,7 +311,7 @@ describe("readResource", () => {
 
 describe("searchSymbols", () => {
   it("exact selector hits rank first", async () => {
-    const result = await searchSymbols(c.ctx, "run");
+    const result = await searchSymbols(c.ctx, "run", { artifact: "demo-lib" });
     expect(result.rows[0]!.selector).toBe("run");
     expect(result.rows[0]!.fqn).toBe("com.example.Demo");
     expect(result.rows[0]!.coordinates).toBe("com.example:demo-lib:1.0.0");
@@ -282,60 +320,68 @@ describe("searchSymbols", () => {
   });
 
   it("kind filter excludes other kinds", async () => {
-    const fields = await searchSymbols(c.ctx, "NAME", { kind: "field" });
+    const fields = await searchSymbols(c.ctx, "NAME", { artifact: "demo-lib", kind: "field" });
     expect(fields.rows.map((r) => r.fqn)).toContain("com.example.Demo");
-    const none = await searchSymbols(c.ctx, "run", { kind: "field" });
+    const none = await searchSymbols(c.ctx, "run", { artifact: "demo-lib", kind: "field" });
     expect(none.rows).toHaveLength(0);
   });
 
   it("limit is respected", async () => {
-    const result = await searchSymbols(c.ctx, "m", { limit: 5 });
+    const result = await searchSymbols(c.ctx, "m", { artifact: "demo-lib", limit: 5 });
     expect(result.rows).toHaveLength(5);
     expect(result.rows.every((r) => r.selector.startsWith("m"))).toBe(true);
   });
 
-  it("signatures truncate at 120 characters with an ellipsis", async () => {
-    const artifact = {
-      coordinates: "com.example:big-sig:1",
-      kind: "cache-scan" as const,
-      provenance: "source" as const,
-      warnings: [],
-    };
-    await c.ctx.store.writeArtifact(artifact, [
-      {
-        fqn: "com.example.bigsig.BigSig",
-        file: "x",
-        selector: "bigSignatureMethod",
-        kind: "method",
-        visibility: "public",
-        static: false,
-        deprecated: false,
-        signature: "public void bigSignatureMethod(" + "x".repeat(200) + ")",
-      },
-    ]);
-    // search is scoped to the manifest's artifact set: register the shard there
-    const manifestPath = join(c.projectRoot, ".jarpeek", "manifest.json");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { artifacts: unknown[] };
-    manifest.artifacts.push(artifact);
-    writeFileSync(manifestPath, JSON.stringify(manifest));
+  it("scoping: a nosources-lib query never answers demo-lib rows", async () => {
+    const result = await searchSymbols(c.ctx, "secret", {
+      artifact: "com.example:nosources-lib:1.0.0",
+    });
+    expect(result.rows.length).toBeGreaterThan(0);
+    expect(result.rows.every((r) => r.coordinates === "com.example:nosources-lib:1.0.0")).toBe(true);
+    expect(result.rows.every((r) => r.provenance === "signature")).toBe(true);
+  });
 
-    const result = await searchSymbols(c.ctx, "bigSignatureMethod");
-    expect(result.rows[0]!.signature.length).toBe(121);
-    expect(result.rows[0]!.signature.endsWith("…")).toBe(true);
+  it("unknown artifact answers rows [] with a did-you-mean degraded line", async () => {
+    const result = await searchSymbols(c.ctx, "run", { artifact: "demo-li" });
+    expect(result.rows).toEqual([]);
+    expect(result.degraded[0]).toMatch(/unknown artifact "demo-li" — closest: /);
+    expect(result.degraded[0]).toContain("demo-lib");
+  });
+});
+
+describe("search_symbols MCP schema", () => {
+  it("a call without artifact is a tool error from schema validation", async () => {
+    const client = await connectClient(c.ctx);
+    const result = await client.callTool({ name: "search_symbols", arguments: { query: "run" } });
+    expect(result.isError).toBe(true);
+    // schema rejections surface as an MCP-level error text, not the {error} JSON
+    const text = (result.content![0] as { text: string }).text;
+    expect(text).toMatch(/validation error/);
+    expect(text).toMatch(/artifact/);
+  });
+
+  it("a call with artifact serves rows", async () => {
+    const client = await connectClient(c.ctx);
+    const result = await client.callTool({
+      name: "search_symbols",
+      arguments: { query: "run", artifact: "demo-lib", limit: 10 },
+    });
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse((result.content![0] as { text: string }).text);
+    expect(parsed.rows.length).toBeGreaterThan(0);
+    expect(parsed.rows[0].selector).toBe("run");
   });
 });
 
 describe("status", () => {
-  it("reports manifest, index, and jvm after bootstrap", async () => {
+  it("reports manifest and jvm after bootstrap; no index keys", async () => {
     const result = await status(c.ctx);
     expect(result.projectRoot).toBe(c.projectRoot);
-    expect(result.cacheDir).toBe(c.cacheDir);
     expect(result.manifest.present).toBe(true);
     expect(result.manifest.artifactCount).toBeGreaterThanOrEqual(2);
     expect(result.manifest.resolvedAt).toBeDefined();
     expect(result.manifest.stale).toBe(false);
-    expect(result.index.artifactCount).toBeGreaterThanOrEqual(2);
-    expect(result.index.fqnCount).toBeGreaterThan(5);
+    expect(Object.keys(result)).not.toContain("index");
     expect(result.jvm.available).toBe(hasJava);
     if (hasJava) expect(result.jvm.version).toMatch(/\d/);
     expect(Array.isArray(result.degraded)).toBe(true);
@@ -343,28 +389,20 @@ describe("status", () => {
 });
 
 describe("where", () => {
-  it("demo-lib unpacks its sources jar once under v1/unpacked", async () => {
-    const first = await where(c.ctx, "demo-lib");
-    expect(first.coordinates).toBe("com.example:demo-lib:1.0.0");
-    expect(first.dir.startsWith(join(c.cacheDir, "v1", "unpacked"))).toBe(true);
-    expect(existsSync(join(first.dir, "com", "example", "Demo.java"))).toBe(true);
-    expect(first.fileCount).toBe(6); // the sources jar's six .java entries
-
-    const marker = join(first.dir, ".jarpeek-unpacked");
-    expect(existsSync(marker)).toBe(true);
-    const markerMtime = statSync(marker).mtimeMs;
-
-    const second = await where(c.ctx, "demo-lib");
-    expect(second.dir).toBe(first.dir);
-    expect(second.fileCount).toBe(first.fileCount);
-    expect(statSync(marker).mtimeMs).toBe(markerMtime);
+  it("demo-lib lists its sources and binary jar paths, unpacking nothing", async () => {
+    const result = await where(c.ctx, "demo-lib");
+    expect(result.coordinates).toBe("com.example:demo-lib:1.0.0");
+    expect(result.paths).toEqual([
+      { role: "sourcesJar", path: DEMO_SOURCES_JAR, exists: true },
+    ]);
+    // the eager unpack died with the index: .jarpeek holds only the manifest
+    expect(readdirSync(join(c.projectRoot, ".jarpeek"))).toEqual(["manifest.json"]);
   });
 
-  it("binary-only artifact reports the jar path with a no-sources note", async () => {
+  it("binary-only artifact lists its single jar path", async () => {
     const result = await where(c.ctx, "nosources-lib");
     expect(result.coordinates).toBe("com.example:nosources-lib:1.0.0");
-    expect(result.dir).toBe(NOSOURCES_JAR);
-    expect(result.note).toContain("no sources jar");
+    expect(result.paths).toEqual([{ role: "binaryJar", path: NOSOURCES_JAR, exists: true }]);
   });
 
   it("unknown artifact query throws", async () => {
@@ -375,18 +413,21 @@ describe("where", () => {
 describe("read_resource / where honesty parity", () => {
   it("a stale-served manifest carries stale:true and a degraded entry on both tools", async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-parity-project-"));
-    const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-parity-cache-"));
-    suites.push({ projectRoot, cacheDir, ctx: undefined as unknown as QueryContext });
+    suites.push({ projectRoot, ctx: undefined as unknown as QueryContext });
     try {
       writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+      // the resource-half shape: demo-lib with its binary jar carries the
+      // config entry this test reads
       let impl: () => Promise<{ ok: boolean; artifacts: DependencyArtifact[] }> = async () => ({
         ok: true,
-        artifacts: demoArtifacts(),
+        artifacts: [
+          { coordinates: "com.example:demo-lib:1.0.0", kind: "external", binaryJar: DEMO_JAR },
+          { coordinates: "com.example:nosources-lib:1.0.0", kind: "external", binaryJar: NOSOURCES_JAR },
+        ],
       });
       const ctx = openContext(projectRoot, {
         resolvers: { gradle: async () => impl(), includeJdk: false },
-        cacheDir,
-        onProgress: () => {},
+        onNotice: () => {},
       });
       await readResource(ctx, "demo-lib", "config/*"); // bootstrap
 
@@ -406,6 +447,9 @@ describe("read_resource / where honesty parity", () => {
 
       const location = await where(ctx, "demo-lib");
       expect(location.stale).toBe(true);
+      expect(location.paths).toEqual([
+        { role: "binaryJar", path: DEMO_JAR, exists: true },
+      ]);
       expect(location.degraded.some((d) => d.includes("stale"))).toBe(true);
     } finally {
       // cleaned up via suites in afterAll

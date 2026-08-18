@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { resolveJdk } from "../../src/resolver/jdk.js";
@@ -30,10 +30,8 @@ describe("resolveJdk (real JAVA_HOME)", () => {
     expect(artifact?.kind).toBe("jdk");
     expect(artifact?.configuration).toBe("jdk");
     expect(artifact?.noDecompile).toBe(true);
-    expect(artifact?.provenance).toBe("source");
     expect(artifact?.sourcesJar).toBe(srcZip);
     expect(existsSync(artifact!.sourcesJar!)).toBe(true);
-    expect(artifact?.warnings).toEqual([]);
     expect(warnings).toEqual([]);
   });
 });
@@ -41,12 +39,12 @@ describe("resolveJdk (real JAVA_HOME)", () => {
 describe("resolveJdk", () => {
   let root: string | undefined;
 
-  /** Fresh scratch: a javaHome with an empty `lib/`, and a cache dir. */
-  function scratch(): { javaHome: string; cacheDir: string } {
+  /** Fresh scratch: a javaHome with an empty `lib/`. */
+  function scratch(): string {
     root = mkdtempSync(join(tmpdir(), "jarpeek-jdk-"));
     const javaHome = join(root, "jdk");
     mkdirSync(join(javaHome, "lib"), { recursive: true });
-    return { javaHome, cacheDir: join(root, "cache") };
+    return javaHome;
   }
 
   function writeRelease(javaHome: string, version: string): void {
@@ -58,109 +56,56 @@ describe("resolveJdk", () => {
     root = undefined;
   });
 
-  it("extracts via jimage when src.zip is absent, then skips extraction on the second call", async () => {
-    const { javaHome, cacheDir } = scratch();
-    writeRelease(javaHome, "17.0.9");
+  it("resolves lib/src.zip as a slim sourcesJar artifact", async () => {
+    delete process.env.JAVA_HOME; // pin resolution to the javaHome we pass
+    const javaHome = scratch();
+    writeRelease(javaHome, "21.0.0");
+    writeFileSync(join(javaHome, "lib", "src.zip"), ""); // existence is all that is checked
 
-    const extractDir = join(cacheDir, "v1", "jdk-modules", "17.0.9");
-    const seenArgs: string[][] = [];
-    const runJimage = async (args: string[]): Promise<{ stdout: string; stderr: string; code: number | null }> => {
-      seenArgs.push(args);
-      mkdirSync(extractDir, { recursive: true }); // stand in for the real extraction
-      return { stdout: "", stderr: "", code: 0 };
-    };
+    const { artifact, warnings } = await resolveJdk({ javaHome });
 
-    const first = await resolveJdk({ javaHome, cacheDir, runJimage });
-    expect(seenArgs).toEqual([["extract", "--dir", extractDir, join(javaHome, "lib", "modules")]]);
-    expect(first.artifact?.coordinates).toBe("jdk:17.0.9");
-    expect(first.artifact?.kind).toBe("jdk");
-    expect(first.artifact?.noDecompile).toBe(true);
-    expect(first.artifact?.sourcesJar).toBeUndefined();
-    expect(first.artifact?.classesDir).toBe(extractDir);
-    expect(first.artifact?.provenance).toBe("signature");
-    expect(first.artifact?.warnings).toEqual([
-      "src.zip missing; using jimage-extracted class files (signatures only)",
-    ]);
-    expect(first.warnings).toEqual([
-      "src.zip missing; using jimage-extracted class files (signatures only)",
-    ]);
-
-    // dir already on disk → no second jimage run
-    const second = await resolveJdk({ javaHome, cacheDir, runJimage });
-    expect(seenArgs).toHaveLength(1);
-    expect(second.artifact?.classesDir).toBe(extractDir);
-    expect(second.artifact?.provenance).toBe("signature");
+    // exact shape: the jimage-era per-artifact fields are gone
+    expect(artifact).toEqual({
+      coordinates: "jdk:21.0.0",
+      kind: "jdk",
+      configuration: "jdk",
+      noDecompile: true,
+      sourcesJar: join(javaHome, "lib", "src.zip"),
+    });
+    expect(warnings).toEqual([]);
   });
 
-  it("prefers <javaHome>/bin/jimage when the install carries it", async () => {
-    const { javaHome, cacheDir } = scratch();
-    writeRelease(javaHome, "25");
-    const bin = join(javaHome, "bin");
-    mkdirSync(bin, { recursive: true });
-    const extractDir = join(cacheDir, "v1", "jdk-modules", "25");
-    // an executable stand-in: its side effect proves the javaHome-relative
-    // binary was the one spawned (the PATH jimage would extract elsewhere)
-    writeFileSync(
-      join(bin, "jimage"),
-      `#!/bin/sh\nmkdir -p "${extractDir}"\n`,
-    );
-    chmodSync(join(bin, "jimage"), 0o755);
+  it("returns null with a warning when src.zip is missing", async () => {
+    delete process.env.JAVA_HOME;
+    const javaHome = scratch();
+    writeRelease(javaHome, "21.0.1"); // well-formed release, no lib/src.zip
 
-    const { artifact } = await resolveJdk({ javaHome, cacheDir });
-    expect(artifact?.classesDir).toBe(extractDir);
-    expect(artifact?.provenance).toBe("signature");
-  });
+    const { artifact, warnings } = await resolveJdk({ javaHome });
 
-  it("returns null with a warning when jimage exits non-zero", async () => {
-    const { javaHome, cacheDir } = scratch();
-    writeRelease(javaHome, "21.0.1");
-    const runJimage = async () => ({ stdout: "", stderr: "boom", code: 1 });
-
-    const { artifact, warnings } = await resolveJdk({ javaHome, cacheDir, runJimage });
     expect(artifact).toBeNull();
-    expect(warnings).toEqual(["jimage extract failed"]);
+    expect(warnings).toEqual(["src.zip missing; JDK classes unavailable"]);
   });
 
-  it("returns null with a warning when jimage throws (spawn failure)", async () => {
-    const { javaHome, cacheDir } = scratch();
-    writeRelease(javaHome, "21.0.1");
-    const runJimage = () => Promise.reject(new Error("spawn jimage ENOENT"));
-
-    const { artifact, warnings } = await resolveJdk({ javaHome, cacheDir, runJimage });
-    expect(artifact).toBeNull();
-    expect(warnings).toEqual(["jimage extract failed"]);
-  });
-
-  it("returns null with a warning when jimage exits 0 but produces no extract dir", async () => {
-    const { javaHome, cacheDir } = scratch();
-    writeRelease(javaHome, "21.0.1");
-    const runJimage = async () => ({ stdout: "", stderr: "", code: 0 }); // silent no-op
-
-    const { artifact, warnings } = await resolveJdk({ javaHome, cacheDir, runJimage });
-    expect(artifact).toBeNull();
-    expect(warnings).toEqual(["jimage extract failed"]);
-  });
-
-  it("returns null with a warning when javaHome is empty or unset", async () => {
-    const explicit = await resolveJdk({ javaHome: "" });
-    expect(explicit.artifact).toBeNull();
-    expect(explicit.warnings).toEqual(["no JAVA_HOME; JDK sources unavailable"]);
-
+  it("returns null with a warning when javaHome is unset or empty", async () => {
     delete process.env.JAVA_HOME;
     const byEnv = await resolveJdk();
     expect(byEnv.artifact).toBeNull();
     expect(byEnv.warnings).toEqual(["no JAVA_HOME; JDK sources unavailable"]);
+
+    const explicit = await resolveJdk({ javaHome: "" });
+    expect(explicit.artifact).toBeNull();
+    expect(explicit.warnings).toEqual(["no JAVA_HOME; JDK sources unavailable"]);
   });
 
-  it("falls back to the javaHome basename with jdk-version-unknown when release is missing", async () => {
-    delete process.env.JAVA_HOME; // pin the fallback to the javaHome we passed
-    const { javaHome, cacheDir } = scratch();
-    writeFileSync(join(javaHome, "lib", "src.zip"), "PK"); // no release file
+  it("falls back to the javaHome basename when release is missing", async () => {
+    delete process.env.JAVA_HOME;
+    const javaHome = scratch();
+    writeFileSync(join(javaHome, "lib", "src.zip"), ""); // no release file
 
-    const { artifact, warnings } = await resolveJdk({ javaHome, cacheDir });
+    const { artifact, warnings } = await resolveJdk({ javaHome });
+
     expect(artifact?.coordinates).toBe(`jdk:${basename(javaHome)}`);
     expect(artifact?.sourcesJar).toBe(join(javaHome, "lib", "src.zip"));
-    expect(artifact?.provenance).toBe("source");
-    expect(warnings).toEqual(["jdk-version-unknown"]);
+    expect(warnings).toEqual([]);
   });
 });

@@ -2,12 +2,12 @@
  * CLI transport integration tests: every subcommand as a real subprocess.
  *
  * The suite bootstraps a tmp project in-process (openContext + injected
- * gradle resolver writing the manifest/index through the real flow), so the
- * spawned CLI finds a fresh manifest and never needs resolver injection
- * across the process boundary — both sides serve the identical index, which
- * is what makes the --json parity assertions exact. `resolve` gets its own
- * project with a fake `gradlew` that prints the sentinel dump, exercising
- * the real resolver cascade end to end.
+ * gradle resolver writing the manifest through the real resolve-only flow),
+ * so the spawned CLI finds a fresh manifest and never needs resolver
+ * injection across the process boundary — both sides serve the identical
+ * artifact set, which is what makes the --json parity assertions exact.
+ * `resolve` gets its own project with a fake `gradlew` that prints the
+ * sentinel dump, exercising the real resolver cascade end to end.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -35,26 +35,31 @@ const NOSOURCES_JAR = join(JARS, "nosources-lib-1.0.0.jar");
 
 interface Suite {
   projectRoot: string;
-  cacheDir: string;
   ctx: QueryContext;
 }
 
+/**
+ * One backing per artifact (the fixture-manifest rule): demo-lib declares
+ * its SOURCES jar so locate parses source records (the outline/read parity
+ * cases assert source-lexer signatures); demo-lib-bin carries the binary
+ * jar for the resource-half case; nosources-lib is binary-only.
+ */
 function demoArtifacts(): DependencyArtifact[] {
   return [
     {
       coordinates: "com.example:demo-lib:1.0.0",
       kind: "external",
-      binaryJar: DEMO_JAR,
       sourcesJar: DEMO_SOURCES_JAR,
-      provenance: "source",
-      warnings: [],
+    },
+    {
+      coordinates: "com.example:demo-lib-bin:1.0.0",
+      kind: "external",
+      binaryJar: DEMO_JAR,
     },
     {
       coordinates: "com.example:nosources-lib:1.0.0",
       kind: "external",
       binaryJar: NOSOURCES_JAR,
-      provenance: "signature",
-      warnings: [],
     },
   ];
 }
@@ -62,7 +67,6 @@ function demoArtifacts(): DependencyArtifact[] {
 /** A project whose gradle resolver always answers the fixture artifact set. */
 function openSuite(artifacts: () => DependencyArtifact[] | null): Suite {
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-cli-project-"));
-  const cacheDir = mkdtempSync(join(tmpdir(), "jarpeek-cli-cache-"));
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
   const injected = artifacts();
   const ctx = openContext(projectRoot, {
@@ -71,10 +75,8 @@ function openSuite(artifacts: () => DependencyArtifact[] | null): Suite {
     ...(injected === null
       ? {}
       : { resolvers: { gradle: async () => ({ ok: true, artifacts: injected }), includeJdk: false } }),
-    cacheDir,
-    onProgress: () => {},
   });
-  return { projectRoot, cacheDir, ctx };
+  return { projectRoot, ctx };
 }
 
 const c = {} as Suite;
@@ -101,7 +103,7 @@ function writeFakeGradlew(projectRoot: string, jar: string, sourcesJar: string):
 
 beforeAll(async () => {
   Object.assign(c, openSuite(() => demoArtifacts()));
-  await c.ctx.ensureReady(); // build manifest + index before any subprocess
+  await c.ctx.ensureReady(); // build the manifest before any subprocess
 
   Object.assign(resolveSuite, openSuite(() => null));
   suites.push(c, resolveSuite);
@@ -110,7 +112,6 @@ beforeAll(async () => {
 afterAll(() => {
   for (const s of suites) {
     rmSync(s.projectRoot, { recursive: true, force: true });
-    rmSync(s.cacheDir, { recursive: true, force: true });
   }
 });
 
@@ -128,9 +129,9 @@ function cli(suite: Suite, args: string[], env: Record<string, string> = {}): Cl
     {
       cwd: PKG_ROOT,
       encoding: "utf8",
-      // pin the cache dir so the subprocess serves the suite's exact index —
-      // the parity assertions compare against the in-process store
-      env: { ...process.env, JARPEEK_CACHE_DIR: suite.cacheDir, ...env },
+      // the manifest under --project is the only shared state between this
+      // process and the subprocess — the parity assertions compare against it
+      env: { ...process.env, ...env },
       timeout: 60_000,
     },
   );
@@ -316,27 +317,27 @@ describe("read-source", () => {
 
 describe("read-resource", () => {
   it("prints text entry content", () => {
-    const run = cli(c, ["read-resource", "com.example:demo-lib:1.0.0", "config/*"]);
+    const run = cli(c, ["read-resource", "com.example:demo-lib-bin:1.0.0", "config/*"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("config/app.properties");
     expect(run.stdout).toContain("key=value");
   });
 
   it("binary entries print a note without content", () => {
-    const run = cli(c, ["read-resource", "demo-lib", "logo.png"]);
+    const run = cli(c, ["read-resource", "demo-lib-bin", "logo.png"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("binary entry — content omitted");
   });
 
   it("glob matching nothing prints an empty listing and exits 0", () => {
-    const run = cli(c, ["read-resource", "demo-lib", "no/such/**"]);
+    const run = cli(c, ["read-resource", "demo-lib-bin", "no/such/**"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("no matching entries");
   });
 
   it("--json deep-equals the in-process readResource result", async () => {
-    const expected = await readResource(c.ctx, "com.example:demo-lib:1.0.0", "config/*");
-    expect(jsonRun(c, ["read-resource", "com.example:demo-lib:1.0.0", "config/*"])).toEqual(expected);
+    const expected = await readResource(c.ctx, "com.example:demo-lib-bin:1.0.0", "config/*");
+    expect(jsonRun(c, ["read-resource", "com.example:demo-lib-bin:1.0.0", "config/*"])).toEqual(expected);
   });
 
   it("unknown artifact exits 1 with the message on stderr", () => {
@@ -348,7 +349,7 @@ describe("read-resource", () => {
 
 describe("search-symbols", () => {
   it("ranks the exact selector first with a SIGNATURE column", () => {
-    const run = cli(c, ["search-symbols", "run"]);
+    const run = cli(c, ["search-symbols", "run", "--artifact", "com.example:demo-lib:1.0.0"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("SELECTOR");
     expect(run.stdout).toContain("SIGNATURE");
@@ -356,14 +357,31 @@ describe("search-symbols", () => {
   });
 
   it("--kind field filters rows", () => {
-    const run = cli(c, ["search-symbols", "NAME", "--kind", "field"]);
+    const run = cli(c, ["search-symbols", "NAME", "--artifact", "demo-lib", "--kind", "field"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("com.example.Demo");
   });
 
+  it("without --artifact exits 1 with commander's one-line usage error on stderr", () => {
+    const run = cli(c, ["search-symbols", "builder"]);
+    expect(run.code).toBe(1);
+    // commander's requiredOption miss: exactly one stderr line, no Usage block
+    expect(run.stderr).toBe("error: required option '--artifact <coords>' not specified\n");
+    expect(run.stdout).toBe("");
+  });
+
+  it("an unknown --artifact answers rows [] with the did-you-mean line, exit 0", () => {
+    const run = cli(c, ["search-symbols", "builder", "--artifact", "demo-li"]);
+    expect(run.code).toBe(0);
+    expect(run.stderr).toContain("unknown artifact");
+    expect(run.stderr).toContain("closest");
+  });
+
   it("--json deep-equals the in-process searchSymbols result", async () => {
-    const expected = await searchSymbols(c.ctx, "run", { limit: 10 });
-    expect(jsonRun(c, ["search-symbols", "run", "--limit", "10"])).toEqual(expected);
+    const expected = await searchSymbols(c.ctx, "run", { artifact: "demo-lib", limit: 10 });
+    expect(
+      jsonRun(c, ["search-symbols", "run", "--artifact", "demo-lib", "--limit", "10"]),
+    ).toEqual(expected);
   });
 });
 
@@ -372,11 +390,21 @@ describe("resolve", () => {
     writeFakeGradlew(resolveSuite.projectRoot, DEMO_JAR, DEMO_SOURCES_JAR);
   });
 
-  it("re-resolves via the real cascade and prints indexed artifacts", () => {
+  it("re-resolves via the real cascade and prints exactly one resolved line", () => {
     const run = cli(resolveSuite, ["resolve"]);
     expect(run.code).toBe(0);
-    expect(run.stdout).toContain("com.example:demo-lib:1.0.0");
-    expect(run.stdout).toContain("resolve");
+    // one line of payload: the resolve-only command reports counts, not a table
+    expect(run.stdout.trim().split("\n")).toHaveLength(1);
+    expect(run.stdout).toMatch(/^resolved \d+ artifacts? in \d+ms\n$/);
+    // the manifest it wrote names the resolved artifact
+    const manifest = JSON.parse(
+      readFileSync(join(resolveSuite.projectRoot, ".jarpeek", "manifest.json"), "utf8"),
+    );
+    expect(manifest.artifacts.map((a: { coordinates: string }) => a.coordinates)).toContain(
+      "com.example:demo-lib:1.0.0",
+    );
+    // no per-artifact indexing progress ever reaches stderr
+    expect(run.stderr).not.toContain("[jarpeek] indexing");
   });
 
   it("--json parity with in-process resolveNow except wall-clock timing", async () => {
@@ -390,18 +418,27 @@ describe("resolve", () => {
     };
     const { durationMs: _actualMs, ...actualRest } = actual;
     expect(actualRest).toEqual(expectedRest);
-    expect(actual.indexed).toContain("com.example:demo-lib:1.0.0");
+    // demo-lib plus possibly the JDK pseudo-artifact (JAVA_HOME is an
+    // environment fact); what is pinned is the parity above and the count
+    // being at least the one artifact the fake gradlew reports
+    expect(actual.artifactCount).toBeGreaterThanOrEqual(1);
+    expect(actual.viaCacheScan).toBe(false);
     expect(actual.durationMs).toBeGreaterThanOrEqual(0);
+    // the forced resolve rewrote the v2 manifest
+    expect(readFileSync(join(resolveSuite.projectRoot, ".jarpeek", "manifest.json"), "utf8")).toContain(
+      '"version":2',
+    );
   });
 });
 
 describe("status", () => {
-  it("reports cacheDir and artifact counts", () => {
+  it("reports manifest and jvm rows; no index rows", () => {
     const run = cli(c, ["status"]);
     expect(run.code).toBe(0);
-    expect(run.stdout).toContain("cacheDir");
-    expect(run.stdout).toContain("artifactCount");
-    expect(run.stdout).toContain(c.cacheDir);
+    expect(run.stdout).toContain("manifest.present");
+    expect(run.stdout).toContain("manifest.artifactCount");
+    expect(run.stdout).toContain("jvm.available");
+    expect(run.stdout).not.toContain("index.");
   });
 
   it("--json deep-equals the in-process status result", async () => {
@@ -413,16 +450,18 @@ describe("status", () => {
 });
 
 describe("where", () => {
-  it("prints an existing unpacked sources dir", () => {
+  it("prints one line per recorded path with its existence", () => {
     const run = cli(c, ["where", "com.example:demo-lib:1.0.0"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("coordinates com.example:demo-lib:1.0.0");
-    const dirLine = run.stdout.split("\n").find((l) => l.startsWith("dir "));
-    expect(dirLine).toBeDefined();
-    const dir = dirLine!.slice("dir ".length);
-    expect(dir.startsWith(join(c.cacheDir, "v1", "unpacked"))).toBe(true);
-    expect(existsSync(dir)).toBe(true);
-    expect(existsSync(join(dir, "com", "example", "Demo.java"))).toBe(true);
+    expect(run.stdout).toContain(`sourcesJar ${DEMO_SOURCES_JAR} (exists)`);
+    expect(run.stdout.split("\n").filter((l) => /^(sourcesJar|binaryJar|sourceDir) /.test(l))).toHaveLength(1);
+  });
+
+  it("a binary-only artifact prints its single jar row", () => {
+    const run = cli(c, ["where", "nosources-lib"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain(`binaryJar ${NOSOURCES_JAR} (exists)`);
   });
 
   it("--json deep-equals the in-process where result", async () => {
@@ -502,7 +541,7 @@ describe("numeric flag validation", () => {
       expect(run.code).toBe(1);
       expect(run.stderr).toMatch(/positive integer/);
     }
-    const symbols = cli(c, ["search-symbols", "run", "--limit", "0"]);
+    const symbols = cli(c, ["search-symbols", "run", "--artifact", "demo-lib", "--limit", "0"]);
     expect(symbols.code).toBe(1);
     expect(symbols.stderr).toMatch(/positive integer/);
   });
@@ -516,6 +555,9 @@ describe("numeric flag validation", () => {
   });
 
   it("valid values still work unchanged", () => {
+    // v1 semantics: the simple name of `Demo$Worker` is `Worker`, so a
+    // `Demo` query answers only the two Demo hits (the fuzzy tier stays
+    // empty and `--limit` is never exceeded)
     const limited = cli(c, ["--json", "find-class", "Demo", "--limit", "2"]);
     expect(limited.code).toBe(0);
     const hits = JSON.parse(limited.stdout);

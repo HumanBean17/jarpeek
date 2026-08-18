@@ -6,13 +6,13 @@
  * Cursor) sees — input schemas validated, results as text-serialized core
  * objects. Responses are pinned to committed goldens under
  * `test/golden/mcp/` (regenerate with `UPDATE_GOLDENS=1`); the `status`
- * golden is compared with volatile fields (cacheDir, resolvedAt, hashes)
- * normalized away first.
+ * golden is compared with volatile fields (resolvedAt, hashes, the jvm
+ * probe) normalized away first.
  *
  * Same harness shape as the CLI suite: a tmp project bootstrapped in-process
- * with injected resolvers, cache dir pinned via JARPEEK_CACHE_DIR — except
- * here the "subprocess" is the server object in this process, so parity with
- * `--json` is asserted against the same ctx, not a spawned peer.
+ * with injected resolvers — except here the "subprocess" is the server
+ * object in this process, so parity with `--json` is asserted against the
+ * same ctx, not a spawned peer.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -56,27 +56,34 @@ const EXPECTED_TOOLS = [
 
 interface Suite {
   projectRoot: string;
-  cacheDir: string;
   ctx: QueryContext;
   client: Client;
 }
 
+/**
+ * One backing per artifact (the fixture-manifest rule): demo-lib declares
+ * its SOURCES jar so locate parses source records; nosources-lib is
+ * binary-only; demo-lib-bin carries the binary jar for the resource-half
+ * cases (read_resource reads the runtime jar directly, not through locate).
+ * (A both-jars artifact lists binary-first and would answer from bytecode →
+ * decompile.)
+ */
 function demoArtifacts(): DependencyArtifact[] {
   return [
     {
       coordinates: "com.example:demo-lib:1.0.0",
       kind: "external",
-      binaryJar: DEMO_JAR,
       sourcesJar: DEMO_SOURCES_JAR,
-      provenance: "source",
-      warnings: [],
+    },
+    {
+      coordinates: "com.example:demo-lib-bin:1.0.0",
+      kind: "external",
+      binaryJar: DEMO_JAR,
     },
     {
       coordinates: "com.example:nosources-lib:1.0.0",
       kind: "external",
       binaryJar: NOSOURCES_JAR,
-      provenance: "signature",
-      warnings: [],
     },
   ];
 }
@@ -101,25 +108,21 @@ const lazy = {} as { projectRoot: string; ctx: QueryContext; client: Client };
 const teardown: Array<() => Promise<unknown>> = [];
 
 beforeAll(async () => {
-  process.env.JARPEEK_CACHE_DIR = mkdtempSync(join(tmpdir(), "jarpeek-mcp-cache-"));
-
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-mcp-project-"));
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
   const ctx = openContext(projectRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts: demoArtifacts() }), includeJdk: false },
-    cacheDir: process.env.JARPEEK_CACHE_DIR,
-    onProgress: () => {},
+    onNotice: () => {},
   });
   const client = await connect(ctx);
-  Object.assign(c, { projectRoot, cacheDir: process.env.JARPEEK_CACHE_DIR, ctx, client });
+  Object.assign(c, { projectRoot, ctx, client });
 
   // lazy suite: manifest deliberately absent until the first tool call
   const lazyRoot = mkdtempSync(join(tmpdir(), "jarpeek-mcp-lazy-"));
   writeFileSync(join(lazyRoot, "build.gradle"), "plugins { id 'java' }\n");
   const lazyCtx = openContext(lazyRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts: demoArtifacts() }), includeJdk: false },
-    cacheDir: process.env.JARPEEK_CACHE_DIR,
-    onProgress: () => {},
+    onNotice: () => {},
   });
   Object.assign(lazy, { projectRoot: lazyRoot, ctx: lazyCtx, client: await connect(lazyCtx) });
 });
@@ -129,7 +132,6 @@ afterAll(async () => {
   for (const root of [c.projectRoot, lazy.projectRoot]) {
     if (root) rmSync(root, { recursive: true, force: true });
   }
-  if (c.cacheDir) rmSync(c.cacheDir, { recursive: true, force: true });
 });
 
 /** Call a tool and parse its single text block as the core result object. */
@@ -164,7 +166,8 @@ function expectGolden(name: string, actual: unknown): void {
 
 /**
  * Replace run- and machine-varying status fields with sentinels before the
- * golden compare: tmpdir paths, timestamps, hashes, and the whole JVM probe.
+ * golden compare: the tmpdir project root, timestamps, hashes, and the whole
+ * JVM probe.
  * The jvm block is normalized unconditionally — both values AND their
  * presence differ per machine (no-JVM answers `available: false` with no
  * version key; an unparseable `-version` answers `available: true` with no
@@ -178,7 +181,6 @@ function normalizeStatus(result: any): any {
   return {
     ...result,
     projectRoot: "<projectRoot>",
-    cacheDir: "<cacheDir>",
     ...(result.manifest !== undefined
       ? {
           manifest: {
@@ -197,6 +199,21 @@ function normalizeStatus(result: any): any {
           },
         }
       : {}),
+  };
+}
+
+/**
+ * find_class hits carry the provenance promise, which reads JVM availability
+ * (`source` artifacts aside) — the same machine variance status normalizes.
+ * Source promises are stable and stay pinned; everything else becomes a
+ * sentinel so a no-JVM CI and a dev laptop pin the same golden.
+ */
+function normalizeFindClassProvenance(result: any): any {
+  return {
+    ...result,
+    hits: result.hits.map((hit: any) =>
+      hit.provenance === "source" ? hit : { ...hit, provenance: "<promise>" },
+    ),
   };
 }
 
@@ -219,7 +236,7 @@ describe("tool listing", () => {
     expect(props("read_member")).toEqual(["fqn", "selectors"]);
     expect(props("read_source")).toEqual(["fqn", "from", "mode", "to"]);
     expect(props("read_resource")).toEqual(["artifact", "glob"]);
-    expect(props("search_symbols")).toEqual(["kind", "limit", "query"]);
+    expect(props("search_symbols")).toEqual(["artifact", "kind", "limit", "query"]);
     expect(props("resolve")).toEqual([]);
     expect(props("status")).toEqual([]);
     expect(props("where")).toEqual(["coordinates"]);
@@ -233,7 +250,13 @@ describe("find_class", () => {
     const parsed = payload(await call("find_class", { query: "com.example.Demo" }));
     const expected = await findClass(c.ctx, "com.example.Demo");
     expect(parsed).toEqual(expected);
-    expectGolden("find_class", parsed);
+    // provenance is a PROMISE that depends on JVM presence (source →
+    // decompiled → signature), so it varies per machine like status's jvm
+    // block: normalize every hit's provenance to a sentinel before the pin
+    expectGolden(
+      "find_class",
+      normalizeFindClassProvenance(parsed),
+    );
   });
 
   it("empty hits route through handleMiss, matching the CLI --json miss", async () => {
@@ -314,7 +337,7 @@ describe("read_source", () => {
 describe("read_resource + search_symbols + where", () => {
   it("read_resource serves text entries", async () => {
     const parsed = payload(
-      await call("read_resource", { artifact: "com.example:demo-lib:1.0.0", glob: "config/*" }),
+      await call("read_resource", { artifact: "com.example:demo-lib-bin:1.0.0", glob: "config/*" }),
     );
     expect(parsed.entries.map((e: any) => e.path)).toContain("config/app.properties");
   });
@@ -327,24 +350,28 @@ describe("read_resource + search_symbols + where", () => {
     );
   });
 
-  it("search_symbols ranks the exact selector", async () => {
-    const parsed = payload(await call("search_symbols", { query: "run", limit: 10 }));
+  it("search_symbols ranks the exact selector within the requested artifact", async () => {
+    const parsed = payload(
+      await call("search_symbols", { query: "run", artifact: "demo-lib", limit: 10 }),
+    );
     expect(parsed.rows.length).toBeGreaterThan(0);
     expect(parsed.rows[0].selector).toBe("run");
   });
 
-  it("where reports the unpacked dir", async () => {
+  it("where lists the artifact's recorded paths", async () => {
     const parsed = payload(await call("where", { coordinates: "com.example:demo-lib:1.0.0" }));
-    expect(parsed.dir.startsWith(join(c.cacheDir, "v1", "unpacked"))).toBe(true);
-    expect(existsSync(parsed.dir)).toBe(true);
+    expect(parsed.paths).toEqual([
+      { role: "sourcesJar", path: DEMO_SOURCES_JAR, exists: true },
+    ]);
+    expect(existsSync(DEMO_SOURCES_JAR)).toBe(true);
   });
 });
 
 describe("status", () => {
-  it("reports manifest and index, golden-pinned modulo volatile fields", async () => {
+  it("reports manifest and jvm, golden-pinned modulo volatile fields", async () => {
     const parsed = payload(await call("status", {}));
     expect(parsed.manifest.present).toBe(true);
-    expect(parsed.index.artifactCount).toBeGreaterThanOrEqual(2);
+    expect(parsed.index).toBeUndefined();
     expect(parsed.projectRoot).toBe(c.projectRoot);
     const expected = await status(c.ctx);
     expect({ ...parsed, jvm: expected.jvm }).toEqual({ ...expected, jvm: expected.jvm });

@@ -1,19 +1,24 @@
 /**
- * searchSymbols: symbol search across every indexed artifact in one
- * streaming pass. Ranking is tiered like findClass — exact selector, then
- * prefix, then fuzzy subsequence — so a precise query surfaces the declared
- * member first and a loose one still finds it. The exact and prefix tiers
- * are collected fully; the fuzzy tier flows through a bounded keep-`limit`
- * collector (tiers dominate ranking, so the bounded top of the fuzzy bucket
- * is provably the same top a full sort would keep). Signatures are truncated
- * to keep rows cheap and each row carries its artifact's provenance, so a
- * signature-only hit is never mistaken for sourced; the kind filter and the
- * manifest scope run in flight, before any tiering.
+ * searchSymbols: member-name search scoped to ONE artifact. The artifact
+ * query resolves through the same contract read_resource uses (exact
+ * coordinates, else a unique artifact-id segment), that single backing is
+ * parsed on demand (memoized per coordinates+stamp inside recordsForArtifact),
+ * and the v1 tier ladder runs over its records alone: exact selector, then
+ * prefix, then fuzzy (`fuzzyScore`) — stream order replaces manifest order in
+ * the tiebreaks because only one artifact is streamed. Signatures truncate at
+ * 120 chars and every row carries the parse's provenance, so a
+ * signature-only hit is never mistaken for sourced.
+ *
+ * Unknown artifacts are exit-path answers, not errors: a did-you-mean line
+ * built from the manifest's artifact ids (fuzzy-ranked, top 3). An artifact
+ * that parsed to zero records degrades with its unreadable string instead.
  */
-import type { DeclKind, Provenance } from "../types.js";
+import type { DeclKind, DependencyArtifact, Provenance } from "../types.js";
 import { fuzzyScore } from "../fuzzy.js";
 import type { QueryContext } from "./context.js";
-import { manifestOrder, manifestScope, mergedDegraded, servedStale } from "./outline.js";
+import { recordsForArtifact } from "./locate.js";
+import { mergedDegraded, servedStale } from "./outline.js";
+import { resolveArtifactQuery } from "./read-resource.js";
 
 export interface SymbolRow {
   selector: string;
@@ -31,20 +36,21 @@ export interface SymbolResult {
 }
 
 export interface SearchSymbolsOptions {
+  /** REQUIRED: g:a:v coordinates or a unique artifact id — the global scan is gone. */
+  artifact: string;
   limit?: number;
   kind?: DeclKind;
 }
 
 const DEFAULT_LIMIT = 50;
 const SIGNATURE_MAX_CHARS = 120;
-const UNORDERED = Number.MAX_SAFE_INTEGER;
 
 interface ScoredRow {
   row: SymbolRow;
   /** 0 exact, 1 prefix, 2 fuzzy — the primary sort key. */
   tier: number;
   score: number;
-  order: number;
+  /** Stream position within the one artifact — the stable final tiebreak. */
   seq: number;
 }
 
@@ -55,23 +61,55 @@ function truncateSignature(signature: string): string {
 }
 
 /**
- * Find declarations by selector: exact matches first, then prefix, then
- * fuzzy (`fuzzyScore`), manifest position and stream order breaking ties.
+ * The manifest's artifact ids (the `a` of each `g:a:v`), fuzzy-ranked against
+ * the failed query — the did-you-mean half of an unknown-artifact answer.
+ */
+async function closestArtifactIds(ctx: QueryContext, query: string): Promise<string[]> {
+  const artifacts = await ctx.artifacts();
+  const scored: Array<{ id: string; score: number; index: number }> = [];
+  artifacts.forEach((artifact, index) => {
+    const id = artifact.coordinates.split(":")[1] ?? artifact.coordinates;
+    const score = fuzzyScore(query, id);
+    if (score !== null) scored.push({ id, score, index });
+  });
+  scored.sort((a, b) => b.score - a.score || a.index - b.index);
+  return scored.slice(0, 3).map((entry) => entry.id);
+}
+
+/**
+ * Find declarations by selector in ONE artifact: exact matches first, then
+ * prefix, then fuzzy, stream order breaking ties.
  */
 export async function searchSymbols(
   ctx: QueryContext,
   query: string,
-  opts: SearchSymbolsOptions = {},
+  opts: SearchSymbolsOptions,
 ): Promise<SymbolResult> {
   const limit = opts.limit ?? DEFAULT_LIMIT;
   await ctx.ensureReady();
-  const manifest = await ctx.manifest();
-  const order = manifestOrder(manifest);
-  // a manifest scopes the user-global cache store to this project's artifacts
-  const scope = manifestScope(manifest);
-  const provenanceByCoordinates = new Map<string, Provenance>();
-  for (const artifact of manifest?.artifacts ?? []) {
-    provenanceByCoordinates.set(artifact.coordinates, artifact.provenance);
+
+  let artifact: DependencyArtifact;
+  try {
+    artifact = await resolveArtifactQuery(ctx, opts.artifact);
+  } catch {
+    // an unknown (or ambiguous) artifact id is a miss with suggestions, not
+    // an error — same exit-path contract as every other miss
+    const closest = await closestArtifactIds(ctx, opts.artifact);
+    const suggestions = closest.length > 0 ? closest.join(", ") : "(no artifacts resolved)";
+    return {
+      rows: [],
+      degraded: [`unknown artifact "${opts.artifact}" — closest: ${suggestions}`],
+    };
+  }
+
+  const { records, provenance, unreadable } = await recordsForArtifact(ctx, artifact);
+  if (records.length === 0) {
+    // nothing parsed (unreadable backing, or every entry failed): say so via
+    // the same channel, with whatever the parse layer aggregated
+    return {
+      rows: [],
+      degraded: [unreadable ?? `${artifact.coordinates} parsed to no declarations`],
+    };
   }
 
   /** Tier 0/1: collected fully. Tier 2 lands in `fuzzy`, bounded below. */
@@ -79,30 +117,24 @@ export async function searchSymbols(
   const fuzzy: ScoredRow[] = [];
   let seq = 0;
 
-  const byRank = (a: ScoredRow, b: ScoredRow): number =>
-    b.score - a.score || a.order - b.order || a.seq - b.seq;
+  const byRank = (a: ScoredRow, b: ScoredRow): number => b.score - a.score || a.seq - b.seq;
 
-  const streamWarnings = await ctx.store.forEachRecord((record, safe) => {
-    if (opts.kind !== undefined && record.kind !== opts.kind) return;
+  for (const record of records) {
+    if (opts.kind !== undefined && record.kind !== opts.kind) continue;
     const score = fuzzyScore(query, record.selector);
-    if (score === null) return;
-    const coordinates = decodeURIComponent(safe);
-    if (scope !== null && !scope.has(coordinates)) return;
+    if (score === null) continue;
     const tier = record.selector === query ? 0 : record.selector.startsWith(query) ? 1 : 2;
     const scored: ScoredRow = {
       row: {
         selector: record.selector,
         fqn: record.fqn,
         kind: record.kind,
-        coordinates,
-        // in-scope rows always map; the "signature" default only labels rows
-        // served without a manifest at all (nothing was verifiable anyway)
-        provenance: provenanceByCoordinates.get(coordinates) ?? "signature",
+        coordinates: artifact.coordinates,
+        provenance,
         signature: truncateSignature(record.signature),
       },
       tier,
       score,
-      order: order.get(coordinates) ?? UNORDERED,
       seq: seq++,
     };
     if (tier < 2) {
@@ -115,11 +147,11 @@ export async function searchSymbols(
         fuzzy.length = limit;
       }
     }
-  });
+  }
 
   fuzzy.sort(byRank);
   const scored = [...collected, ...fuzzy].sort(
-    (a, b) => a.tier - b.tier || b.score - a.score || a.order - b.order || a.seq - b.seq,
+    (a, b) => a.tier - b.tier || b.score - a.score || a.seq - b.seq,
   );
 
   const stale = await servedStale(ctx);
@@ -127,7 +159,7 @@ export async function searchSymbols(
     rows: scored.slice(0, limit).map((s) => s.row),
     degraded: await mergedDegraded(ctx, [
       ...(stale ? ["stale index served"] : []),
-      ...streamWarnings,
+      ...(unreadable !== undefined ? [unreadable] : []),
     ]),
   };
 }
