@@ -104,6 +104,15 @@ describe("defaultPrimeContent(cli)", () => {
     expect(text).toContain("where <coordinates>");
   });
 
+  it("documents the skeleton outline flags and the full-default read-source", () => {
+    expect(text).toContain("--minimal");
+    expect(text).toContain("--table");
+    expect(text).toMatch(/whole file by default/);
+    expect(text).not.toContain("outline by default");
+    // the frugal entry points are named before the whole-file default
+    expect(text).toMatch(/outline.*read-member/s);
+  });
+
   it("bolds the rule", () => {
     expect(text).toMatch(
       /\*\*before grepping the repo for an external class[^]*find-class first\.?\*\*/i,

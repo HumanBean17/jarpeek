@@ -14,6 +14,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { VERSION } from "../../src/version.js";
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -137,5 +138,11 @@ describe("packaging", () => {
     expect(license).toContain("MIT");
     expect(license).toContain("jarpeek contributors");
     expect(license).toContain("2026");
+  });
+
+  it("ships one version: package.json and src/version.ts agree at 0.3.0", () => {
+    const pkg = readPkg();
+    expect(pkg.version).toBe("0.3.0");
+    expect(VERSION).toBe(pkg.version);
   });
 });

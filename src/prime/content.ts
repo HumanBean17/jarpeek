@@ -80,9 +80,9 @@ parseable.
 | command | input shape | returns |
 | --- | --- | --- |
 | \`find-class <query> [--limit n]\` | FQN, dot-suffix, simple name, or fuzzy name | class hits with artifact coordinates and provenance |
-| \`outline <fqn> [--kind k] [--visibility v]\` | one class | declaration rows — name, kind, visibility, static, signature — no source text |
+| \`outline <fqn> [--kind k] [--visibility v] [--minimal\|--full] [--no-imports] [--no-fields] [--no-methods] [--no-inner] [--no-javadoc] [--table]\` | one class | a java-shaped class skeleton: package, imports, javadoc, members as signature lines — \`--minimal\` keeps methods and nested classes only, \`--full\` renders javadoc blocks, \`--table\` opts into the legacy table |
 | \`read-member <fqn> #name #name(T1,T2)\` | one class, several selectors at once | source slices for just those members, line-numbered |
-| \`read-source <fqn> [--full] [--lines a:b]\` | one class | outline by default; whole file or a line range on request |
+| \`read-source <fqn> [--full] [--lines a:b]\` | one class | the whole file by default, numbered; \`--lines a:b\` for a range — outline and read-member are the frugal entry points before whole files |
 | \`read-resource <artifact> <glob>\` | artifact + glob | non-class jar entries: configs, service descriptors, manifests |
 | \`search-symbols <query> --artifact <g:a:v> [--limit n] [--kind k]\` | member name, scoped to one artifact (the flag is required) | every declaration with that name in that artifact |
 | \`resolve\` | — | force a re-resolve; rewrites the manifest; prints one line (count, duration) |
