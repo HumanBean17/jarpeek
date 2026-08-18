@@ -44,6 +44,20 @@ import { runInit, type InitResult } from "../harness/init.js";
 import { registerMcpCommand } from "./mcp-command.js";
 import { prime, type PrimeOptions } from "../prime/command.js";
 import { renderSkeleton } from "./skeleton.js";
+import {
+  FIND_CLASS_HELP,
+  INIT_HELP,
+  OUTLINE_HELP,
+  PRIME_HELP,
+  READ_MEMBER_HELP,
+  READ_RESOURCE_HELP,
+  READ_SOURCE_HELP,
+  RESOLVE_HELP,
+  SEARCH_SYMBOLS_HELP,
+  STATUS_HELP,
+  TOP_LEVEL_HELP,
+  WHERE_HELP,
+} from "./help.js";
 
 /** Per-invocation flags of the prime subcommand. */
 interface PrimeFlags extends PrimeOptions {
@@ -321,12 +335,16 @@ program
   .description("Dependency source access for AI agents on JVM projects")
   .version(VERSION)
   .option("--json", "machine-readable output (the exact MCP result object)")
-  .option("--project <dir>", "project root (default: cwd)");
+  .option("--project <dir>", "project root (default: cwd)")
+  .addHelpText("after", TOP_LEVEL_HELP);
 
 /** Declare a subcommand. Global flags are program-level and sticky. */
-function command(name: string, description: string) {
+function command(name: string, description: string, helpText?: string) {
   const sub = program.command(name);
   sub.description(description);
+  if (helpText !== undefined) {
+    sub.addHelpText("after", helpText);
+  }
   return sub;
 }
 
@@ -341,7 +359,7 @@ function invocation(): Invocation {
   return { json: opts.json === true, project: opts.project ?? process.cwd() };
 }
 
-command("find-class", "find classes by FQN, suffix, simple name, or fuzzy name")
+command("find-class", "find classes by FQN, suffix, simple name, or fuzzy name", FIND_CLASS_HELP)
   .argument("<query>")
   .option("--limit <n>", "max hits", parsePositiveInt, 20)
   .action(async (query: string, cmd: { limit: number }) => {
@@ -376,6 +394,7 @@ interface OutlineCmd {
 command(
   "outline",
   "java-shaped class skeleton (presets + section toggles; --table for the legacy view)",
+  OUTLINE_HELP,
 )
   .argument("<fqn>")
   // choice-constrained so an invalid value is a named usage error, and the
@@ -440,7 +459,7 @@ command(
     });
   });
 
-command("read-member", "source slices for member selectors (#name, #name(T1,T2))")
+command("read-member", "source slices for member selectors (#name, #name(T1,T2))", READ_MEMBER_HELP)
   .argument("<fqn>")
   .argument("<selectors...>")
   .action(async (fqn: string, selectors: string[]) => {
@@ -459,7 +478,7 @@ command("read-member", "source slices for member selectors (#name, #name(T1,T2))
     });
   });
 
-command("read-source", "source text for one class (outline | full | lines)")
+command("read-source", "source text for one class (outline | full | lines)", READ_SOURCE_HELP)
   .argument("<fqn>")
   .option("--full", "the whole file")
   .option("--lines <a:b>", "line range, e.g. 2:3")
@@ -480,7 +499,7 @@ command("read-source", "source text for one class (outline | full | lines)")
     });
   });
 
-command("read-resource", "non-class jar entries (config, services, manifests)")
+command("read-resource", "non-class jar entries (config, services, manifests)", READ_RESOURCE_HELP)
   .argument("<artifact>")
   .argument("<glob>")
   .action(async (artifact: string, glob: string) => {
@@ -492,7 +511,7 @@ command("read-resource", "non-class jar entries (config, services, manifests)")
     });
   });
 
-command("search-symbols", "find declarations by member name in one artifact")
+command("search-symbols", "find declarations by member name in one artifact", SEARCH_SYMBOLS_HELP)
   .argument("<query>")
   .requiredOption("--artifact <coords>", "g:a:v coordinates or unique artifact id")
   .option("--limit <n>", "max rows", parsePositiveInt, 50)
@@ -515,7 +534,7 @@ command("search-symbols", "find declarations by member name in one artifact")
     });
   });
 
-command("resolve", "force a dependency resolve pass").action(async () => {
+command("resolve", "force a dependency resolve pass", RESOLVE_HELP).action(async () => {
   const inv = invocation();
   const ctx = ctxFor(inv);
   const result = await resolveNow(ctx);
@@ -523,14 +542,14 @@ command("resolve", "force a dependency resolve pass").action(async () => {
   warn(...result.degraded.map((entry) => `${entry.from}: ${entry.reason}`));
 });
 
-command("status", "manifest and JVM report").action(async () => {
+command("status", "manifest and JVM report", STATUS_HELP).action(async () => {
   const inv = invocation();
   const result = await status(ctxFor(inv));
   emit(result, inv, () => renderStatus(result));
   if (result.degraded.length > 0) warn(...result.degraded);
 });
 
-command("where", "on-disk paths for one artifact")
+command("where", "on-disk paths for one artifact", WHERE_HELP)
   .argument("<coordinates>")
   .action(async (coordinates: string) => {
     const inv = invocation();
@@ -543,7 +562,7 @@ command("where", "on-disk paths for one artifact")
 
 registerMcpCommand(program);
 
-command("prime", "the jarpeek cheatsheet for agents (this file)")
+command("prime", "the jarpeek cheatsheet for agents (this file)", PRIME_HELP)
   .option("--full", "the full cli cheatsheet (default without MCP wiring)")
   .option("--mcp", "the short mcp card")
   .option("--export", "the default content even when .jarpeek/PRIME.md exists")
@@ -562,7 +581,7 @@ command("prime", "the jarpeek cheatsheet for agents (this file)")
     );
   });
 
-command("init", "wire AI harnesses (MCP server or CLI hints) for this project")
+command("init", "wire AI harnesses (MCP server or CLI hints) for this project", INIT_HELP)
   .option("--yes", "non-interactive: claude + mcp defaults")
   .action(async (cmd: { yes?: boolean }) => {
     const inv = invocation();
