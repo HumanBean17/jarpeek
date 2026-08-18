@@ -208,6 +208,21 @@ function normalizeStatus(result: any): any {
   };
 }
 
+/**
+ * find_class hits carry the provenance promise, which reads JVM availability
+ * (`source` artifacts aside) — the same machine variance status normalizes.
+ * Source promises are stable and stay pinned; everything else becomes a
+ * sentinel so a no-JVM CI and a dev laptop pin the same golden.
+ */
+function normalizeFindClassProvenance(result: any): any {
+  return {
+    ...result,
+    hits: result.hits.map((hit: any) =>
+      hit.provenance === "source" ? hit : { ...hit, provenance: "<promise>" },
+    ),
+  };
+}
+
 describe("tool listing", () => {
   it("lists exactly the 9 tools, each with a JSON input schema", async () => {
     const list = await c.client.listTools();
@@ -241,7 +256,13 @@ describe("find_class", () => {
     const parsed = payload(await call("find_class", { query: "com.example.Demo" }));
     const expected = await findClass(c.ctx, "com.example.Demo");
     expect(parsed).toEqual(expected);
-    expectGolden("find_class", parsed);
+    // provenance is a PROMISE that depends on JVM presence (source →
+    // decompiled → signature), so it varies per machine like status's jvm
+    // block: normalize every hit's provenance to a sentinel before the pin
+    expectGolden(
+      "find_class",
+      normalizeFindClassProvenance(parsed),
+    );
   });
 
   it("empty hits route through handleMiss, matching the CLI --json miss", async () => {

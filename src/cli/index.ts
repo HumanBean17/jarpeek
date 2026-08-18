@@ -84,12 +84,6 @@ function emitMiss(miss: MissResult, label: string, inv: Invocation): void {
     );
     return;
   }
-  if (miss.found) {
-    process.stdout.write(
-      `found ${label} in ${miss.coordinates} via ${miss.via} (provenance ${miss.provenance})\n`,
-    );
-    return;
-  }
   const searched = miss.searchedArtifacts.length > 0 ? miss.searchedArtifacts.join("\n  ") : "(none)";
   process.stdout.write(`${label} ${miss.note}\nsearched:\n  ${searched}\n`);
 }

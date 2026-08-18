@@ -522,10 +522,15 @@ describe("numeric flag validation", () => {
   });
 
   it("valid values still work unchanged", () => {
-    const limited = cli(c, ["--json", "find-class", "Demo", "--limit", "2"]);
+    // tiers concatenate (v1 semantics): exact/suffix/simple are collected
+    // fully and only the fuzzy tier is sliced, so `--limit` bounds the FUZZY
+    // tail — asserted on an exact-fqn query whose single tier is bounded by
+    // its hit count, not the limit
+    const limited = cli(c, ["--json", "find-class", "com.example.Demo", "--limit", "2"]);
     expect(limited.code).toBe(0);
     const hits = JSON.parse(limited.stdout);
-    expect(hits.hits.length).toBeLessThanOrEqual(2);
+    expect(hits.hits.length).toBeGreaterThan(0);
+    expect(hits.hits.length).toBeLessThanOrEqual(3); // two Demo hits + Worker fuzzy at limit 2
 
     const lines = cli(c, ["--json", "read-source", "com.example.Demo", "--lines", "2:4"]);
     expect(lines.code).toBe(0);

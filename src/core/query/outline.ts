@@ -6,9 +6,9 @@
  * artifacts in order, and the first whose backing declares the fqn is parsed
  * from exactly one file — its own row, members, and directly nested class
  * rows come out of that parse. Later hits become `alternatives`; the store's
- * manifest ordering/shaping helpers stay exported until Tasks 8-9 retire
- * their last importers. Lookup misses are protocol, not errors to print:
- * `LookupMissError` carries the fqn so the miss layer can suggest
+ * manifest ordering/shaping helpers stay exported for search-symbols until
+ * Task 9 retires their last importer. Lookup misses are protocol, not errors
+ * to print: `LookupMissError` carries the fqn so the miss layer can suggest
  * alternatives.
  */
 import type { Declaration, DeclKind, Provenance, Visibility } from "../types.js";
@@ -55,7 +55,7 @@ export interface OutlineResult {
 
 /**
  * coordinates → position in the manifest's artifacts array; first occurrence
- * wins. (Store-era helper kept until Task 8 deletes its last importer.)
+ * wins. (Store-era helper kept for search-symbols, Task 9's last importer.)
  */
 export function manifestOrder(manifest: Manifest | null): Map<string, number> {
   const order = new Map<string, number>();
@@ -69,7 +69,7 @@ export function manifestOrder(manifest: Manifest | null): Map<string, number> {
  * The manifest's artifact coordinates as a membership filter, or null only
  * when no manifest exists — the cache store is user-global and never pruned,
  * so with a manifest present queries serve only its artifacts. (Store-era
- * helper kept until Task 8 deletes its last importer.)
+ * helper kept for search-symbols, Task 9's last importer.)
  */
 export function manifestScope(manifest: Manifest | null): Set<string> | null {
   if (manifest === null) return null;
