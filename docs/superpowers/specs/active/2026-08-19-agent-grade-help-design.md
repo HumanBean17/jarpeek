@@ -1,6 +1,6 @@
 # Agent-grade CLI help and teaching errors — discoverability redesign
 
-**Status:** draft
+**Status:** implemented
 
 ## Problem
 

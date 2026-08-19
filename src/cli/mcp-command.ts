@@ -8,6 +8,7 @@
  */
 import type { Command } from "commander";
 import { startMcpServer } from "../mcp/server.js";
+import { MCP_HELP } from "./help.js";
 
 export interface McpOptions {
   project?: string;
@@ -18,6 +19,7 @@ export function registerMcpCommand(program: Command): void {
   program
     .command("mcp")
     .description("serve the MCP stdio server for this project")
+    .addHelpText("after", MCP_HELP)
     .action(async () => {
       await startMcpServer(program.opts<McpOptions>().project ?? process.cwd());
     });
