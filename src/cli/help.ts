@@ -87,14 +87,14 @@ related: read-resource reads non-class entries of the same artifact.
 export const MCP_HELP = `
 Examples:
   jarpeek mcp
-serves stdio MCP; jarpeek init wires it into harnesses.
+serves the stdio MCP server; jarpeek init writes the harness configs that launch it.
 `;
 
 export const PRIME_HELP = `
 Examples:
   jarpeek prime --full
   jarpeek prime --export
-the full agent cheatsheet; --export bypasses a .jarpeek/PRIME.md override.
+--full produces the full agent cheatsheet; --export bypasses a .jarpeek/PRIME.md override.
 `;
 
 export const INIT_HELP = `

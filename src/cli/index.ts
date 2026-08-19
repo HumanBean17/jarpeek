@@ -593,7 +593,9 @@ program.action((...rest: unknown[]) => {
   // the fallback fires only when no subcommand matched: bare invocation is a
   // legitimate "how do I use this" (help, exit 0), anything else is a typo'd
   // or invented command and must read as the usage error it is — v0.3 printed
-  // help to stdout and exited 0, indistinguishable from success
+  // help to stdout and exited 0, indistinguishable from success.
+  // commander 12 contract: the last action parameter is the Command, and its
+  // .args holds the positional operands (global flags already stripped)
   const cmd = rest.at(-1) as Command;
   const operands = cmd.args;
   if (operands.length === 0) {
