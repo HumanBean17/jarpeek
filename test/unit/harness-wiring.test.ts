@@ -443,8 +443,11 @@ describe("wireMcp: win32 spawn shape", () => {
     stubPlatform("darwin");
     const root = tmpProject();
     await wireMcp(byId("claude"), root);
-    expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8")).mcpServers.jarpeek).toEqual(
-      JARPEEK_SERVER,
-    );
+    // the posix literal, not the host-derived JARPEEK_SERVER: the stubbed
+    // platform decides the shape, whatever host this runs on
+    expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8")).mcpServers.jarpeek).toEqual({
+      command: "jarpeek",
+      args: ["mcp"],
+    });
   });
 });

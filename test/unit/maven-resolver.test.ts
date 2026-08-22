@@ -618,7 +618,8 @@ describe("resolveMaven: multi-module", () => {
     // output plus one external jar
     const modClasses = join(mod, "target", "classes");
     const { exec } = reactorCpExec([
-      { dir: projectRoot, content: `${modClasses}:${jar}` },
+      // real mvn joins classpath entries with the platform delimiter (`;` on win32)
+      { dir: projectRoot, content: `${modClasses}${delimiter}${jar}` },
       { dir: mod, content: "" },
     ]);
 

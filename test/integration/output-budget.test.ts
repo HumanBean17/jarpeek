@@ -163,8 +163,15 @@ describe("resolve caps its warning lines: first 5, then one aggregate", () => {
   const m2 = mkdtempSync(join(tmpdir(), "jarpeek-budget-m2-"));
   // the scan-root env override (the JARPEEK_HOME pattern) pins the cache scan
   // to the fake m2 tree — the real ~/.m2 would make the warning count a fact
-  // about this machine, not about the command
-  const pin = { JAVA_HOME: "", JARPEEK_M2_DIR: m2, JARPEEK_GRADLE_CACHE_DIR: m2 };
+  // about this machine, not about the command. PATH is pinned to node's own
+  // bin so the gradle/mvn PATH probes MISS on every host: windows CI images
+  // ship a real Gradle, and a found gradle would run instead of degrading.
+  const pin = {
+    JAVA_HOME: "",
+    JARPEEK_M2_DIR: m2,
+    JARPEEK_GRADLE_CACHE_DIR: m2,
+    PATH: dirname(process.execPath),
+  };
 
   beforeAll(() => {
     // a build.gradle marker with NO gradlew: gradle is detected, fails
