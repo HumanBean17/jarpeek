@@ -1,0 +1,4 @@
+# Force LF working trees on every platform — Windows autocrlf would otherwise
+# rewrite text files to CRLF and break golden-file tests for reasons unrelated
+# to the code under test.
+* text=auto eol=lf
