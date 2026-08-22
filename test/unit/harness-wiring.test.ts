@@ -32,8 +32,23 @@ function tmpProject(files: Record<string, string> = {}): string {
   return dir;
 }
 
-/** The jarpeek server entry every format must express. */
-const JARPEEK_SERVER = { command: "jarpeek", args: ["mcp"] };
+/**
+ * The jarpeek server entry every format must express, derived by the same
+ * rule wiring.ts applies: win32 wraps the command through `cmd /c` (the
+ * npm bin is jarpeek.cmd — unspawnable by Node-hosted clients otherwise).
+ */
+const JARPEEK_SERVER =
+  process.platform === "win32"
+    ? { command: "cmd", args: ["/c", "jarpeek", "mcp"] }
+    : { command: "jarpeek", args: ["mcp"] };
+
+/** The command field a `wireMcp` override produces on this platform. */
+const overrideCommand = (command: string): string =>
+  process.platform === "win32" ? "cmd" : command;
+
+/** The TOML field lines the codex editor writes for the entry above. */
+const TOML_COMMAND = `command = "${JARPEEK_SERVER.command}"`;
+const TOML_ARGS = `args = [${JARPEEK_SERVER.args.map((a) => `"${a}"`).join(", ")}]`;
 
 function byId(id: HarnessDescriptor["id"]): HarnessDescriptor {
   const found = HARNESSES.find((d) => d.id === id);
@@ -122,7 +137,7 @@ describe("wireMcp: mcp-json (claude)", () => {
     const root = tmpProject();
     await wireMcp(byId("claude"), root, { command: "npx" });
     expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8")).mcpServers.jarpeek.command).toBe(
-      "npx",
+      overrideCommand("npx"),
     );
   });
 
@@ -185,8 +200,8 @@ describe("wireMcp: codex-toml", () => {
     expect(result.changed).toBe(true);
     const text = readFileSync(result.target, "utf8");
     expect(text).toContain("[mcp_servers.jarpeek]");
-    expect(text).toContain('command = "jarpeek"');
-    expect(text).toContain('args = ["mcp"]');
+    expect(text).toContain(TOML_COMMAND);
+    expect(text).toContain(TOML_ARGS);
     // every original line survives verbatim
     for (const line of PRE.split("\n")) expect(text).toContain(line === "" ? "\n" : line);
 
@@ -211,7 +226,7 @@ describe("wireMcp: codex-toml", () => {
     await wireMcp(byId("codex"), home);
     const text = readFileSync(join(home, ".codex", "config.toml"), "utf8");
     expect(text).not.toContain('command = "old"');
-    expect(text).toContain('command = "jarpeek"');
+    expect(text).toContain(TOML_COMMAND);
     // the later foreign section is untouched
     expect(text).toContain('[profile.x]');
     expect(text).toContain('editor = "vim"');
@@ -370,9 +385,9 @@ describe("wireMcp: CRLF configs (codex-toml)", () => {
     // exactly one jarpeek table header: the CRLF header must match, so the
     // append path (which would create a duplicate, invalid table) stays closed
     expect(text.split("\n").filter((l) => l.trim() === "[mcp_servers.jarpeek]")).toHaveLength(1);
-    expect(text).toContain('command = "jarpeek"');
+    expect(text).toContain(TOML_COMMAND);
     expect(text).not.toContain('command = "old"');
-    expect(text).toContain('args = ["mcp"]');
+    expect(text).toContain(TOML_ARGS);
     expect(text).toContain('[profile.x]');
     expect(text).toContain('editor = "vim"');
     // the dominant line ending survives
@@ -390,8 +405,8 @@ describe("wireMcp: CRLF configs (codex-toml)", () => {
     for (const line of text.split("\n").slice(0, -1)) {
       expect(line.endsWith("\r")).toBe(true);
     }
-    expect(text).toContain('command = "jarpeek"');
-    expect(text).toContain('args = ["mcp"]');
+    expect(text).toContain(TOML_COMMAND);
+    expect(text).toContain(TOML_ARGS);
   });
 });
 

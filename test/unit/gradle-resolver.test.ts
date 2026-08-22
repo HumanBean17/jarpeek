@@ -145,10 +145,15 @@ describe("resolveGradle: parsing the sentinel-wrapped dump", () => {
     expect(app.warnings).toBeUndefined();
 
     // invocation shape: bare gradle (no wrapper in scratch, probe passed),
-    // pinned args, cwd, default timeout
+    // pinned args, cwd, default timeout. win32 routes bare gradle through
+    // `cmd /c`, so both platforms' shapes normalize to the effective command.
     expect(calls).toHaveLength(1);
-    expect(calls[0].cmd).toBe("gradle");
-    expect(calls[0].args).toEqual(INIT_ARGS(projectRoot));
+    const effective =
+      calls[0].cmd === "cmd" && calls[0].args[0] === "/c"
+        ? { cmd: calls[0].args[1], args: calls[0].args.slice(2) }
+        : { cmd: calls[0].cmd, args: calls[0].args };
+    expect(effective.cmd).toBe("gradle");
+    expect(effective.args).toEqual(INIT_ARGS(projectRoot));
     expect(calls[0].opts.cwd).toBe(projectRoot);
     expect(calls[0].opts.timeoutMs).toBe(180_000);
   });

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   SpawnError,
@@ -80,25 +80,48 @@ function relFromFixture(path: string): string {
 /**
  * Materialize a fixture cp.txt onto a synthetic m2 repository root: every
  * `…/repository/<rel>` jar becomes a real file under `m2/<rel>`, with a
- * `-sources.jar` sibling for entries listed in `sources`. The fixture
- * separators survive untouched, so the resolver sees the original
- * `:`/`;`/backslash shapes with only the m2 base swapped.
+ * `-sources.jar` sibling for entries listed in `sources`. Entries are
+ * re-joined with the host's classpath delimiter — real mvn writes
+ * `;`-joined output on win32, `:`-joined on unix — so the resolver sees
+ * the shape this platform's mvn would have produced, with only the m2
+ * base swapped.
  */
 function materialize(m2: string, cp: string, sources: string[]): { content: string; jars: string[] } {
   const jars: string[] = [];
   const sourcesRel = new Set(sources.map(relFromFixture));
-  let content = cp;
-  for (const raw of cp.split(/\r?\n/).flatMap((line) => line.split(/[;:](?=[A-Za-z]:|\/)/))) {
-    if (!raw.endsWith(".jar") || !raw.includes("repository")) continue;
-    const rel = relFromFixture(raw);
-    const jar = join(m2, ...rel.split(/[\\/]/));
-    mkdirSync(dirname(jar), { recursive: true });
-    writeFileSync(jar, "jar");
-    jars.push(jar);
-    if (sourcesRel.has(rel)) writeFileSync(`${jar.slice(0, -".jar".length)}-sources.jar`, "sources");
-    content = content.split(raw).join(jar);
-  }
+  const content = cp
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .split(/[;:](?=[A-Za-z]:|\/)/)
+        .map((raw) => {
+          if (!raw.endsWith(".jar") || !raw.includes("repository")) return raw;
+          const rel = relFromFixture(raw);
+          const jar = join(m2, ...rel.split(/[\\/]/));
+          mkdirSync(dirname(jar), { recursive: true });
+          writeFileSync(jar, "jar");
+          jars.push(jar);
+          if (sourcesRel.has(rel)) {
+            writeFileSync(`${jar.slice(0, -".jar".length)}-sources.jar`, "sources");
+          }
+          return jar;
+        })
+        .join(delimiter),
+    )
+    .join("\n");
   return { content, jars };
+}
+
+/**
+ * The effective mvn invocation behind a recorded call: win32 routes bare
+ * mvn through `cmd /c`, so both platforms' shapes normalize to one. (The
+ * stubbed-win32 tests assert the raw wrapper shape directly instead.)
+ */
+function effectiveMvn(call: ExecCall): { cmd: string; args: string[] } {
+  if (call.cmd === "cmd" && call.args[0] === "/c") {
+    return { cmd: call.args[1], args: call.args.slice(2) };
+  }
+  return { cmd: call.cmd, args: call.args };
 }
 
 /** Path of a jar directly under the synthetic m2 root (no fixture indirection). */
@@ -192,8 +215,10 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     // the rest, RELATIVE outputFile so each module writes under its own
     // target/ — then the sources run with the same command
     expect(calls).toHaveLength(2);
-    expect(calls[0].cmd).toBe("mvn");
-    expect(calls[0].args).toEqual([
+    const first = effectiveMvn(calls[0]);
+    const second = effectiveMvn(calls[1]);
+    expect(first.cmd).toBe("mvn");
+    expect(first.args).toEqual([
       "-B",
       "-q",
       "-fae",
@@ -202,8 +227,8 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     ]);
     expect(calls[0].opts.cwd).toBe(projectRoot);
     expect(calls[0].opts.timeoutMs).toBe(300_000);
-    expect(calls[1].cmd).toBe("mvn");
-    expect(calls[1].args).toEqual(["-B", "-q", "dependency:sources", "-DincludeScope=test"]);
+    expect(second.cmd).toBe("mvn");
+    expect(second.args).toEqual(["-B", "-q", "dependency:sources", "-DincludeScope=test"]);
     expect(calls[1].opts.cwd).toBe(projectRoot);
     expect(calls[1].opts.timeoutMs).toBe(300_000);
     // the per-module output file never outlives the resolution
@@ -228,9 +253,10 @@ describe("resolveMaven: parsing the build-classpath output", () => {
     expect(b.binaryJar).toBe("C:\\Users\\dev\\.m2\\repository\\org\\a\\b\\1.0\\b-1.0.jar");
     expect(b.sourcesJar).toBeUndefined(); // no sibling in the fixture m2
     expect(b.provenance).toBeUndefined();
-    expect(calls[0].args).toContain("-fae");
-    expect(calls[0].args).not.toContain("--non-recursive");
-    expect(calls[0].args[3]).toBe("dependency:build-classpath");
+    const bare = effectiveMvn(calls[0]);
+    expect(bare.args).toContain("-fae");
+    expect(bare.args).not.toContain("--non-recursive");
+    expect(bare.args[3]).toBe("dependency:build-classpath");
   });
 
   it("resolves a single windows entry with no ; separator (drive-letter pattern)", async () => {

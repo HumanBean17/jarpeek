@@ -36,7 +36,15 @@ afterAll(() => {
   for (const dir of roots) rmSync(dir, { recursive: true, force: true });
 });
 
-/** A context over a manifest written BEFORE construction (fresh, non-stale). */
+/**
+ * A context over a manifest written BEFORE construction (fresh, non-stale).
+ * The resolvers are stubbed to fail-and-degrade: the vanished-path suites
+ * make their manifests stale on purpose, and `where` then bootstraps — with
+ * the real cascade that means a REAL gradle/mvn run whose duration depends
+ * on the host toolchain (a cold Gradle daemon on a windows runner blows the
+ * vitest timeout). The stub keeps the bootstrap deterministic: degrade to
+ * cache-scan instantly, serve the stale manifest — the behavior under test.
+ */
 async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContext> {
   const root = freshRoot();
   writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
@@ -46,7 +54,15 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
     dependencySetHash: await computeDependencySetHash(root),
     artifacts,
   });
-  return openContext(root, { onNotice: () => {} });
+  return openContext(root, {
+    onNotice: () => {},
+    resolvers: {
+      gradle: async () => ({ ok: false, artifacts: [], reason: "no-wrapper-no-gradle" }),
+      maven: async () => ({ ok: false, artifacts: [], reason: "no-classpath" }),
+      cacheScan: async () => ({ artifacts: [], warnings: [] }),
+      includeJdk: false,
+    },
+  });
 }
 
 describe("where lists recorded paths", () => {

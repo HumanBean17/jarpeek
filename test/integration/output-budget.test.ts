@@ -45,26 +45,12 @@ function freshProject(): string {
   return projectRoot;
 }
 
-/** A `gradlew` that succeeds and prints the sentinel JSON dump (cli.test.ts's). */
-function writeSucceedingGradlew(projectRoot: string): void {
-  const script = [
-    "#!/bin/sh",
-    `echo '###JARPEEK-BEGIN###'`,
-    `echo '{"configurations":[{"name":"compileClasspath","dependencies":[{"coordinates":"com.example:demo-lib:1.0.0","kind":"external","path":"${DEMO_JAR}"}]}],"sources":{"com.example:demo-lib:1.0.0":"${DEMO_SOURCES_JAR}"}}'`,
-    `echo '###JARPEEK-END###'`,
-    "exit 0",
-    "",
-  ].join("\n");
-  writeFileSync(join(projectRoot, "gradlew"), script, { mode: 0o755 });
-  chmodSync(join(projectRoot, "gradlew"), 0o755);
-}
+// the fake gradlew wrapper pair (sh + bat) lives in test/helpers
+import { writeFakeGradlew, writeFailingGradlew } from "../helpers/fake-gradlew.js";
 
-/** A `gradlew` that fails with a fixed stderr tail, so the warning text is pinned. */
-function writeFailingGradlew(projectRoot: string, message: string): void {
-  const script = ["#!/bin/sh", `echo '${message}' >&2`, "exit 1", ""].join("\n");
-  writeFileSync(join(projectRoot, "gradlew"), script, { mode: 0o755 });
-  chmodSync(join(projectRoot, "gradlew"), 0o755);
-}
+/** The suite's succeeding wrapper: the fixture jars' sentinel dump. */
+const writeSucceedingGradlew = (projectRoot: string): void =>
+  writeFakeGradlew(projectRoot, DEMO_JAR, DEMO_SOURCES_JAR);
 
 interface CliRun {
   stdout: string;
@@ -72,9 +58,16 @@ interface CliRun {
   code: number;
 }
 
-/** Spawn the CLI as `npx tsx` against one project root (the cli.test.ts mechanism). */
+/** Spawn the CLI as `node --import tsx` against one project root (the cli.test.ts mechanism). */
 function cli(projectRoot: string, args: string[], env: Record<string, string> = {}): CliRun {
-  const run = spawnSync("npx", ["tsx", "src/cli/index.ts", "--project", projectRoot, ...args], {
+  const run = spawnSync(process.execPath, [
+    "--import",
+    "tsx",
+    "src/cli/index.ts",
+    "--project",
+    projectRoot,
+    ...args,
+  ], {
     cwd: PKG_ROOT,
     encoding: "utf8",
     env: { ...process.env, ...env },

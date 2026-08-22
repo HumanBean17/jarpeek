@@ -58,9 +58,17 @@ function readPkg(): PkgJson {
   return JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")) as PkgJson;
 }
 
-/** One npm command in the package root; stdout as JSON lines or text. */
+/**
+ * One npm command in the package root; stdout as JSON lines or text. On
+ * win32 `npm` is npm.cmd — unspawnable without a shell — so the shell
+ * resolves it there (args are fixed simple flags; no quoting hazards).
+ */
 function npm(args: string): string {
-  return execFileSync("npm", args.split(" "), { cwd: PKG_ROOT, encoding: "utf8" });
+  return execFileSync("npm", args.split(" "), {
+    cwd: PKG_ROOT,
+    encoding: "utf8",
+    shell: process.platform === "win32",
+  });
 }
 
 describe("packaging", () => {
