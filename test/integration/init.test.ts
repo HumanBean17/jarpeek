@@ -36,6 +36,12 @@ function fakeResolvers(commandOnPathResult = true): InitResolvers {
   };
 }
 
+/** The server entry wiring registers on this platform (win32 wraps cmd /c). */
+const SERVER_ENTRY =
+  process.platform === "win32"
+    ? { command: "cmd", args: ["/c", "jarpeek", "mcp"] }
+    : { command: "jarpeek", args: ["mcp"] };
+
 /** PromptIo replaying fixed answers. */
 function fakePrompts(answers: { harnesses?: string[]; mode?: "mcp" | "cli" }): PromptIo {
   return {
@@ -73,9 +79,9 @@ describe("interactive mcp wiring", () => {
     expect(result.wired.every((w) => w.mode === "mcp")).toBe(true);
 
     const mcp = JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"));
-    expect(mcp.mcpServers.jarpeek).toEqual({ command: "jarpeek", args: ["mcp"] });
+    expect(mcp.mcpServers.jarpeek).toEqual(SERVER_ENTRY);
     const gemini = JSON.parse(readFileSync(join(root, ".gemini", "settings.json"), "utf8"));
-    expect(gemini.mcpServers.jarpeek).toEqual({ command: "jarpeek", args: ["mcp"] });
+    expect(gemini.mcpServers.jarpeek).toEqual(SERVER_ENTRY);
 
     expect(JSON.parse(readFileSync(join(root, ".jarpeek", "config.json"), "utf8"))).toEqual({
       primeMode: "mcp",
@@ -158,7 +164,7 @@ describe("non-interactive", () => {
       { harness: "claude", mode: "mcp", targets: [join(root, ".mcp.json")] },
     ]);
     expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8")).mcpServers.jarpeek.command).toBe(
-      "jarpeek",
+      SERVER_ENTRY.command,
     );
     expect(existsSync(join(root, ".jarpeek", "manifest.json"))).toBe(false);
     expect(result.notes).toContain("first query auto-resolves (or run: jarpeek resolve)");

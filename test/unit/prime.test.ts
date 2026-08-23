@@ -15,7 +15,10 @@ import { prime } from "../../src/prime/command.js";
 
 const execFileAsync = promisify(execFile);
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const TSX = join(PKG_ROOT, "node_modules", ".bin", "tsx");
+// tsx's cli by absolute path (the jvm.test.ts pattern): the .bin/tsx shim is
+// extensionless on unix but a .cmd on win32, and `--import tsx` resolves from
+// the child's cwd — the tmp projects under test have no node_modules
+const TSX = join(PKG_ROOT, "node_modules", "tsx", "dist", "cli.mjs");
 const CLI = join(PKG_ROOT, "src", "cli", "index.ts");
 
 const roots: string[] = [];
@@ -40,7 +43,7 @@ const byteLength = (text: string): number => Buffer.byteLength(text, "utf8");
 
 /** Run the wired CLI inside `cwd` (the project root under test). */
 async function runCli(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync(TSX, [CLI, ...args], { cwd });
+  const { stdout } = await execFileAsync(process.execPath, [TSX, CLI, ...args], { cwd });
   return stdout;
 }
 

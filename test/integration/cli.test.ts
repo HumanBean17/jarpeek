@@ -83,23 +83,8 @@ const c = {} as Suite;
 const resolveSuite = {} as Suite;
 const suites: Suite[] = [];
 
-/**
- * A `gradlew` that succeeds and prints the sentinel JSON dump — the resolve
- * command's subprocess then runs the real gradle resolver against it.
- */
-function writeFakeGradlew(projectRoot: string, jar: string, sourcesJar: string): void {
-  const script = [
-    "#!/bin/sh",
-    // the coordinates argument split keeps the JSON a single awk-free line
-    `echo '###JARPEEK-BEGIN###'`,
-    `echo '{"configurations":[{"name":"compileClasspath","dependencies":[{"coordinates":"com.example:demo-lib:1.0.0","kind":"external","path":"${jar}"}]}],"sources":{"com.example:demo-lib:1.0.0":"${sourcesJar}"}}'`,
-    `echo '###JARPEEK-END###'`,
-    "exit 0",
-    "",
-  ].join("\n");
-  writeFileSync(join(projectRoot, "gradlew"), script, { mode: 0o755 });
-  chmodSync(join(projectRoot, "gradlew"), 0o755);
-}
+// the fake gradlew wrapper pair (sh + bat) lives in test/helpers
+import { writeFakeGradlew } from "../helpers/fake-gradlew.js";
 
 beforeAll(async () => {
   Object.assign(c, openSuite(() => demoArtifacts()));
@@ -121,11 +106,15 @@ interface CliRun {
   code: number;
 }
 
-/** Spawn the CLI as `npx tsx` with `--project` pointing at a bootstrapped root. */
+/**
+ * Spawn the CLI as `node --import tsx` with `--project` pointing at a
+ * bootstrapped root. node is spawned by absolute path: a bare `npx`/`tsx`
+ * is a .cmd shim on win32, unspawnable without a shell.
+ */
 function cli(suite: Suite, args: string[], env: Record<string, string> = {}): CliRun {
   const run = spawnSync(
-    "npx",
-    ["tsx", "src/cli/index.ts", "--project", suite.projectRoot, ...args],
+    process.execPath,
+    ["--import", "tsx", "src/cli/index.ts", "--project", suite.projectRoot, ...args],
     {
       cwd: PKG_ROOT,
       encoding: "utf8",
@@ -541,8 +530,8 @@ describe("init", () => {
     const root = mkdtempSync(join(tmpdir(), "jarpeek-cli-init-"));
     try {
       const run = spawnSync(
-        "npx",
-        ["tsx", "src/cli/index.ts", "--project", root, "init", "--yes"],
+        process.execPath,
+        ["--import", "tsx", "src/cli/index.ts", "--project", root, "init", "--yes"],
         {
           cwd: PKG_ROOT,
           encoding: "utf8",
@@ -554,10 +543,14 @@ describe("init", () => {
       expect(run.status).toBe(0);
       expect(run.stdout).toContain("non-interactive: defaults applied");
       expect(run.stdout).toContain("wired claude (mcp)");
-      expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8")).mcpServers.jarpeek).toEqual({
-        command: "jarpeek",
-        args: ["mcp"],
-      });
+      // the entry wiring registers: win32 wraps the command through cmd /c
+      const entry =
+        process.platform === "win32"
+          ? { command: "cmd", args: ["/c", "jarpeek", "mcp"] }
+          : { command: "jarpeek", args: ["mcp"] };
+      expect(JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8")).mcpServers.jarpeek).toEqual(
+        entry,
+      );
       expect(readFileSync(join(root, ".gitignore"), "utf8")).toContain(".jarpeek/");
       expect(existsSync(join(root, ".jarpeek", "manifest.json"))).toBe(false);
     } finally {
@@ -581,8 +574,8 @@ describe("prime over the CLI transport", () => {
       mkdirSync(join(root, ".jarpeek"));
       writeFileSync(join(root, ".jarpeek", "PRIME.md"), "CUSTOM");
       const run = spawnSync(
-        "npx",
-        ["tsx", "src/cli/index.ts", "--project", root, "prime"],
+        process.execPath,
+        ["--import", "tsx", "src/cli/index.ts", "--project", root, "prime"],
         { cwd: PKG_ROOT, encoding: "utf8", timeout: 60_000 },
       );
       expect(run.status).toBe(0);

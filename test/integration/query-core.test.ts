@@ -131,7 +131,20 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
     dependencySetHash: await computeDependencySetHash(projectRoot),
     artifacts,
   });
-  return openContext(projectRoot, { onNotice: () => {} });
+  // resolvers stubbed to fail-and-degrade: the stale-index suites bootstrap
+  // after making their manifests stale, and the REAL cascade's duration is a
+  // fact about the host (windows CI images ship Gradle — a cold daemon runs
+  // past every test timeout). Degrade-to-cache-scan instantly, serve stale —
+  // the behavior under test.
+  return openContext(projectRoot, {
+    onNotice: () => {},
+    resolvers: {
+      gradle: async () => ({ ok: false, artifacts: [], reason: "no-wrapper-no-gradle" }),
+      maven: async () => ({ ok: false, artifacts: [], reason: "no-classpath" }),
+      cacheScan: async () => ({ artifacts: [], warnings: [] }),
+      includeJdk: false,
+    },
+  });
 }
 
 async function demoSource(): Promise<string> {

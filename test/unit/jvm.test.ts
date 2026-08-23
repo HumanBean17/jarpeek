@@ -65,7 +65,11 @@ describe("probeJvmOnce", () => {
     await expect(probeJvmOnce()).resolves.toMatchObject({ available: expect.any(Boolean) });
   });
 
-  it("probes $JAVA_HOME/bin/java like CFR does when PATH has no java", () => {
+  // win32 skip: the fake JDK's bin/java is a sh script — there is no
+  // scriptable stand-in for a win32 java.exe — so this runs on unix only
+  it.skipIf(process.platform === "win32")(
+    "probes $JAVA_HOME/bin/java like CFR does when PATH has no java",
+    () => {
     // the memo is per-process, so the JAVA_HOME case runs in a child: a fake
     // JDK home whose bin/java prints a version line to stderr and exits 0,
     // over a PATH holding only node itself (npx would be unreachable with a

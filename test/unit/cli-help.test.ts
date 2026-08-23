@@ -32,9 +32,12 @@ const pkgRoot = join(fileURLToPath(import.meta.url), "..", "..", "..");
 
 async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
   try {
-    const { stdout, stderr } = await execFileAsync("npx", ["tsx", "src/cli/index.ts", ...args], {
-      cwd: pkgRoot,
-    });
+    // node by absolute path: a bare `npx` is a .cmd shim on win32, unspawnable
+    const { stdout, stderr } = await execFileAsync(
+      process.execPath,
+      ["--import", "tsx", "src/cli/index.ts", ...args],
+      { cwd: pkgRoot },
+    );
     return { stdout, stderr, code: 0 };
   } catch (error) {
     const err = error as { stdout?: string; stderr?: string; code?: number };

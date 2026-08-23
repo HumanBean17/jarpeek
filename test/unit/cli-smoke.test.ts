@@ -17,9 +17,10 @@ const pkgJson = JSON.parse(
 
 async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
   try {
+    // node by absolute path: a bare `npx` is a .cmd shim on win32, unspawnable
     const { stdout, stderr } = await execFileAsync(
-      "npx",
-      ["tsx", "src/cli/index.ts", ...args],
+      process.execPath,
+      ["--import", "tsx", "src/cli/index.ts", ...args],
       { cwd: pkgRoot },
     );
     return { stdout, stderr, code: 0 };
