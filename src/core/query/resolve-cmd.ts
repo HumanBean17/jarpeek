@@ -33,7 +33,7 @@ export async function resolveNow(ctx: QueryContext): Promise<ResolveNowResult> {
   await writeManifest(ctx.projectRoot, {
     version: 2,
     resolvedAt: new Date().toISOString(),
-    dependencySetHash: await computeDependencySetHash(ctx.projectRoot),
+    dependencySetHash: await computeDependencySetHash(ctx.projectRoot, "auto"), // real strategy threaded in the context-wiring change
     artifacts: resolution.artifacts,
   });
   return {

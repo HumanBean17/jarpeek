@@ -40,7 +40,8 @@ function readConfigStrategy(projectRoot: string): BuildToolStrategy | null {
   }
   const value =
     typeof doc === "object" && doc !== null ? (doc as { buildTool?: unknown }).buildTool : undefined;
-  return isStrategy(typeof value === "string" ? value : undefined) ? value : null;
+  const raw = typeof value === "string" ? value : undefined;
+  return isStrategy(raw) ? raw : null;
 }
 
 /**

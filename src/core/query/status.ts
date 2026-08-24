@@ -36,7 +36,7 @@ export interface StatusOptions {
 /** Report manifest and JVM state. Never throws on a missing manifest. */
 export async function status(ctx: QueryContext, opts: StatusOptions = {}): Promise<StatusResult> {
   const manifest = await ctx.manifest();
-  const stale = manifest !== null && (await isStale(ctx.projectRoot, manifest));
+  const stale = manifest !== null && (await isStale(ctx.projectRoot, manifest, "auto")); // real strategy threaded in the context-wiring change
 
   return {
     projectRoot: ctx.projectRoot,

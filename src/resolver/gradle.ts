@@ -207,7 +207,7 @@ export function gradleOnPathDefault(): boolean {
 interface AttemptFailure {
   via: "system" | "wrapper";
   /** Exactly what this attempt would have returned had it run alone. */
-  solo: string;
+  solo: Exclude<GradleResolution["reason"], undefined>;
   /** The same failure without the `gradle-failed:` prefix, for the combined reason. */
   detail: string;
 }
@@ -287,7 +287,7 @@ export async function resolveGradle(
       throw error;
     }
 
-    const fail = (solo: string, detail: string): void => {
+    const fail = (solo: AttemptFailure["solo"], detail: string): void => {
       failures.push({ via: candidate.via, solo, detail });
     };
 

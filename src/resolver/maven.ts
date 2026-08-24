@@ -318,13 +318,13 @@ function cpFile(dir: string): string {
 interface AttemptFailure {
   via: "system" | "wrapper";
   /** Exactly what this attempt would have returned had it run alone. */
-  solo: string;
+  solo: Exclude<MavenResolution["reason"], undefined>;
   /** The same failure without the `mvn-failed:` prefix, for the combined reason. */
   detail: string;
 }
 
-/** `detail` for a zero-exit parse failure: its reason minus the prefix. */
-function parseFailureDetail(reason: "no-classpath" | `mvn-failed:${string}`): string {
+/** `detail` for a parse failure: its reason minus any `mvn-failed:` prefix. */
+function parseFailureDetail(reason: Exclude<MavenResolution["reason"], undefined>): string {
   return reason.startsWith("mvn-failed:") ? reason.slice("mvn-failed:".length) : reason;
 }
 
@@ -430,11 +430,8 @@ export async function resolveMaven(
           const detail = failureDetail(result);
           failures.push({ via: candidate.via, solo: `mvn-failed:${detail}`, detail });
         } else {
-          failures.push({
-            via: candidate.via,
-            solo: parsed.reason,
-            detail: parseFailureDetail(parsed.reason),
-          });
+          const solo = parsed.reason ?? "no-classpath";
+          failures.push({ via: candidate.via, solo, detail: parseFailureDetail(solo) });
         }
         continue;
       }

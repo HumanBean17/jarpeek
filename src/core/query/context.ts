@@ -147,7 +147,7 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       await writeManifest(projectRoot, {
         version: 2,
         resolvedAt: new Date().toISOString(),
-        dependencySetHash: await computeDependencySetHash(projectRoot),
+        dependencySetHash: await computeDependencySetHash(projectRoot, "auto"), // real strategy threaded in the context-wiring change
         artifacts: resolution.artifacts,
       });
       failedAt = undefined;
@@ -181,7 +181,7 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
     decompiler,
     async ensureReady(): Promise<EnsureReadyResult> {
       const manifest = await readManifest(projectRoot);
-      if (manifest !== null && !(await isStale(projectRoot, manifest))) {
+      if (manifest !== null && !(await isStale(projectRoot, manifest, "auto"))) { // real strategy threaded in the context-wiring change
         return { bootstrapped: false, stale: false };
       }
       if (failedAt !== undefined && now() - failedAt < FAILED_BOOTSTRAP_BACKOFF_MS) {
