@@ -180,9 +180,10 @@ function systemCandidate(): Candidate {
 }
 
 /**
- * PATH probe for a system Gradle, consulted only when no wrapper exists:
- * on win32 any PATHEXT match (gradle.bat/.cmd/.exe) counts, elsewhere the
- * `gradle` binary must exist and be executable somewhere on PATH.
+ * PATH probe for a system Gradle, consulted whenever the system gradle is a
+ * candidate (auto and system strategies): on win32 any PATHEXT match
+ * (gradle.bat/.cmd/.exe) counts, elsewhere the `gradle` binary must exist
+ * and be executable somewhere on PATH.
  */
 export function gradleOnPathDefault(): boolean {
   const dirs = (process.env.PATH ?? "").split(delimiter).filter((dir) => dir.length > 0);

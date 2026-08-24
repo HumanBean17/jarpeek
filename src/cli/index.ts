@@ -343,7 +343,7 @@ program
   .addOption(
     new Option(
       "--build-tool <strategy>",
-      "which mvn/gradle runs resolves: system from PATH, the root wrapper, or system-first with wrapper fallback",
+      "which mvn/gradle runs resolves: system from PATH, the root wrapper, or system-first with wrapper fallback (default)",
     ).choices([...BUILD_TOOL_STRATEGIES]),
   )
   .addHelpText("after", TOP_LEVEL_HELP);

@@ -3,7 +3,8 @@
  * hangs off of.
  *
  * Constructing a context resolves nothing — the first query pays for the
- * bootstrap. `ensureReady` is the only bootstrap trigger: a manifest that
+ * bootstrap. Construction itself touches the filesystem once: strategy
+ * convergence reads `.jarpeek/config.json` (absent/corrupt means auto). `ensureReady` is the only bootstrap trigger: a manifest that
  * exists and is not stale short-circuits; anything else runs
  * resolveDependencies and rewrites the manifest (v2: an artifact list, no
  * shards) under an in-flight memo so concurrent queries bootstrap exactly

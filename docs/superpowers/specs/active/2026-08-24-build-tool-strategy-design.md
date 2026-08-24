@@ -68,9 +68,11 @@ warnings machinery under the same three-line budget.
 resolvers' options. `openContext` owns the single convergence call — the
 raw `--build-tool` flag value the CLI passes through `OpenContextOptions`,
 else env, else config, else `auto` — and threads the effective strategy
-into `resolveDependencies` and the manifest fingerprint. The MCP server
-passes no flag (flags cannot reach a spawned server); env and config
-converge inside its context. Every subcommand, `jarpeek resolve`
+into `resolveDependencies` and the manifest fingerprint. The `mcp` subcommand
+forwards the flag into its server's context (so a manual
+`jarpeek --build-tool X mcp` and a harness server configured with the
+arg both honor it); env and config cover harness-spawned servers
+configured without args. Every subcommand, `jarpeek resolve`
 included, inherits it.
 
 ### Manifest invalidation

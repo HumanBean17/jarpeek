@@ -37,9 +37,13 @@ the root wrapper as fallback — and a failed first attempt (any cause)
 advances to the wrapper inside the same resolution, so a version-skewed
 system tool or a CI-only wrapper never blocks the resolve. The
 `--build-tool` flag / `JARPEEK_BUILD_TOOL` env / `.jarpeek/config.json`
-`buildTool` knob (precedence in that order) forces a direction; the
-effective strategy is part of the manifest fingerprint, so flipping it
-re-resolves instead of serving the other tool's manifest. The explicit
+`buildTool` knob (precedence in that order — env beats config
+deliberately, unlike init-written `primeMode`, because `buildTool` is
+hand-authored state a shell override should win against) forces a
+direction; the effective strategy is part of the manifest fingerprint, so
+flipping it re-resolves instead of serving the other tool's manifest —
+and manifests written before the strategy line existed hash stale once,
+so every upgrading user re-resolves on their first query. The explicit
 `jarpeek resolve` command keeps the full cascade and is the only writer
 of a cache-scan-flagged manifest; **queries never adopt a cache-scan
 manifest** — with a manifest on disk they are served from it, without

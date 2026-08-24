@@ -272,7 +272,7 @@ Run: `git commit -m "feat(index): strategy joins the dependency-set fingerprint"
   - `QueryContext` gains `readonly buildTool: BuildToolStrategy` — the effective strategy this context resolves and hashes under.
   - `QueryContext["resolvers"]` is now always defined: `openContext` computes `strategy = opts.resolvers?.strategy ?? effectiveBuildToolStrategy(projectRoot, opts.buildToolFlag)` and stores `resolvers: { ...opts.resolvers, strategy }`. An explicitly injected `opts.resolvers.strategy` (tests) wins over convergence.
   - `ensureReady`'s staleness check (`isStale`) and the bootstrap's `writeManifest` hash both use the context's strategy; `resolveNow` (resolve-cmd.ts) hashes with `ctx.buildTool` and keeps `resolveDependencies(ctx.projectRoot, ctx.resolvers)` as-is (strategy rides inside `ctx.resolvers`).
-  - The MCP server (`src/mcp/server.ts`) requires **no change**: it opens a context without `buildToolFlag`, so convergence reads env + config.
+  - The MCP server's context converges env + config on its own. (Post-review fix: the `mcp` subcommand additionally forwards the CLI flag through `startMcpServer` so a manual `jarpeek --build-tool X mcp` honors it — added during code review, spec reconciled.)
 
 - [x] **Step 1: Write the failing tests**
 

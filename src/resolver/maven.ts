@@ -55,7 +55,7 @@ export interface ResolveMavenOptions {
   exec?: typeof runWithTimeout;
   /** m2 repository root anchoring the layout reverse-map; default `~/.m2/repository`. */
   m2Dir?: string;
-  /** Injectable PATH probe consulted before the bare-mvn fallback. */
+  /** Injectable PATH probe consulted whenever the system mvn is a candidate. */
   mvnOnPath?: () => boolean;
   /** Which mvn runs resolves; undefined means `auto` (system first, wrapper fallback). */
   strategy?: BuildToolStrategy;
@@ -87,9 +87,10 @@ function systemCandidate(): Candidate {
 }
 
 /**
- * PATH probe for a system Maven, consulted only when no wrapper exists: on
- * win32 any PATHEXT match (mvn.cmd/.bat/.exe) counts, elsewhere the `mvn`
- * binary must exist and be executable somewhere on PATH.
+ * PATH probe for a system Maven, consulted whenever the system mvn is a
+ * candidate (auto and system strategies): on win32 any PATHEXT match
+ * (mvn.cmd/.bat/.exe) counts, elsewhere the `mvn` binary must exist and be
+ * executable somewhere on PATH.
  */
 export function mvnOnPathDefault(): boolean {
   const dirs = (process.env.PATH ?? "").split(delimiter).filter((dir) => dir.length > 0);
