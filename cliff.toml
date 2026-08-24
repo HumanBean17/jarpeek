@@ -27,6 +27,8 @@ commit_parsers = [
   { message = "^test", group = "Testing" },
   { message = "^ci", group = "Continuous Integration" },
   { message = "^chore\\(release\\)", skip = true },
+  { message = "^spec", skip = true }, # working drafts, not product changes
+  { message = "^\\d+\\.\\d+\\.\\d+$", skip = true }, # `npm version` bump commits
   { message = "^chore", group = "Miscellaneous" },
   { message = ".*", group = "Other" },
 ]
