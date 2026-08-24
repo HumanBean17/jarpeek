@@ -65,12 +65,13 @@ warnings machinery under the same three-line budget.
 ### Plumbing
 
 `ResolveDependenciesOptions` gains a `strategy` field threaded into both
-resolvers' options. The CLI resolves the strategy once per invocation
-(`src/cli/index.ts`, sticky global flag) and the MCP server once at
-startup (`src/mcp/server.ts`, env + config only — flags cannot reach a
-spawned server); both pass it through `OpenContextOptions.resolvers` into
-`openContext` → `resolveDependencies`. Every subcommand, `jarpeek
-resolve` included, inherits it.
+resolvers' options. `openContext` owns the single convergence call — the
+raw `--build-tool` flag value the CLI passes through `OpenContextOptions`,
+else env, else config, else `auto` — and threads the effective strategy
+into `resolveDependencies` and the manifest fingerprint. The MCP server
+passes no flag (flags cannot reach a spawned server); env and config
+converge inside its context. Every subcommand, `jarpeek resolve`
+included, inherits it.
 
 ### Manifest invalidation
 
