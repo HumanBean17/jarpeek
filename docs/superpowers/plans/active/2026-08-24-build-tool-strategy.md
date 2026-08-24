@@ -4,7 +4,7 @@
 
 **Goal:** Flip build-tool command selection to system-first with wrapper fallback (on absence and failure), controlled by a tri-state `auto | system | wrapper` knob exposed as `--build-tool`, `JARPEEK_BUILD_TOOL`, and `.jarpeek/config.json` `buildTool`.
 
-**Architecture:** A new `src/resolver/strategy.ts` owns the tri-state type and the flag > env > config convergence. Each resolver (`maven.ts`, `gradle.ts`) grows ordered-candidate selection and an internal retry loop — the facade and degradation contract are untouched. `openContext` converges the strategy once, threads it into `resolveDependencies` and the manifest fingerprint, so a strategy flip forces re-resolution. The MCP server needs no code change (it opens a context; convergence reads env + config there).
+**Architecture:** A new `src/resolver/strategy.ts` owns the tri-state type and the flag > env > config convergence. Each resolver (`maven.ts`, `gradle.ts`) grows ordered-candidate selection and an internal retry loop — the facade and degradation contract are untouched. `openContext` converges the strategy once, threads it into `resolveDependencies` and the manifest fingerprint, so a strategy flip forces re-resolution. The MCP server's context converges env + config on its own; a post-review fix additionally forwards the CLI flag through the `mcp` subcommand.
 
 **Tech Stack:** TypeScript (ESM, `.js` import specifiers), Node filesystem APIs, commander 12, vitest 4.
 
@@ -381,6 +381,6 @@ Run: `git commit -m "docs: system-first build-tool selection and the --build-too
 
 1. **Code scan:** No method bodies, algorithms, or copy-paste code — signatures, tables, and behavior descriptions only. ✔
 2. **Self-containment:** Every task repeats its consumed contracts (types, option names, reason strings, formats) — no "see Task N" for interfaces. ✔
-3. **Spec coverage:** Spec decisions 1–7 → Task 2/3 (candidates, retry, force semantics), Task 1 (convergence + precedence + invalid fallthrough), Task 5/6 (fingerprint), Task 7 (flag + help), Task 8 (README + design.md). MCP no-change requirement honored in Task 6. ✔
+3. **Spec coverage:** Spec decisions 1–7 → Task 2/3 (candidates, retry, force semantics), Task 1 (convergence + precedence + invalid fallthrough), Task 5/6 (fingerprint), Task 7 (flag + help), Task 8 (README + design.md). MCP convergence verified in Task 6; the flag-forwarding addition came out of code review (spec reconciled). ✔
 4. **Placeholder scan:** No TBD/TODO; the Task 5 `"auto"` literals are an explicit, justified sequencing step, not missing design. ✔
 5. **Type consistency:** `BuildToolStrategy`, `BUILD_TOOL_STRATEGIES`, `effectiveBuildToolStrategy(projectRoot, flagValue?)`, `strategy?: BuildToolStrategy` (all three option interfaces), `reason` gains `"no-wrapper"`, `buildToolFlag?: string`, `ctx.buildTool` — names used identically across tasks. ✔
