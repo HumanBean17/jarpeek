@@ -115,6 +115,12 @@ describe("help constants", () => {
 });
 
 describe("help output", () => {
+  it("top-level --help lists the --build-tool flag", async () => {
+    const { stdout, code } = await runCli(["--help"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("--build-tool");
+  });
+
   it("top-level --help ends with the frugal path and the prime pointer", async () => {
     const { stdout, code } = await runCli(["--help"]);
     expect(code).toBe(0);
