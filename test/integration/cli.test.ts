@@ -28,6 +28,13 @@ import { where } from "../../src/core/query/where.js";
 import type { DependencyArtifact } from "../../src/core/types.js";
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+// PATH pinned to node's own bin for the whole file — subprocesses inherit it
+// and the in-process resolveNow probes it — so the gradle/mvn PATH probes
+// MISS on every host (CI images ship a real Gradle, and system-first
+// selection would run it instead of the fake wrapper this suite installs)
+process.env.PATH = dirname(process.execPath);
+
 const JARS = join(PKG_ROOT, "test", "fixtures", "jars");
 const DEMO_JAR = join(JARS, "demo-lib-1.0.0.jar");
 const DEMO_SOURCES_JAR = join(JARS, "demo-lib-1.0.0-sources.jar");

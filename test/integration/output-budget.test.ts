@@ -28,6 +28,13 @@ import { fileURLToPath } from "node:url";
 import { writeManifest } from "../../src/index/manifest.js";
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+// PATH pinned to node's own bin for the whole file: every scenario here
+// depends on the fake wrappers being the ones that run, and CI images ship a
+// real Gradle that system-first selection would pick up through an inherited
+// PATH (the cache-scan describe's own pin is the same idea, restated)
+process.env.PATH = dirname(process.execPath);
+
 const DEMO_JAR = join(PKG_ROOT, "test", "fixtures", "jars", "demo-lib-1.0.0.jar");
 const DEMO_SOURCES_JAR = join(PKG_ROOT, "test", "fixtures", "jars", "demo-lib-1.0.0-sources.jar");
 
