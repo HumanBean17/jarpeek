@@ -279,7 +279,8 @@ describe("resolveGradle: wrapper selection", () => {
     writeFileSync(join(projectRoot, "gradlew"), "#!/bin/sh\n");
     const { exec, calls } = outputExec(SAMPLE_OUTPUT);
 
-    const resolution = await resolveGradle(projectRoot, { exec });
+    // probe pinned off: a system gradle would win the auto order before the wrapper
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: () => false });
 
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe(join(projectRoot, "gradlew"));
@@ -293,7 +294,8 @@ describe("resolveGradle: wrapper selection", () => {
     writeFileSync(join(projectRoot, "gradlew.bat"), "@echo off\r\n");
     const { exec, calls } = outputExec(SAMPLE_OUTPUT);
 
-    const resolution = await resolveGradle(projectRoot, { exec });
+    // probe pinned off: a system gradle would win the auto order before the wrapper
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: () => false });
 
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe("cmd");
@@ -313,16 +315,21 @@ describe("resolveGradle: wrapper selection", () => {
     expect(calls[0].args).toEqual(INIT_ARGS(projectRoot));
   });
 
-  it("reports no-wrapper-no-gradle when bare gradle fails to spawn", async () => {
+  it("reports gradle-failed:<spawn error> when bare gradle fails to spawn despite a passing probe", async () => {
     const projectRoot = scratch();
     stubPlatform("darwin");
     const cause = Object.assign(new Error("spawn gradle ENOENT"), { code: "ENOENT" });
     const { exec } = stubExec(() => Promise.reject(new SpawnError("gradle", cause)));
 
-    // probe passed, so the spawn itself is the first failure seen
+    // probe passed, so the spawn itself is the first failure seen — a spawn
+    // failure is an attempt failure, not absence
     const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
 
-    expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-wrapper-no-gradle" });
+    expect(resolution).toEqual({
+      ok: false,
+      artifacts: [],
+      reason: 'gradle-failed:failed to spawn "gradle": spawn gradle ENOENT',
+    });
   });
 
   it("reports gradle-failed when an existing wrapper fails to spawn", async () => {
@@ -334,7 +341,8 @@ describe("resolveGradle: wrapper selection", () => {
       Promise.reject(new SpawnError(join(projectRoot, "gradlew"), cause)),
     );
 
-    const resolution = await resolveGradle(projectRoot, { exec });
+    // probe pinned off so the wrapper is the only candidate
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: () => false });
 
     expect(resolution.ok).toBe(false);
     expect(resolution.reason?.startsWith("gradle-failed:")).toBe(true);
@@ -386,6 +394,183 @@ describe("resolveGradle: bare-gradle PATH probe", () => {
 
     expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-wrapper-no-gradle" });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("resolveGradle: build-tool strategy", () => {
+  /** Executable root wrapper (unix shape). */
+  function writeGradlew(projectRoot: string): void {
+    const path = join(projectRoot, "gradlew");
+    writeFileSync(path, "#!/bin/sh\n");
+  }
+
+  /**
+   * exec stub where the SYSTEM command's run fails with `fail` and the
+   * wrapper's succeeds with SAMPLE_OUTPUT (identified by command shape, so
+   * both unix and win32 routing work).
+   */
+  function systemFailsWrapperSucceeds(isSystem: (cmd: string, args: string[]) => boolean) {
+    return stubExec(async (cmd, args) =>
+      isSystem(cmd, args)
+        ? { stdout: "", stderr: "sysboom", code: 1 }
+        : { stdout: SAMPLE_OUTPUT, stderr: "", code: 0 },
+    );
+  }
+
+  it("auto prefers the system gradle when the probe passes and a wrapper exists", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeGradlew(projectRoot);
+    const { exec, calls } = outputExec(SAMPLE_OUTPUT);
+
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].cmd).toBe("gradle");
+    expect(calls[0].args).toEqual(INIT_ARGS(projectRoot));
+  });
+
+  it("auto uses the wrapper alone when the probe finds no system gradle", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeGradlew(projectRoot);
+    const { exec, calls } = outputExec(SAMPLE_OUTPUT);
+
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: () => false });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].cmd).toBe(join(projectRoot, "gradlew"));
+  });
+
+  it("auto retries with the wrapper after a failed system run", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeGradlew(projectRoot);
+    const { exec, calls } = systemFailsWrapperSucceeds((cmd) => cmd === "gradle");
+
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls.map((c) => c.cmd)).toEqual(["gradle", join(projectRoot, "gradlew")]);
+  });
+
+  it("auto combines both attempts' details when every candidate fails", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeGradlew(projectRoot);
+    const { exec } = stubExec(async (cmd) => ({
+      stdout: "",
+      stderr: cmd === "gradle" ? "sysboom" : "wrapboom",
+      code: 1,
+    }));
+
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
+
+    expect(resolution).toEqual({
+      ok: false,
+      artifacts: [],
+      reason: "gradle-failed:system: sysboom | wrapper: wrapboom",
+    });
+  });
+
+  it("strategy system runs only the system gradle even with a wrapper present", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeGradlew(projectRoot);
+    const { exec, calls } = outputExec(SAMPLE_OUTPUT);
+
+    const resolution = await resolveGradle(projectRoot, {
+      exec,
+      gradleOnPath: PROBE_FOUND,
+      strategy: "system",
+    });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls.every((c) => c.cmd === "gradle")).toBe(true);
+  });
+
+  it("strategy system with a failing probe reports no-wrapper-no-gradle without spawning", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeGradlew(projectRoot);
+    const { exec, calls } = outputExec(SAMPLE_OUTPUT);
+
+    const resolution = await resolveGradle(projectRoot, {
+      exec,
+      gradleOnPath: () => false,
+      strategy: "system",
+    });
+
+    expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-wrapper-no-gradle" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("strategy wrapper runs only the wrapper even with a system gradle present", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeGradlew(projectRoot);
+    const { exec, calls } = outputExec(SAMPLE_OUTPUT);
+
+    const resolution = await resolveGradle(projectRoot, {
+      exec,
+      gradleOnPath: PROBE_FOUND,
+      strategy: "wrapper",
+    });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls.every((c) => c.cmd === join(projectRoot, "gradlew"))).toBe(true);
+  });
+
+  it("strategy wrapper with no wrapper file reports no-wrapper without spawning", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    const { exec, calls } = outputExec(SAMPLE_OUTPUT);
+
+    const resolution = await resolveGradle(projectRoot, {
+      exec,
+      gradleOnPath: PROBE_FOUND,
+      strategy: "wrapper",
+    });
+
+    expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-wrapper" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("an explicit wrapper command bypasses the strategy entirely", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeGradlew(projectRoot);
+    const { exec, calls } = outputExec(SAMPLE_OUTPUT);
+
+    const resolution = await resolveGradle(projectRoot, {
+      exec,
+      gradleOnPath: PROBE_FOUND,
+      wrapper: "/opt/gradle/bin/gradle",
+      strategy: "system",
+    });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].cmd).toBe("/opt/gradle/bin/gradle");
+  });
+
+  it("win32 auto: system first via cmd /c gradle, wrapper retry via cmd /c gradlew.bat", async () => {
+    const projectRoot = scratch();
+    stubPlatform("win32");
+    writeFileSync(join(projectRoot, "gradlew.bat"), "@echo off\r\n");
+    const { exec, calls } = systemFailsWrapperSucceeds(
+      (cmd, args) => cmd === "cmd" && args[1] === "gradle",
+    );
+
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls[0].cmd).toBe("cmd");
+    expect(calls[0].args.slice(0, 2)).toEqual(["/c", "gradle"]);
+    expect(calls[1].cmd).toBe("cmd");
+    expect(calls[1].args.slice(0, 2)).toEqual(["/c", join(projectRoot, "gradlew.bat")]);
   });
 });
 
