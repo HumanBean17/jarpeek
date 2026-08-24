@@ -28,6 +28,14 @@ import { where } from "../../src/core/query/where.js";
 import type { DependencyArtifact } from "../../src/core/types.js";
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+// Strategy pinned to wrapper for the whole file — subprocesses inherit it
+// and the in-process resolveNow converges it — so the fake wrapper this
+// suite installs is the only candidate on every host: CI images ship a real
+// system Gradle, and system-first selection would run it instead. (The
+// product knob, not PATH surgery — spawn semantics stay untouched.)
+process.env.JARPEEK_BUILD_TOOL = "wrapper";
+
 const JARS = join(PKG_ROOT, "test", "fixtures", "jars");
 const DEMO_JAR = join(JARS, "demo-lib-1.0.0.jar");
 const DEMO_SOURCES_JAR = join(JARS, "demo-lib-1.0.0-sources.jar");

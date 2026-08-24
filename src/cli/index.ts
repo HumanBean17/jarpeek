@@ -23,6 +23,7 @@ import { clipCell, numberLines, renderTable } from "./render.js";
 import { handleMiss, type MissResult } from "../core/miss.js";
 import { fuzzyScore } from "../core/fuzzy.js";
 import { openContext, type QueryContext } from "../core/query/context.js";
+import { BUILD_TOOL_STRATEGIES } from "../resolver/strategy.js";
 import { findClass, type FindClassResult } from "../core/query/find-class.js";
 import {
   LookupMissError,
@@ -71,18 +72,21 @@ const EXIT_FATAL = 1;
 interface GlobalOptions {
   json?: boolean;
   project?: string;
+  buildTool?: string;
 }
 
 /** Per-invocation view of the global options. */
 interface Invocation {
   json: boolean;
   project: string;
+  buildTool?: string;
 }
 
 /** Context with the bootstrap's one notice line routed to stderr. */
 function ctxFor(inv: Invocation): QueryContext {
   return openContext(inv.project, {
     onNotice: (msg) => process.stderr.write(`[jarpeek] ${msg}...\n`),
+    buildToolFlag: inv.buildTool,
   });
 }
 
@@ -336,6 +340,12 @@ program
   .version(VERSION)
   .option("--json", "machine-readable output (the exact MCP result object)")
   .option("--project <dir>", "project root (default: cwd)")
+  .addOption(
+    new Option(
+      "--build-tool <strategy>",
+      "which mvn/gradle runs resolves: system from PATH, the root wrapper, or system-first with wrapper fallback (default)",
+    ).choices([...BUILD_TOOL_STRATEGIES]),
+  )
   .addHelpText("after", TOP_LEVEL_HELP);
 
 /** Declare a subcommand. Global flags are program-level and sticky. */
@@ -356,7 +366,7 @@ function command(name: string, description: string, helpText?: string) {
  */
 function invocation(): Invocation {
   const opts = program.opts<GlobalOptions>();
-  return { json: opts.json === true, project: opts.project ?? process.cwd() };
+  return { json: opts.json === true, project: opts.project ?? process.cwd(), buildTool: opts.buildTool };
 }
 
 command("find-class", "find classes by FQN, suffix, simple name, or fuzzy name", FIND_CLASS_HELP)

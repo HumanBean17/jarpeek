@@ -3,18 +3,22 @@
  *
  * `resolveGradle` asks the project's own build where its dependencies
  * resolved to: it injects a Groovy init script (`gradle-init.ts`) and runs
- * `gradlew -I ... --console=plain -q --no-configuration-cache jarpeekDump`,
- * which prints one JSON document between sentinel lines. Everything here
- * degrades rather than fails: a missing wrapper plus no Gradle on PATH, a
- * timeout, a failed build, silent output, or malformed JSON each become
- * `{ ok: false, reason }` so the resolver facade can fall back to the cache
- * scan.
+ * the selected command with `-I ... --console=plain -q
+ * --no-configuration-cache jarpeekDump`, which prints one JSON document
+ * between sentinel lines. Which command runs is the build-tool strategy
+ * (see `strategy.ts`): the system gradle from PATH first when its probe
+ * passes, the root wrapper as fallback — and a failed first attempt (any
+ * cause) advances to the next candidate. Everything here degrades rather
+ * than fails: no command at all, a timeout, a failed build, silent output,
+ * or malformed JSON each become `{ ok: false, reason }` so the resolver
+ * facade can fall back to the cache scan.
  */
 import { accessSync, constants, existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import type { DependencyArtifact } from "../core/types.js";
 import { moduleCoordinates } from "./module-coordinate.js";
 import { ensureGradleInitScript } from "./gradle-init.js";
+import type { BuildToolStrategy } from "./strategy.js";
 import { runWithTimeout, SpawnError, TimeoutError, type RunResult } from "../util/exec.js";
 
 export const BEGIN_SENTINEL = "###JARPEEK-BEGIN###";
@@ -26,17 +30,25 @@ const STDERR_TAIL_CHARS = 500;
 export interface GradleResolution {
   ok: boolean;
   artifacts: DependencyArtifact[];
-  reason?: "no-wrapper-no-gradle" | "timeout" | `gradle-failed:${string}` | "no-output" | "bad-json";
+  reason?:
+    | "no-wrapper-no-gradle"
+    | "no-wrapper"
+    | "timeout"
+    | `gradle-failed:${string}`
+    | "no-output"
+    | "bad-json";
 }
 
 export interface ResolveGradleOptions {
   timeoutMs?: number;
   /** Injectable for tests; defaults to the real spawner. */
   exec?: typeof runWithTimeout;
-  /** Explicit gradle/wrapper command override; skips platform detection. */
+  /** Explicit gradle/wrapper command override; skips platform detection and strategy. */
   wrapper?: string;
   /** Injectable PATH probe consulted before the bare-gradle fallback. */
   gradleOnPath?: () => boolean;
+  /** Which gradle runs resolves; undefined means `auto` (system first, wrapper fallback). */
+  strategy?: BuildToolStrategy;
 }
 
 /** One dependency entry as printed by the init script. */
@@ -142,36 +154,36 @@ function mapArtifacts(document: DumpDocument, projectRoot: string): DependencyAr
   return [...byCoordinates.values()];
 }
 
-interface SelectedCommand {
+/** One gradle command the resolver may run, tagged with where it came from. */
+interface Candidate {
+  via: "system" | "wrapper";
   command: string;
   /** Platform plumbing that precedes the gradle args (e.g. `/c gradlew.bat`). */
   preArgs: string[];
-  /** True when neither wrapper exists and bare `gradle` is the command. */
-  bare: boolean;
 }
 
-/**
- * Wrapper selection: the platform wrapper when present (`cmd /c gradlew.bat`
- * on win32 — .bat files cannot be spawned directly), bare `gradle`
- * otherwise. On win32 the bare fallback also goes through `cmd` so a
- * gradle.bat on PATH is reachable; its absence is caught by the PATH probe
- * in `resolveGradle` before anything is spawned.
- */
-function selectCommand(projectRoot: string): SelectedCommand {
+/** The root wrapper when present: `gradlew.bat` through `cmd /c` on win32 (.bat files cannot be spawned directly), `gradlew` elsewhere. */
+function wrapperCandidate(projectRoot: string): Candidate | null {
   if (process.platform === "win32") {
     const bat = join(projectRoot, "gradlew.bat");
-    if (existsSync(bat)) return { command: "cmd", preArgs: ["/c", bat], bare: false };
-    return { command: "cmd", preArgs: ["/c", "gradle"], bare: true };
+    return existsSync(bat) ? { via: "wrapper", command: "cmd", preArgs: ["/c", bat] } : null;
   }
   const sh = join(projectRoot, "gradlew");
-  if (existsSync(sh)) return { command: sh, preArgs: [], bare: false };
-  return { command: "gradle", preArgs: [], bare: true };
+  return existsSync(sh) ? { via: "wrapper", command: sh, preArgs: [] } : null;
+}
+
+/** The system gradle: on win32 through `cmd` so a gradle.bat on PATH is reachable; its absence is caught by the PATH probe before anything is spawned. */
+function systemCandidate(): Candidate {
+  return process.platform === "win32"
+    ? { via: "system", command: "cmd", preArgs: ["/c", "gradle"] }
+    : { via: "system", command: "gradle", preArgs: [] };
 }
 
 /**
- * PATH probe for a system Gradle, consulted only when no wrapper exists:
- * on win32 any PATHEXT match (gradle.bat/.cmd/.exe) counts, elsewhere the
- * `gradle` binary must exist and be executable somewhere on PATH.
+ * PATH probe for a system Gradle, consulted whenever the system gradle is a
+ * candidate (auto and system strategies): on win32 any PATHEXT match
+ * (gradle.bat/.cmd/.exe) counts, elsewhere the `gradle` binary must exist
+ * and be executable somewhere on PATH.
  */
 export function gradleOnPathDefault(): boolean {
   const dirs = (process.env.PATH ?? "").split(delimiter).filter((dir) => dir.length > 0);
@@ -192,12 +204,25 @@ export function gradleOnPathDefault(): boolean {
   });
 }
 
+/** One candidate's failure: its solo reason, plus the bare detail for the combined form. */
+interface AttemptFailure {
+  via: "system" | "wrapper";
+  /** Exactly what this attempt would have returned had it run alone. */
+  solo: Exclude<GradleResolution["reason"], undefined>;
+  /** The same failure without the `gradle-failed:` prefix, for the combined reason. */
+  detail: string;
+}
+
 /**
  * Resolve a Gradle project's dependencies via the injected init script.
- * Every recognized failure mode — no wrapper and no Gradle on PATH, timeout,
- * spawn failure, non-zero exit, missing sentinels, malformed JSON — becomes
- * a `{ ok: false, reason }` resolution; an unexpected error thrown by `exec`
- * itself (neither `TimeoutError` nor `SpawnError`) propagates to the caller.
+ * Candidates run in strategy order (an explicit `opts.wrapper` is the single
+ * candidate and bypasses the strategy); the first `ok` wins, any failure
+ * advances to the next candidate, and when every candidate failed the
+ * reason names each attempt. Every recognized failure mode — no command at
+ * all, timeout, spawn failure, non-zero exit, missing sentinels, malformed
+ * JSON — becomes a `{ ok: false, reason }` resolution; an unexpected error
+ * thrown by `exec` itself (neither `TimeoutError` nor `SpawnError`)
+ * propagates to the caller.
  */
 export async function resolveGradle(
   projectRoot: string,
@@ -205,55 +230,96 @@ export async function resolveGradle(
 ): Promise<GradleResolution> {
   const exec = opts.exec ?? runWithTimeout;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const strategy = opts.strategy ?? "auto";
   const initScriptPath = await ensureGradleInitScript(projectRoot);
 
-  const selected: SelectedCommand =
-    opts.wrapper !== undefined ? { command: opts.wrapper, preArgs: [], bare: false } : selectCommand(projectRoot);
-  if (selected.bare && !(opts.gradleOnPath ?? gradleOnPathDefault)()) {
-    return { ok: false, artifacts: [], reason: "no-wrapper-no-gradle" };
-  }
-  const args = [
-    ...selected.preArgs,
-    "-I",
-    initScriptPath,
-    "--console=plain",
-    "-q",
-    "--no-configuration-cache",
-    "jarpeekDump",
-  ];
-
-  let result: RunResult;
-  try {
-    result = await exec(selected.command, args, { timeoutMs, cwd: projectRoot });
-  } catch (error) {
-    if (error instanceof TimeoutError) {
-      return { ok: false, artifacts: [], reason: "timeout" };
+  let candidates: Candidate[];
+  if (opts.wrapper !== undefined) {
+    candidates = [{ via: "wrapper", command: opts.wrapper, preArgs: [] }];
+  } else if (strategy === "wrapper") {
+    const wrapper = wrapperCandidate(projectRoot);
+    if (wrapper === null) return { ok: false, artifacts: [], reason: "no-wrapper" };
+    candidates = [wrapper];
+  } else if (strategy === "system") {
+    if (!(opts.gradleOnPath ?? gradleOnPathDefault)()) {
+      return { ok: false, artifacts: [], reason: "no-wrapper-no-gradle" };
     }
-    if (error instanceof SpawnError) {
-      // bare gradle that cannot spawn despite a passing probe = treat as
-      // absence; an existing wrapper that fails to exec is a build failure
-      if (selected.bare) {
-        return { ok: false, artifacts: [], reason: "no-wrapper-no-gradle" };
+    candidates = [systemCandidate()];
+  } else {
+    candidates = [];
+    if ((opts.gradleOnPath ?? gradleOnPathDefault)()) candidates.push(systemCandidate());
+    const wrapper = wrapperCandidate(projectRoot);
+    if (wrapper !== null) candidates.push(wrapper);
+    if (candidates.length === 0) {
+      return { ok: false, artifacts: [], reason: "no-wrapper-no-gradle" };
+    }
+  }
+
+  const failures: AttemptFailure[] = [];
+  for (const candidate of candidates) {
+    const args = [
+      ...candidate.preArgs,
+      "-I",
+      initScriptPath,
+      "--console=plain",
+      "-q",
+      "--no-configuration-cache",
+      "jarpeekDump",
+    ];
+
+    let result: RunResult;
+    try {
+      result = await exec(candidate.command, args, { timeoutMs, cwd: projectRoot });
+    } catch (error) {
+      if (error instanceof TimeoutError) {
+        failures.push({ via: candidate.via, solo: "timeout", detail: "timeout" });
+        continue;
       }
-      return { ok: false, artifacts: [], reason: `gradle-failed:${error.message}` };
+      if (error instanceof SpawnError) {
+        // a spawn failure mid-run is an attempt failure, not absence — the
+        // probe decided absence before anything spawned
+        failures.push({
+          via: candidate.via,
+          solo: `gradle-failed:${error.message}`,
+          detail: error.message,
+        });
+        continue;
+      }
+      throw error;
     }
-    throw error;
+
+    const fail = (solo: AttemptFailure["solo"], detail: string): void => {
+      failures.push({ via: candidate.via, solo, detail });
+    };
+
+    if (result.code !== 0) {
+      const detail = failureDetail(result);
+      fail(`gradle-failed:${detail}`, detail);
+      continue;
+    }
+
+    const payload = extractBetweenSentinels(result.stdout);
+    if (payload === null) {
+      fail("no-output", "no-output");
+      continue;
+    }
+
+    let document: DumpDocument;
+    try {
+      document = JSON.parse(payload) as DumpDocument;
+    } catch {
+      fail("bad-json", "bad-json");
+      continue;
+    }
+    return { ok: true, artifacts: mapArtifacts(document, projectRoot) };
   }
 
-  if (result.code !== 0) {
-    return { ok: false, artifacts: [], reason: `gradle-failed:${failureDetail(result)}` };
-  }
-
-  const payload = extractBetweenSentinels(result.stdout);
-  if (payload === null) {
-    return { ok: false, artifacts: [], reason: "no-output" };
-  }
-
-  let document: DumpDocument;
-  try {
-    document = JSON.parse(payload) as DumpDocument;
-  } catch {
-    return { ok: false, artifacts: [], reason: "bad-json" };
-  }
-  return { ok: true, artifacts: mapArtifacts(document, projectRoot) };
+  // every candidate failed: one attempt keeps its solo reason, several name
+  // each in one line
+  if (failures.length === 1) return { ok: false, artifacts: [], reason: failures[0].solo };
+  return {
+    ok: false,
+    artifacts: [],
+    reason: `gradle-failed:${failures.map((f) => `${f.via}: ${f.detail}`).join(" | ")}`,
+  };
 }

@@ -142,7 +142,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
   await writeManifest(projectRoot, {
     version: 2,
     resolvedAt: "",
-    dependencySetHash: await computeDependencySetHash(projectRoot),
+    dependencySetHash: await computeDependencySetHash(projectRoot, "auto"),
     artifacts,
   });
   return openContext(projectRoot, { onNotice: () => {} });

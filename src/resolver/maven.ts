@@ -12,15 +12,24 @@
  * instead of discarding the modules that resolved. The collected files are
  * reverse-mapped into m2 coordinates by path layout. `dependency:sources`
  * then runs once at the root to populate the local repository with
- * `-sources` jars; it is best-effort — its exit code is ignored. Everything
- * degrades rather than fails: no mvn anywhere, a timeout, a fully failed
- * build, or an empty classpath each become `{ ok: false, reason }`.
+ * `-sources` jars; it is best-effort — its exit code is ignored.
+ *
+ * Which mvn runs is the build-tool strategy (see `strategy.ts`): the system
+ * mvn from PATH first when its probe passes, the root wrapper as fallback —
+ * and a failed first attempt (any cause) advances to the next candidate, so
+ * a version-skewed system mvn fails over to the wrapper inside one
+ * resolution. A forced `wrapper` with no wrapper file, or a forced `system`
+ * with a failing probe, is an immediate named absence. Everything degrades
+ * rather than fails: absence, a timeout, a spawn failure, a fully failed
+ * build, or an empty classpath each become `{ ok: false, reason }` — naming
+ * every attempt when more than one ran.
  */
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join, relative } from "node:path";
 import type { DependencyArtifact } from "../core/types.js";
 import { moduleCoordinates } from "./module-coordinate.js";
+import type { BuildToolStrategy } from "./strategy.js";
 import { runWithTimeout, SpawnError, TimeoutError, type RunResult } from "../util/exec.js";
 
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -31,7 +40,7 @@ const CP_FILE_REL = "target/jarpeek-classpath.txt";
 export interface MavenResolution {
   ok: boolean;
   artifacts: DependencyArtifact[];
-  reason?: "no-mvn" | "timeout" | `mvn-failed:${string}` | "no-classpath";
+  reason?: "no-mvn" | "no-wrapper" | "timeout" | `mvn-failed:${string}` | "no-classpath";
   /**
    * Set when the run partially failed: some modules resolved (artifacts is
    * trustworthy) but at least one module's resolution failed, so its unique
@@ -46,39 +55,42 @@ export interface ResolveMavenOptions {
   exec?: typeof runWithTimeout;
   /** m2 repository root anchoring the layout reverse-map; default `~/.m2/repository`. */
   m2Dir?: string;
-  /** Injectable PATH probe consulted before the bare-mvn fallback. */
+  /** Injectable PATH probe consulted whenever the system mvn is a candidate. */
   mvnOnPath?: () => boolean;
+  /** Which mvn runs resolves; undefined means `auto` (system first, wrapper fallback). */
+  strategy?: BuildToolStrategy;
 }
 
-interface SelectedCommand {
+/** One mvn command the resolver may run, tagged with where it came from. */
+interface Candidate {
+  via: "system" | "wrapper";
   command: string;
   /** Platform plumbing that precedes the mvn args (e.g. `/c mvnw.cmd`). */
   preArgs: string[];
-  /** True when neither wrapper exists and bare `mvn` is the command. */
-  bare: boolean;
 }
 
-/**
- * mvn selection: `mvnw.cmd` through `cmd /c` on win32 (.cmd files cannot be
- * spawned directly), `mvnw` elsewhere, bare `mvn` as the last resort — on
- * win32 the bare fallback also goes through `cmd` so an mvn.cmd on PATH is
- * reachable; its absence is caught by the PATH probe before anything spawns.
- */
-function selectCommand(projectRoot: string): SelectedCommand {
+/** The root wrapper when present: `mvnw.cmd` through `cmd /c` on win32 (.cmd files cannot be spawned directly), `mvnw` elsewhere. */
+function wrapperCandidate(projectRoot: string): Candidate | null {
   if (process.platform === "win32") {
     const cmd = join(projectRoot, "mvnw.cmd");
-    if (existsSync(cmd)) return { command: "cmd", preArgs: ["/c", cmd], bare: false };
-    return { command: "cmd", preArgs: ["/c", "mvn"], bare: true };
+    return existsSync(cmd) ? { via: "wrapper", command: "cmd", preArgs: ["/c", cmd] } : null;
   }
   const sh = join(projectRoot, "mvnw");
-  if (existsSync(sh)) return { command: sh, preArgs: [], bare: false };
-  return { command: "mvn", preArgs: [], bare: true };
+  return existsSync(sh) ? { via: "wrapper", command: sh, preArgs: [] } : null;
+}
+
+/** The system mvn: on win32 through `cmd` so an mvn.cmd on PATH is reachable; its absence is caught by the PATH probe before anything spawns. */
+function systemCandidate(): Candidate {
+  return process.platform === "win32"
+    ? { via: "system", command: "cmd", preArgs: ["/c", "mvn"] }
+    : { via: "system", command: "mvn", preArgs: [] };
 }
 
 /**
- * PATH probe for a system Maven, consulted only when no wrapper exists: on
- * win32 any PATHEXT match (mvn.cmd/.bat/.exe) counts, elsewhere the `mvn`
- * binary must exist and be executable somewhere on PATH.
+ * PATH probe for a system Maven, consulted whenever the system mvn is a
+ * candidate (auto and system strategies): on win32 any PATHEXT match
+ * (mvn.cmd/.bat/.exe) counts, elsewhere the `mvn` binary must exist and be
+ * executable somewhere on PATH.
  */
 export function mvnOnPathDefault(): boolean {
   const dirs = (process.env.PATH ?? "").split(delimiter).filter((dir) => dir.length > 0);
@@ -303,16 +315,32 @@ function cpFile(dir: string): string {
   return join(dir, ...CP_FILE_REL.split("/"));
 }
 
+/** One candidate's failure: its solo reason, plus the bare detail for the combined form. */
+interface AttemptFailure {
+  via: "system" | "wrapper";
+  /** Exactly what this attempt would have returned had it run alone. */
+  solo: Exclude<MavenResolution["reason"], undefined>;
+  /** The same failure without the `mvn-failed:` prefix, for the combined reason. */
+  detail: string;
+}
+
+/** `detail` for a parse failure: its reason minus any `mvn-failed:` prefix. */
+function parseFailureDetail(reason: Exclude<MavenResolution["reason"], undefined>): string {
+  return reason.startsWith("mvn-failed:") ? reason.slice("mvn-failed:".length) : reason;
+}
+
 /**
  * Resolve a Maven project's dependencies. One reactor-wide
  * `dependency:build-classpath` run at the project root writes
  * `<module>/target/jarpeek-classpath.txt` for the root and every module
  * directory (recursive to depth 3); `-fae` keeps the reactor going past a
  * failing module, whose failure degrades to `partial` instead of discarding
- * the modules that resolved. `dependency:sources` then runs once at the
- * root — enough for a reactor — with its exit code ignored. Every recognized
- * failure mode — no mvn anywhere, timeout, spawn failure, a fully failed
- * build, an empty classpath, or a classpath outside the m2 layout — becomes
+ * the modules that resolved. Candidates run in strategy order — the first
+ * `ok` (including `partial`) wins and `dependency:sources` runs once on the
+ * winner; any failure advances to the next candidate, and when every
+ * candidate failed the reason names each attempt. Every recognized failure
+ * mode — absence, timeout, spawn failure, a fully failed build, an empty
+ * classpath, or a classpath outside the m2 layout — becomes
  * `{ ok: false, reason }`; an unexpected error thrown by `exec` itself
  * propagates to the caller.
  */
@@ -323,84 +351,124 @@ export async function resolveMaven(
   const exec = opts.exec ?? runWithTimeout;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const m2Dir = opts.m2Dir ?? join(homedir(), ".m2", "repository");
+  const strategy = opts.strategy ?? "auto";
 
-  const selected = selectCommand(projectRoot);
-  if (selected.bare && !(opts.mvnOnPath ?? mvnOnPathDefault)()) {
-    return { ok: false, artifacts: [], reason: "no-mvn" };
+  const wrapper = wrapperCandidate(projectRoot);
+  let candidates: Candidate[];
+  if (strategy === "wrapper") {
+    if (wrapper === null) return { ok: false, artifacts: [], reason: "no-wrapper" };
+    candidates = [wrapper];
+  } else if (strategy === "system") {
+    if (!(opts.mvnOnPath ?? mvnOnPathDefault)()) {
+      return { ok: false, artifacts: [], reason: "no-mvn" };
+    }
+    candidates = [systemCandidate()];
+  } else {
+    candidates = [];
+    if ((opts.mvnOnPath ?? mvnOnPathDefault)()) candidates.push(systemCandidate());
+    if (wrapper !== null) candidates.push(wrapper);
+    if (candidates.length === 0) return { ok: false, artifacts: [], reason: "no-mvn" };
   }
 
   const modules = moduleDirs(projectRoot);
   const targets = [projectRoot, ...modules].map(cpFile);
-  // a file left by a crashed previous run must not pass for this run's
-  // output; `target/` is pre-created so the mojo can always write into it
-  // (a read-only tree skips the mkdir and the run itself will say why)
-  for (const target of targets) {
-    rmSync(target, { force: true });
-    try {
-      mkdirSync(join(target, ".."), { recursive: true });
-    } catch {
-      // unwritable: the mvn run's failure detail will carry the story
-    }
-  }
+  const failures: AttemptFailure[] = [];
+
   try {
-    let result: RunResult;
-    try {
-      result = await exec(
-        selected.command,
-        [
-          ...selected.preArgs,
-          "-B",
-          "-q",
-          "-fae",
-          "dependency:build-classpath",
-          `-Dmdep.outputFile=${CP_FILE_REL}`,
-        ],
-        { timeoutMs, cwd: projectRoot },
-      );
-    } catch (error) {
-      if (error instanceof TimeoutError) {
-        return { ok: false, artifacts: [], reason: "timeout" };
+    for (const candidate of candidates) {
+      // a file left by a crashed previous run — or by the candidate before
+      // this one — must not pass for this run's output; `target/` is
+      // pre-created so the mojo can always write into it (a read-only tree
+      // skips the mkdir and the run itself will say why)
+      for (const target of targets) {
+        rmSync(target, { force: true });
+        try {
+          mkdirSync(join(target, ".."), { recursive: true });
+        } catch {
+          // unwritable: the mvn run's failure detail will carry the story
+        }
       }
-      if (error instanceof SpawnError) {
-        // bare mvn that cannot spawn despite a passing probe = treat as
-        // absence; an existing wrapper that fails to exec is a build failure
-        if (selected.bare) return { ok: false, artifacts: [], reason: "no-mvn" };
-        return { ok: false, artifacts: [], reason: `mvn-failed:${error.message}` };
+
+      let result: RunResult;
+      try {
+        result = await exec(
+          candidate.command,
+          [
+            ...candidate.preArgs,
+            "-B",
+            "-q",
+            "-fae",
+            "dependency:build-classpath",
+            `-Dmdep.outputFile=${CP_FILE_REL}`,
+          ],
+          { timeoutMs, cwd: projectRoot },
+        );
+      } catch (error) {
+        if (error instanceof TimeoutError) {
+          failures.push({ via: candidate.via, solo: "timeout", detail: "timeout" });
+          continue;
+        }
+        if (error instanceof SpawnError) {
+          // a spawn failure mid-run is an attempt failure, not absence —
+          // the probe decided absence before anything spawned
+          failures.push({
+            via: candidate.via,
+            solo: `mvn-failed:${error.message}`,
+            detail: error.message,
+          });
+          continue;
+        }
+        throw error;
       }
-      throw error;
+
+      const outputs = targets.filter((target) => existsSync(target));
+      const parsed = parseOutputs(outputs, m2Dir, projectRoot, modules);
+      if (!parsed.ok) {
+        // nothing survived this candidate: with a non-zero exit the mvn
+        // failure is the story, else every module simply produced an empty
+        // classpath — either way the next candidate gets its turn
+        if (result.code !== 0) {
+          const detail = failureDetail(result);
+          failures.push({ via: candidate.via, solo: `mvn-failed:${detail}`, detail });
+        } else {
+          const solo = parsed.reason ?? "no-classpath";
+          failures.push({ via: candidate.via, solo, detail: parseFailureDetail(solo) });
+        }
+        continue;
+      }
+
+      // best-effort sources population on the winning candidate; exit code
+      // and throw both ignored — it runs on partial resolutions too:
+      // everything that resolved deserves its sources even when a sibling
+      // module failed
+      try {
+        await exec(
+          candidate.command,
+          [...candidate.preArgs, "-B", "-q", "dependency:sources", "-DincludeScope=test"],
+          { timeoutMs, cwd: projectRoot },
+        );
+      } catch {
+        // tolerated: pairing simply falls back to whatever sources already exist
+      }
+
+      if (result.code !== 0) {
+        const failed = [projectRoot, ...modules]
+          .filter((dir) => !existsSync(cpFile(dir)))
+          .map((dir) => (dir === projectRoot ? "." : relative(projectRoot, dir)))
+          .join(", ");
+        return { ...parsed, partial: `modules failed to resolve: ${failed}` };
+      }
+      return parsed;
     }
 
-    const outputs = targets.filter((target) => existsSync(target));
-    const parsed = parseOutputs(outputs, m2Dir, projectRoot, modules);
-    if (!parsed.ok) {
-      // nothing survived the run: with a non-zero exit the mvn failure is
-      // the reason, else every module simply produced an empty classpath
-      return result.code !== 0
-        ? { ok: false, artifacts: [], reason: `mvn-failed:${failureDetail(result)}` }
-        : parsed;
-    }
-
-    // best-effort sources population; exit code and throw both ignored — it
-    // runs on partial resolutions too: everything that resolved deserves its
-    // sources even when a sibling module failed
-    try {
-      await exec(
-        selected.command,
-        [...selected.preArgs, "-B", "-q", "dependency:sources", "-DincludeScope=test"],
-        { timeoutMs, cwd: projectRoot },
-      );
-    } catch {
-      // tolerated: pairing simply falls back to whatever sources already exist
-    }
-
-    if (result.code !== 0) {
-      const failed = [projectRoot, ...modules]
-        .filter((dir) => !existsSync(cpFile(dir)))
-        .map((dir) => (dir === projectRoot ? "." : relative(projectRoot, dir)))
-        .join(", ");
-      return { ...parsed, partial: `modules failed to resolve: ${failed}` };
-    }
-    return parsed;
+    // every candidate failed: one attempt keeps its solo reason, several
+    // name each in one line — the caller's warning budget sees one string
+    if (failures.length === 1) return { ok: false, artifacts: [], reason: failures[0].solo };
+    return {
+      ok: false,
+      artifacts: [],
+      reason: `mvn-failed:${failures.map((f) => `${f.via}: ${f.detail}`).join(" | ")}`,
+    };
   } finally {
     for (const target of targets) rmSync(target, { force: true });
   }

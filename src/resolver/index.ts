@@ -17,6 +17,7 @@ import { detectBuildSystems, type BuildSystem } from "./detect.js";
 import { resolveGradle } from "./gradle.js";
 import { resolveJdk } from "./jdk.js";
 import { resolveMaven } from "./maven.js";
+import type { BuildToolStrategy } from "./strategy.js";
 
 export { detectBuildSystems, type BuildSystem } from "./detect.js";
 
@@ -45,6 +46,11 @@ export interface ResolveDependenciesOptions {
   jdk?: typeof resolveJdk;
   /** Append the JDK pseudo-artifact unless explicitly false. */
   includeJdk?: boolean;
+  /**
+   * Which mvn/gradle runs the resolvers — system-first with wrapper
+   * fallback when unset (`auto`), or a forced direction. See `strategy.ts`.
+   */
+  strategy?: BuildToolStrategy;
 }
 
 const DEGRADED_WARNING = "degraded-to-cache-scan";
@@ -65,7 +71,9 @@ function dedup(artifacts: DependencyArtifact[]): DependencyArtifact[] {
 
 /**
  * Resolve a project's dependency set: gradle → maven → cache-scan cascade,
- * JDK appended, everything deduplicated by coordinates. Failures degrade
+ * JDK appended, everything deduplicated by coordinates. The `strategy`
+ * option is threaded into both resolvers: system-first with wrapper
+ * fallback by default (`auto`), or a forced direction. Failures degrade
  * into `degraded` entries and warnings; this function never throws for
  * conditions the resolvers themselves report as `{ ok: false }`.
  */
@@ -85,14 +93,14 @@ export async function resolveDependencies(
   let viaCacheScan = false;
   for (const system of detectBuildSystems(projectRoot)) {
     if (system === "gradle") {
-      const resolution = await gradle(projectRoot);
+      const resolution = await gradle(projectRoot, { strategy: opts.strategy });
       if (resolution.ok && resolution.artifacts.length > 0) {
         artifacts = resolution.artifacts;
         break;
       }
       degraded.push({ from: "gradle", reason: resolution.reason ?? NO_ARTIFACTS });
     } else {
-      const resolution = await maven(projectRoot);
+      const resolution = await maven(projectRoot, { strategy: opts.strategy });
       if (resolution.ok && resolution.artifacts.length > 0) {
         artifacts = resolution.artifacts;
         // a reactor that partially failed still answers, but the missing

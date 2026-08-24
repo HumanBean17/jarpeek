@@ -28,6 +28,14 @@ import { fileURLToPath } from "node:url";
 import { writeManifest } from "../../src/index/manifest.js";
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+// Strategy pinned to wrapper for the whole file — subprocesses inherit it —
+// so the fake wrappers these scenarios install are the only candidates on
+// every host: CI images ship a real system Gradle, and system-first
+// selection would run it through an inherited PATH instead. (The product
+// knob, not PATH surgery — spawn semantics stay untouched.)
+process.env.JARPEEK_BUILD_TOOL = "wrapper";
+
 const DEMO_JAR = join(PKG_ROOT, "test", "fixtures", "jars", "demo-lib-1.0.0.jar");
 const DEMO_SOURCES_JAR = join(PKG_ROOT, "test", "fixtures", "jars", "demo-lib-1.0.0-sources.jar");
 

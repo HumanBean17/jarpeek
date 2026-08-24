@@ -10,6 +10,7 @@ import {
   type Dirent,
 } from "node:fs";
 import { join } from "node:path";
+import type { BuildToolStrategy } from "../resolver/strategy.js";
 import type { DependencyArtifact } from "../core/types.js";
 
 /** Layout version of `.jarpeek/manifest.json`; bumps force a full re-resolve. */
@@ -78,11 +79,17 @@ export async function writeManifest(projectRoot: string, m: Manifest): Promise<v
 
 /**
  * sha256 hex over the sorted lines `<relpath>\t<size>\t<mtimeMs>` of the
- * build files that exist under `projectRoot`. An empty candidate set hashes
- * the empty string, so a project with no build files still has a stable
- * (and distinguishable-from-null) fingerprint.
+ * build files that exist under `projectRoot`, plus one `strategy\t<value>`
+ * line: the effective build-tool strategy is part of the dependency set's
+ * identity, so flipping the knob re-resolves instead of serving a manifest
+ * the other tool produced. An empty candidate set hashes just the strategy
+ * line, so a project with no build files still has a stable (and
+ * distinguishable-from-null) fingerprint.
  */
-export async function computeDependencySetHash(projectRoot: string): Promise<string> {
+export async function computeDependencySetHash(
+  projectRoot: string,
+  strategy: BuildToolStrategy,
+): Promise<string> {
   const lines = candidateFiles(projectRoot)
     .map((relpath) => {
       try {
@@ -94,6 +101,7 @@ export async function computeDependencySetHash(projectRoot: string): Promise<str
         return `${relpath}\t(vanished)`;
       }
     })
+    .concat(`strategy\t${strategy}`)
     .sort();
   return createHash("sha256").update(lines.join("\n")).digest("hex");
 }
@@ -101,13 +109,18 @@ export async function computeDependencySetHash(projectRoot: string): Promise<str
 /**
  * Stale when the build files' fingerprint moved or any artifact's recorded
  * backing (binary/sources jar, source dir) disappeared — either way the
- * manifest no longer reflects what a resolve would produce today. Source
- * TREE contents are deliberately not fingerprinted: the manifest promises
- * which artifacts back the project, not that their contents have not been
- * rebuilt since.
+ * manifest no longer reflects what a resolve would produce today. The
+ * fingerprint includes the strategy, so a strategy change alone is stale.
+ * Source TREE contents are deliberately not fingerprinted: the manifest
+ * promises which artifacts back the project, not that their contents have
+ * not been rebuilt since.
  */
-export async function isStale(projectRoot: string, m: Manifest): Promise<boolean> {
-  if ((await computeDependencySetHash(projectRoot)) !== m.dependencySetHash) {
+export async function isStale(
+  projectRoot: string,
+  m: Manifest,
+  strategy: BuildToolStrategy,
+): Promise<boolean> {
+  if ((await computeDependencySetHash(projectRoot, strategy)) !== m.dependencySetHash) {
     return true;
   }
   for (const artifact of m.artifacts) {

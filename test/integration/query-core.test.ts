@@ -128,7 +128,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
   await writeManifest(projectRoot, {
     version: 2,
     resolvedAt: "",
-    dependencySetHash: await computeDependencySetHash(projectRoot),
+    dependencySetHash: await computeDependencySetHash(projectRoot, "auto"),
     artifacts,
   });
   // resolvers stubbed to fail-and-degrade: the stale-index suites bootstrap

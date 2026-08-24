@@ -45,6 +45,26 @@ describe("CLI smoke", () => {
     expect(stdout).toContain("mcp");
   });
 
+  it("--build-tool rejects an invalid value naming every choice, exit 1", async () => {
+    const { stderr, code } = await runCli(["--build-tool", "bogus", "find-class", "X"]);
+    expect(code).toBe(1);
+    expect(stderr).toContain("build-tool");
+    for (const value of ["auto", "system", "wrapper"]) {
+      expect(stderr).toContain(value);
+    }
+  });
+
+  it("--build-tool is rejected on the mcp subcommand too (bad value, exit 1)", async () => {
+    const { stderr, code } = await runCli(["--build-tool", "bogus", "mcp"]);
+    expect(code).toBe(1);
+    expect(stderr).toContain("build-tool");
+  });
+
+  it("--build-tool accepts a valid value end-to-end (status exits 0)", async () => {
+    const { code } = await runCli(["--build-tool", "system", "status"]);
+    expect(code).toBe(0);
+  });
+
   it("init --help exits 0 with its description and --yes (no side effects)", async () => {
     const { stdout, code } = await runCli(["init", "--help"]);
     expect(code).toBe(0);

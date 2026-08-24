@@ -44,7 +44,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<{ ctx: Quer
   await writeManifest(root, {
     version: 2,
     resolvedAt: "2026-08-17T00:00:00.000Z",
-    dependencySetHash: await computeDependencySetHash(root),
+    dependencySetHash: await computeDependencySetHash(root, "auto"),
     artifacts,
   });
   return { ctx: openContext(root, { onNotice: () => {} }), root };

@@ -101,6 +101,47 @@ describe("detectBuildSystems", () => {
 });
 
 describe("resolveDependencies", () => {
+  it("threads the build-tool strategy into both resolvers, undefined when unset", async () => {
+    const projectRoot = scratch();
+    writeFileSync(join(projectRoot, "settings.gradle"), "");
+    writeFileSync(join(projectRoot, "pom.xml"), "<project/>");
+    const seen: { gradle?: string; maven?: string } = {};
+
+    const forced = await resolveDependencies(projectRoot, {
+      strategy: "wrapper",
+      includeJdk: false,
+      // both resolvers fail so each gets its turn and the cascade ends at
+      // the (stubbed) cache scan
+      gradle: async (_root, opts) => {
+        seen.gradle = opts?.strategy;
+        return { ok: false, artifacts: [], reason: "gradle-failed:nope" };
+      },
+      maven: async (_root, opts) => {
+        seen.maven = opts?.strategy;
+        return { ok: false, artifacts: [], reason: "mvn-failed:nope" };
+      },
+      cacheScan: async () => ({ artifacts: [], warnings: [] }),
+    });
+    expect(forced.viaCacheScan).toBe(true);
+    expect(seen).toEqual({ gradle: "wrapper", maven: "wrapper" });
+
+    seen.gradle = undefined;
+    seen.maven = undefined;
+    // gradle fails so maven also runs: both halves of the assertion are live
+    await resolveDependencies(projectRoot, {
+      includeJdk: false,
+      gradle: async (_root, opts) => {
+        seen.gradle = opts?.strategy;
+        return { ok: false, artifacts: [], reason: "gradle-failed:nope" };
+      },
+      maven: async (_root, opts) => {
+        seen.maven = opts?.strategy;
+        return { ok: true, artifacts: [artifact("g:g:1")] };
+      },
+    });
+    expect(seen).toEqual({ gradle: undefined, maven: undefined });
+  });
+
   it("gradle-only project: gradle result wins, maven and cache scan never run", async () => {
     const dir = scratch();
     writeFileSync(join(dir, "settings.gradle"), "");

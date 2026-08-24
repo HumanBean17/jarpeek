@@ -21,7 +21,8 @@ import {
   type Manifest,
 } from "../../src/index/manifest.js";
 
-const EMPTY_SHA256 = createHash("sha256").update("").digest("hex");
+/** An empty project hashes just the strategy line. */
+const EMPTY_SHA256 = createHash("sha256").update('strategy\tauto').digest("hex");
 
 function tmpProjectRoot(): string {
   return mkdtempSync(join(tmpdir(), "jarpeek-manifest-"));
@@ -42,10 +43,10 @@ function touchPlusOneSecond(path: string): void {
 }
 
 describe("computeDependencySetHash", () => {
-  it("empty project hashes the empty string", async () => {
+  it("empty project hashes just the strategy line (stable, distinguishable from null)", async () => {
     const root = tmpProjectRoot();
     try {
-      expect(await computeDependencySetHash(root)).toBe(EMPTY_SHA256);
+      expect(await computeDependencySetHash(root, "auto")).toBe(EMPTY_SHA256);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -58,18 +59,18 @@ describe("computeDependencySetHash", () => {
       writeFileSync(gradle, "plugins {}\n");
       writeFileSync(join(root, "settings.gradle"), "rootProject.name = 'demo'\n");
 
-      const first = await computeDependencySetHash(root);
-      const second = await computeDependencySetHash(root);
+      const first = await computeDependencySetHash(root, "auto");
+      const second = await computeDependencySetHash(root, "auto");
       expect(first).toBe(second);
       expect(first).not.toBe(EMPTY_SHA256);
 
       mkdirSync(join(root, "mod"));
       writeFileSync(join(root, "mod", "pom.xml"), "<project/>\n");
-      const withPom = await computeDependencySetHash(root);
+      const withPom = await computeDependencySetHash(root, "auto");
       expect(withPom).not.toBe(first);
 
       touchPlusOneSecond(gradle);
-      expect(await computeDependencySetHash(root)).not.toBe(withPom);
+      expect(await computeDependencySetHash(root, "auto")).not.toBe(withPom);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -78,15 +79,15 @@ describe("computeDependencySetHash", () => {
   it("changes on a new submodule build.gradle.kts (Gradle multi-module)", async () => {
     const root = tmpProjectRoot();
     try {
-      const before = await computeDependencySetHash(root);
+      const before = await computeDependencySetHash(root, "auto");
 
       mkdirSync(join(root, "sub"));
       writeFileSync(join(root, "sub", "build.gradle.kts"), "plugins { java }\n");
-      const withSubmodule = await computeDependencySetHash(root);
+      const withSubmodule = await computeDependencySetHash(root, "auto");
       expect(withSubmodule).not.toBe(before);
 
       touchPlusOneSecond(join(root, "sub", "build.gradle.kts"));
-      expect(await computeDependencySetHash(root)).not.toBe(withSubmodule);
+      expect(await computeDependencySetHash(root, "auto")).not.toBe(withSubmodule);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -97,7 +98,21 @@ describe("computeDependencySetHash", () => {
     try {
       mkdirSync(join(root, "a", "b"), { recursive: true });
       writeFileSync(join(root, "a", "b", "pom.xml"), "<project/>\n");
-      expect(await computeDependencySetHash(root)).toBe(EMPTY_SHA256);
+      expect(await computeDependencySetHash(root, "auto")).toBe(EMPTY_SHA256);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes the strategy in the fingerprint: stable per value, different across values", async () => {
+    const root = tmpProjectRoot();
+    try {
+      writeFileSync(join(root, "pom.xml"), "<project/>");
+
+      const auto = await computeDependencySetHash(root, "auto");
+      expect(await computeDependencySetHash(root, "auto")).toBe(auto);
+      expect(await computeDependencySetHash(root, "wrapper")).not.toBe(auto);
+      expect(await computeDependencySetHash(root, "system")).not.toBe(auto);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -194,6 +209,19 @@ describe("readManifest / writeManifest", () => {
 });
 
 describe("isStale", () => {
+  it("a strategy change alone flips staleness", async () => {
+    const root = tmpProjectRoot();
+    try {
+      writeFileSync(join(root, "pom.xml"), "<project/>");
+      const m = manifestFor(await computeDependencySetHash(root, "wrapper"), [artifact({})]);
+
+      expect(await isStale(root, m, "auto")).toBe(true);
+      expect(await isStale(root, m, "wrapper")).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("fresh manifest is not stale; missing artifact jar or changed build file is", async () => {
     const root = tmpProjectRoot();
     try {
@@ -202,17 +230,17 @@ describe("isStale", () => {
       const jar = join(root, "lib.jar");
       writeFileSync(jar, "fake jar");
 
-      const hash = await computeDependencySetHash(root);
+      const hash = await computeDependencySetHash(root, "auto");
       await writeManifest(root, manifestFor(hash, [artifact({ binaryJar: jar })]));
       const m = (await readManifest(root)) as Manifest;
-      expect(await isStale(root, m)).toBe(false);
+      expect(await isStale(root, m, "auto")).toBe(false);
 
       rmSync(jar);
-      expect(await isStale(root, m)).toBe(true);
+      expect(await isStale(root, m, "auto")).toBe(true);
 
       writeFileSync(jar, "fake jar");
       writeFileSync(gradle, "plugins { id 'x' }\n");
-      expect(await isStale(root, m)).toBe(true);
+      expect(await isStale(root, m, "auto")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -221,20 +249,20 @@ describe("isStale", () => {
   it("flags missing sourcesJar and sourceDir even when the hash matches", async () => {
     const root = tmpProjectRoot();
     try {
-      const hash = await computeDependencySetHash(root);
+      const hash = await computeDependencySetHash(root, "auto");
       const allPresent: Manifest = manifestFor(hash, [
         artifact({ sourcesJar: join(root, "a-sources.jar") }),
         artifact({ coordinates: ":mod", kind: "module", sourceDir: join(root, "mod") }),
       ]);
       mkdirSync(join(root, "mod"));
       writeFileSync(join(root, "a-sources.jar"), "jar");
-      expect(await isStale(root, allPresent)).toBe(false);
+      expect(await isStale(root, allPresent, "auto")).toBe(false);
 
       const anyMissing: Manifest = manifestFor(hash, [
         artifact({ sourcesJar: join(root, "gone-sources.jar") }),
         artifact({ coordinates: ":mod2", kind: "module", sourceDir: join(root, "gone-mod") }),
       ]);
-      expect(await isStale(root, anyMissing)).toBe(true);
+      expect(await isStale(root, anyMissing, "auto")).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -252,16 +280,16 @@ describe("isStale", () => {
         join(sourceDir, "com", "mod", "Thing.java"),
         "package com.mod;\n\npublic class Thing {\n  int x = 1;\n}\n",
       );
-      const hash = await computeDependencySetHash(root);
+      const hash = await computeDependencySetHash(root, "auto");
       const m: Manifest = manifestFor(hash, [
         artifact({ coordinates: ":app", kind: "module", sourceDir }),
       ]);
-      expect(await isStale(root, m)).toBe(false);
+      expect(await isStale(root, m, "auto")).toBe(false);
 
       const helper = join(sourceDir, "com", "mod", "Helper.kt");
       writeFileSync(helper, "package com.mod\n\nclass Helper(val extra: Int)\n");
       touchPlusOneSecond(helper);
-      expect(await isStale(root, m)).toBe(false);
+      expect(await isStale(root, m, "auto")).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
