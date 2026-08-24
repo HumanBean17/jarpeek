@@ -34,7 +34,7 @@
   - `export const BUILD_TOOL_STRATEGIES: readonly BuildToolStrategy[]` — exactly `["auto", "system", "wrapper"]` (single source for validation and CLI choices).
   - `export function effectiveBuildToolStrategy(projectRoot: string, flagValue?: string): BuildToolStrategy` — precedence: `flagValue` when it is one of the three values → env `JARPEEK_BUILD_TOOL` when one of the three → the `buildTool` field of the JSON document at `join(projectRoot, PRIME_CONFIG_PATH)` when one of the three → `"auto"`. An absent, corrupt (JSON parse failure), or invalid value at any layer falls through to the next layer. No filesystem write, no throw.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `test/unit/strategy.test.ts` with a scratch project dir (`mkdtempSync`, cleaned in `afterEach`) and `vi.stubEnv`/`vi.unstubAllEnvs` for the env var. Scenarios, each asserting the return of `effectiveBuildToolStrategy`:
 
@@ -47,21 +47,21 @@
 7. Config `{"buildTool":"nonsense"}` and env `"garbage"` → `"auto"` (invalid values fall through).
 8. Flag `"garbage"` (defensive; commander blocks this in practice) with env `"system"` → `"system"`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/strategy.test.ts`
 Expected: FAIL — module `../../src/resolver/strategy.js` cannot be resolved.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 `src/resolver/strategy.ts`: the type and array as specified above; `effectiveBuildToolStrategy` implementing the precedence chain. Config reading mirrors `readPrimeModeConfig` in `src/prime/command.ts`: `JSON.parse(readFileSync(...))` inside try/catch, then check the `buildTool` field is one of the three strings. Validate `flagValue` and env through the same membership check against `BUILD_TOOL_STRATEGIES`. File header comment documents the knob, its three surfaces, and the precedence (flag > env > config > auto), noting the deliberate deviation from primeMode's flag > config > env.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/strategy.test.ts`
 Expected: PASS (all 8 scenarios).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add src/resolver/strategy.ts test/unit/strategy.test.ts`
 Run: `git commit -m "feat(resolver): build-tool strategy type and flag/env/config convergence"`
@@ -87,7 +87,7 @@ Run: `git commit -m "feat(resolver): build-tool strategy type and flag/env/confi
   - Retry semantics: run candidates in order; the first attempt whose run parses to `ok:true` wins (including `partial` results — a partial is a success, never retried). Any failed attempt (non-zero exit, `TimeoutError`, `SpawnError`, empty/`no-classpath` outputs, non-m2 layout) advances to the next candidate. All attempts fail → combined reason per the Global Constraints format. A `SpawnError` during an attempt is an attempt failure with the error message as its detail — it no longer maps to `no-mvn` (absence is decided by the probe, before any spawn).
   - `dependency:sources` runs exactly once, with the winning candidate's command, after the winning run (unchanged best-effort semantics, still runs for `partial` wins).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Extend `test/unit/maven-resolver.test.ts` using the existing `stubExec`, `stubPlatform`, `scratch`, `PROBE_FOUND` idioms; write a wrapper file (`mvnw`, chmod executable) and a fake m2 jar via the existing fixture helpers where a successful parse is needed. New scenarios:
 
@@ -102,25 +102,25 @@ Extend `test/unit/maven-resolver.test.ts` using the existing `stubExec`, `stubPl
 9. **timeout advances**: probe passes, wrapper exists, system attempt throws `TimeoutError`, wrapper succeeds → `ok:true`.
 10. **win32 auto**: `stubPlatform("win32")`, `mvnw.cmd` exists, probe passes → first call is `cmd /c mvn` (system via cmd), fallback attempt is `cmd /c <root>/mvnw.cmd`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/maven-resolver.test.ts`
 Expected: FAIL — new scenarios fail (`strategy` option unrecognized: system-first order asserted but wrapper runs first; `no-wrapper` reason absent).
 
-- [ ] **Step 3: Update existing tests to the new default**
+- [x] **Step 3: Update existing tests to the new default**
 
 Existing tests that place a wrapper and also pass `PROBE_FOUND` (or otherwise reach the bare path) currently assert wrapper-first command selection — flip their expected command order to system-first, or stub the probe to fail where the test's intent is "wrapper project" (see the file's existing wrappers around `mvnw` chmod/fixtures). Tests that pass `opts.exec` with a wrapper-only scratch and no probe stub keep passing only if the probe fails on the scratch environment — make every affected test's probe stubbing explicit while touching it. Tests using `opts.mvnOnPath` stay valid.
 
-- [ ] **Step 4: Implement candidates + retry in `maven.ts`**
+- [x] **Step 4: Implement candidates + retry in `maven.ts`**
 
 Restructure `resolveMaven`: compute the candidate list per the Interfaces table; extract the per-attempt body (pre-clean target files, run `dependency:build-classpath` with the candidate's command, collect outputs, `parseOutputs`) into an internal helper taking one candidate; loop candidates with the retry rule; on total failure return the combined reason; on a win run `dependency:sources` with the winner and return the parsed result (preserving `partial` computation from the winning run). Target-file cleanup (`rmSync`) stays in a `finally` covering all targets. `selectCommand`'s doc comment is rewritten to describe candidate order per strategy. Update the file header comment's "no mvn anywhere" sentence to name probe-absence vs per-attempt failure.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/maven-resolver.test.ts`
 Expected: PASS (new + updated scenarios).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run: `git add src/resolver/maven.ts test/unit/maven-resolver.test.ts`
 Run: `git commit -m "feat(resolver): maven system-first candidate selection with wrapper retry"`
@@ -142,7 +142,7 @@ Run: `git commit -m "feat(resolver): maven system-first candidate selection with
   - Retry semantics mirror Task 2: first `ok:true` wins; any failed attempt (non-zero exit, `TimeoutError`, `SpawnError`, `no-output`, `bad-json`) advances; total failure → combined reason per Global Constraints (`gradle-failed:system: <d1> | wrapper: <d2>`; solo attempts keep today's formats). `SpawnError` during an attempt is an attempt failure (error message as detail), not `"no-wrapper-no-gradle"` — absence is the probe's decision.
   - The init script (`ensureGradleInitScript`) is ensured once per resolution, not per attempt.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Extend `test/unit/gradle-resolver.test.ts` using its existing idioms (`SAMPLE_OUTPUT` fixture, sentinel output builder, `INIT_ARGS`, `stubExec`, `PROBE_FOUND`, `stubPlatform`):
 
@@ -155,25 +155,25 @@ Extend `test/unit/gradle-resolver.test.ts` using its existing idioms (`SAMPLE_OU
 7. **`opts.wrapper` bypass**: explicit wrapper command + any strategy → that command is the only candidate (regression guard for existing tests).
 8. **win32 auto**: `stubPlatform("win32")`, `gradlew.bat` exists, probe passes → system first via `cmd /c gradle`, fallback `cmd /c <root>/gradlew.bat`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/gradle-resolver.test.ts`
 Expected: FAIL — `strategy` option unrecognized, system-first order asserted but wrapper runs first.
 
-- [ ] **Step 3: Update existing tests to the new default**
+- [x] **Step 3: Update existing tests to the new default**
 
 Same exercise as Task 2 Step 3: tests with both a wrapper and a passing probe flip to system-first expectations or pin the probe to failing; make probe stubs explicit everywhere a command selection is asserted.
 
-- [ ] **Step 4: Implement candidates + retry in `gradle.ts`**
+- [x] **Step 4: Implement candidates + retry in `gradle.ts`**
 
 Mirror Task 2's restructure: candidate list per strategy, `opts.wrapper` short-circuit preserved, per-attempt run of the existing exec/sentinel/parse sequence, retry rule, combined reason, `ensureGradleInitScript` hoisted before the loop. Rewrite `selectCommand`'s doc comment for candidate order; update the file header's "missing wrapper plus no Gradle on PATH" sentence.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/gradle-resolver.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run: `git add src/resolver/gradle.ts test/unit/gradle-resolver.test.ts`
 Run: `git commit -m "feat(resolver): gradle system-first candidate selection with wrapper retry"`
@@ -190,25 +190,25 @@ Run: `git commit -m "feat(resolver): gradle system-first candidate selection wit
 - Consumes: `BuildToolStrategy` (Task 1); `ResolveMavenOptions.strategy` (Task 2); `ResolveGradleOptions.strategy` (Task 3).
 - Produces: `ResolveDependenciesOptions` gains `strategy?: BuildToolStrategy`. `resolveDependencies` passes `strategy: opts.strategy` into both resolvers' options objects (undefined flows through as `undefined`, which each resolver treats as `"auto"`). Nothing else in the cascade changes.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Extend `test/unit/resolver-facade.test.ts` (it already injects stub resolvers via `opts.gradle`/`opts.maven`): calling `resolveDependencies(root, { strategy: "wrapper", gradle: stub, maven: stub, ... })` with a succeeding gradle stub asserts the stub received `strategy: "wrapper"` in its options argument; a call without `strategy` asserts the stub received `strategy: undefined`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run test/unit/resolver-facade.test.ts`
 Expected: FAIL — stub receives no `strategy` field.
 
-- [ ] **Step 3: Implement the threading**
+- [x] **Step 3: Implement the threading**
 
 Add the option to `ResolveDependenciesOptions`; include `strategy: opts.strategy` in the option objects built for the `gradle` and `maven` calls; update the facade doc comment with one sentence naming the strategy knob and its default.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/resolver-facade.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add src/resolver/index.ts test/unit/resolver-facade.test.ts`
 Run: `git commit -m "feat(resolver): thread build-tool strategy through the facade"`
@@ -228,7 +228,7 @@ Run: `git commit -m "feat(resolver): thread build-tool strategy through the faca
   - `isStale(projectRoot: string, m: Manifest, strategy: BuildToolStrategy): Promise<boolean>` — required third parameter; delegates with it.
   - Callers in `context.ts` and `resolve-cmd.ts` pass `"auto"` in this task as a literal (the real converged value arrives in Task 6). This is an intentional intermediate state so every commit compiles and passes.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Extend `test/unit/manifest.test.ts` (scratch dir with a `pom.xml`):
 
@@ -238,21 +238,21 @@ Extend `test/unit/manifest.test.ts` (scratch dir with a `pom.xml`):
 
 Update existing direct calls to `computeDependencySetHash`/`isStale` in this file to pass `"auto"`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/manifest.test.ts`
 Expected: FAIL — arity/type errors against the old signatures (or scenario 2/3 assertions fail once signatures updated by the test edit).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Change both signatures; include the strategy line in the hashed input; pass `"auto"` at the three production call sites in `context.ts` (two) and `resolve-cmd.ts` (one), each with a brief comment `// real strategy threaded in the context-wiring change`. Extend the doc comments of both functions to name the strategy line and why (flipping the knob must re-resolve, not serve the other tool's manifest).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/manifest.test.ts test/unit/context-listings.test.ts test/unit/status.test.ts`
 Expected: PASS (manifest new scenarios + every suite touching the changed signatures).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add src/index/manifest.ts src/core/query/context.ts src/core/query/resolve-cmd.ts test/unit/manifest.test.ts`
 Run: `git commit -m "feat(index): strategy joins the dependency-set fingerprint"`
@@ -274,7 +274,7 @@ Run: `git commit -m "feat(index): strategy joins the dependency-set fingerprint"
   - `ensureReady`'s staleness check (`isStale`) and the bootstrap's `writeManifest` hash both use the context's strategy; `resolveNow` (resolve-cmd.ts) hashes with `ctx.buildTool` and keeps `resolveDependencies(ctx.projectRoot, ctx.resolvers)` as-is (strategy rides inside `ctx.resolvers`).
   - The MCP server (`src/mcp/server.ts`) requires **no change**: it opens a context without `buildToolFlag`, so convergence reads env + config.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `test/unit/context-strategy.test.ts`, scratch project with a `pom.xml`, injecting stub resolvers via `opts.resolvers.{gradle,maven,cacheScan,jdk}` (the established `openContext` injection pattern; note `openContext` captures `Date.now` at construction — pass `opts.now` where timing matters):
 
@@ -286,21 +286,21 @@ Run: `git commit -m "feat(index): strategy joins the dependency-set fingerprint"
 6. **Hash flips staleness**: bootstrap once with `buildToolFlag: "wrapper"` (writes a manifest), reopen with `buildToolFlag: "system"` and the same stub resolvers → `ensureReady` re-bootstraps (manifest stale via strategy fingerprint), not short-circuits.
 7. **Default with nothing set** → stub sees `strategy: "auto"`; `ctx.buildTool` equals the same value on every scenario.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/context-strategy.test.ts`
 Expected: FAIL — `buildToolFlag` unrecognized (convergence never happens; scenarios 1–6 fail).
 
-- [ ] **Step 3: Implement in `context.ts` and `resolve-cmd.ts`**
+- [x] **Step 3: Implement in `context.ts` and `resolve-cmd.ts`**
 
 Add `buildToolFlag` to `OpenContextOptions`; compute the effective strategy once in `openContext`; always populate `resolvers` (spread + strategy) and the new `buildTool` field on the returned context; replace the three `"auto"` literals from Task 5 (`isStale` call, `writeManifest` hash in `runBootstrap`, `computeDependencySetHash` in `resolveNow`) with the context's strategy. Extend the `openContext` doc comment: one sentence on convergence (flag > env > config > auto) and one on the fingerprint tie-in.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/context-strategy.test.ts test/unit/context-listings.test.ts test/unit/context-heartbeat.test.ts test/unit/status.test.ts`
 Expected: PASS (new scenarios + every context suite green).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add src/core/query/context.ts src/core/query/resolve-cmd.ts test/unit/context-strategy.test.ts`
 Run: `git commit -m "feat(core): openContext converges build-tool strategy; fingerprint keyed to it"`
@@ -319,7 +319,7 @@ Run: `git commit -m "feat(core): openContext converges build-tool strategy; fing
   - Program-level sticky global option `--build-tool <strategy>` declared with commander `Option(...).choices([...BUILD_TOOL_STRATEGIES])` — invalid values exit 1 with commander's choices error naming all three values; the flag renders with its values in every `--help` options table automatically.
   - `GlobalOptions.buildTool?: string`; `Invocation.buildTool?: string` (raw string, `program.opts()` value); `ctxFor` passes `buildToolFlag: inv.buildTool` into `openContext`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Following the CLI spawn idiom already used by `test/unit/cli-smoke.test.ts` and `test/unit/cli-help.test.ts` (spawn from the repo root via the `--import tsx` form used there):
 
@@ -327,21 +327,21 @@ Following the CLI spawn idiom already used by `test/unit/cli-smoke.test.ts` and 
 2. `jarpeek --help` output contains `--build-tool`.
 3. Flag accepted end-to-end: `jarpeek --build-tool system status --json` exits 0 (the value flows through convergence; no crash on an invalid layer).
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run test/unit/cli-smoke.test.ts test/unit/cli-help.test.ts`
 Expected: FAIL — unknown option error on `--build-tool` (scenarios 1–2 fail).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add the option with choices from `BUILD_TOOL_STRATEGIES` to the program-level chain; add `buildTool` to `GlobalOptions`/`Invocation`/`invocation()`; pass `buildToolFlag` in `ctxFor`. One-line option description naming the semantics: which command runs resolves (system mvn/gradle from PATH, the root wrapper, or system-first with wrapper fallback).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npx vitest run test/unit/cli-smoke.test.ts test/unit/cli-help.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add src/cli/index.ts test/unit/cli-smoke.test.ts test/unit/cli-help.test.ts`
 Run: `git commit -m "feat(cli): --build-tool global flag with tri-state choices"`
@@ -358,19 +358,19 @@ Run: `git commit -m "feat(cli): --build-tool global flag with tri-state choices"
 - Consumes: everything above (final behavior).
 - Produces: docs matching shipped behavior, preserving each doc's altitude (README = overview, design.md = rationale).
 
-- [ ] **Step 1: Update README**
+- [x] **Step 1: Update README**
 
 Configuration table: add rows `--build-tool <auto|system|wrapper>` (CLI global flag; which mvn/gradle runs resolves), `JARPEEK_BUILD_TOOL` (env; beats config, loses to the flag), `.jarpeek/config.json` `"buildTool"` (persistent per-machine default). Add one prose sentence stating the selection default: system mvn/gradle from PATH first, root wrapper as fallback (including after a failed system run), and that flipping the setting re-resolves. Fix any README sentence that says the wrapper is preferred.
 
-- [ ] **Step 2: Update `docs/design.md`**
+- [x] **Step 2: Update `docs/design.md`**
 
 Rewrite the resolve-cascade section's command-selection sentences to system-first with wrapper fallback on absence and failure, name the tri-state knob and its precedence, and add one sentence on the strategy-in-fingerprint rule (a flip forces re-resolution). Keep the section's length and altitude; do not add a changelog.
 
-- [ ] **Step 3: Verify docs against behavior**
+- [x] **Step 3: Verify docs against behavior**
 
 Re-read both files against the shipped flag/help output (`npx tsx src/cli/index.ts --help`); confirm no stale "wrapper is used by default" claims remain (`grep -rn "wrapper" README.md docs/design.md`).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run: `git add README.md docs/design.md`
 Run: `git commit -m "docs: system-first build-tool selection and the --build-tool knob"`
