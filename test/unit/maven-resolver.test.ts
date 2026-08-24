@@ -362,7 +362,7 @@ describe("resolveMaven: failure and degradation reasons", () => {
     expect(resolution).toEqual({ ok: false, artifacts: [], reason: "timeout" });
   });
 
-  it("reports no-mvn when bare mvn fails to spawn despite a passing probe", async () => {
+  it("reports mvn-failed:<spawn error> when bare mvn fails to spawn despite a passing probe", async () => {
     const projectRoot = scratch();
     stubPlatform("darwin");
     const cause = Object.assign(new Error("spawn mvn ENOENT"), { code: "ENOENT" });
@@ -370,7 +370,12 @@ describe("resolveMaven: failure and degradation reasons", () => {
 
     const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
 
-    expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-mvn" });
+    // a spawn failure is an attempt failure, not absence — the probe decides absence
+    expect(resolution).toEqual({
+      ok: false,
+      artifacts: [],
+      reason: 'mvn-failed:failed to spawn "mvn": spawn mvn ENOENT',
+    });
   });
 
   it("reports no-mvn when the PATH probe finds no mvn, without spawning", async () => {
@@ -429,7 +434,8 @@ describe("resolveMaven: wrapper selection", () => {
     const { content } = materialize(m2, CP_UNIX, []);
     const { exec, calls } = cpExec(content);
 
-    const resolution = await resolveMaven(projectRoot, { exec, m2Dir: m2 });
+    // probe pinned off: a system mvn would win the auto order before the wrapper
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: () => false, m2Dir: m2 });
 
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe(join(projectRoot, "mvnw"));
@@ -447,7 +453,8 @@ describe("resolveMaven: wrapper selection", () => {
     const { content } = materialize(m2, CP_UNIX, []);
     const { exec, calls } = cpExec(content);
 
-    const resolution = await resolveMaven(projectRoot, { exec, m2Dir: m2 });
+    // probe pinned off: a system mvn would win the auto order before the wrapper
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: () => false, m2Dir: m2 });
 
     expect(resolution.ok).toBe(true);
     expect(calls[0].cmd).toBe("cmd");
@@ -475,6 +482,230 @@ describe("resolveMaven: wrapper selection", () => {
       "dependency:build-classpath",
       "-Dmdep.outputFile=target/jarpeek-classpath.txt",
     ]);
+  });
+});
+
+describe("resolveMaven: build-tool strategy", () => {
+  /** Executable root wrapper (unix shape). */
+  function writeMvnw(projectRoot: string): void {
+    const path = join(projectRoot, "mvnw");
+    writeFileSync(path, "#!/bin/sh\n");
+    chmodSync(path, 0o755);
+  }
+
+  /** Write `content` as the classpath output for a build-classpath invocation. */
+  async function writeCp(content: string, args: string[], opts: RunOptions): Promise<RunResult> {
+    const rel = args.find((a) => a.startsWith("-Dmdep.outputFile="))!.slice("-Dmdep.outputFile=".length);
+    const file = join(opts.cwd ?? process.cwd(), ...rel.split("/"));
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, content, "utf8");
+    return { stdout: "", stderr: "", code: 0 };
+  }
+
+  /**
+   * exec stub where the SYSTEM command's build-classpath run fails with
+   * `fail` and the wrapper's succeeds by writing `content` (identified via
+   * `effectiveMvn`, so both unix and win32 shapes route correctly).
+   */
+  function systemFailsWrapperSucceeds(content: string, fail: Pick<RunResult, "code" | "stderr">) {
+    return stubExec(async (cmd, args, opts) => {
+      if (args.includes("dependency:sources")) return { stdout: "", stderr: "", code: 0 };
+      if (effectiveMvn({ cmd, args, opts }).cmd === "mvn") {
+        return { stdout: "", stderr: fail.stderr, code: fail.code };
+      }
+      return writeCp(content, args, opts);
+    });
+  }
+
+  it("auto prefers the system mvn when the probe passes and a wrapper exists", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeMvnw(projectRoot);
+    const m2 = join(projectRoot, "m2");
+    const { content } = materialize(m2, CP_UNIX, []);
+    const { exec, calls } = cpExec(content);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls.map((c) => effectiveMvn(c).cmd)).toEqual(["mvn", "mvn"]); // bp + sources, never the wrapper
+  });
+
+  it("auto uses the wrapper alone when the probe finds no system mvn", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeMvnw(projectRoot);
+    const m2 = join(projectRoot, "m2");
+    const { content } = materialize(m2, CP_UNIX, []);
+    const { exec, calls } = cpExec(content);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: () => false, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls.every((c) => c.cmd === join(projectRoot, "mvnw"))).toBe(true);
+  });
+
+  it("auto retries with the wrapper after a failed system run; sources runs on the winner", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeMvnw(projectRoot);
+    const m2 = join(projectRoot, "m2");
+    const { content } = materialize(m2, CP_UNIX, []);
+    const { exec, calls } = systemFailsWrapperSucceeds(content, { code: 1, stderr: "boom" });
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls.map((c) => effectiveMvn(c).cmd)).toEqual([
+      "mvn",
+      join(projectRoot, "mvnw"),
+      join(projectRoot, "mvnw"),
+    ]); // system bp fails → wrapper bp wins → sources on the wrapper
+  });
+
+  it("auto combines both attempts' details when every candidate fails", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeMvnw(projectRoot);
+    // both candidates fail with distinct tails: system stderr "boom", wrapper "wrapfail"
+    const { exec } = stubExec(async (cmd, args) =>
+      args.includes("dependency:sources")
+        ? { stdout: "", stderr: "", code: 0 }
+        : { stdout: "", stderr: cmd === "mvn" ? "boom" : "wrapfail", code: 1 },
+    );
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
+
+    expect(resolution).toEqual({
+      ok: false,
+      artifacts: [],
+      reason: "mvn-failed:system: boom | wrapper: wrapfail",
+    });
+  });
+
+  it("strategy system runs only the system mvn even with a wrapper present", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeMvnw(projectRoot);
+    const m2 = join(projectRoot, "m2");
+    const { content } = materialize(m2, CP_UNIX, []);
+    const { exec, calls } = cpExec(content);
+
+    const resolution = await resolveMaven(projectRoot, {
+      exec,
+      mvnOnPath: PROBE_FOUND,
+      m2Dir: m2,
+      strategy: "system",
+    });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls.every((c) => effectiveMvn(c).cmd === "mvn")).toBe(true);
+  });
+
+  it("strategy system with a failing probe reports no-mvn without spawning", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeMvnw(projectRoot);
+    const { exec, calls } = cpExec("");
+
+    const resolution = await resolveMaven(projectRoot, {
+      exec,
+      mvnOnPath: () => false,
+      strategy: "system",
+    });
+
+    expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-mvn" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("strategy wrapper runs only the wrapper even with a system mvn present", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeMvnw(projectRoot);
+    const m2 = join(projectRoot, "m2");
+    const { content } = materialize(m2, CP_UNIX, []);
+    const { exec, calls } = cpExec(content);
+
+    const resolution = await resolveMaven(projectRoot, {
+      exec,
+      mvnOnPath: PROBE_FOUND,
+      m2Dir: m2,
+      strategy: "wrapper",
+    });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls.every((c) => c.cmd === join(projectRoot, "mvnw"))).toBe(true);
+  });
+
+  it("strategy wrapper with no wrapper file reports no-wrapper without spawning", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    const { exec, calls } = cpExec("");
+
+    const resolution = await resolveMaven(projectRoot, {
+      exec,
+      mvnOnPath: PROBE_FOUND,
+      strategy: "wrapper",
+    });
+
+    expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-wrapper" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("auto advances past a system timeout to a working wrapper", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeMvnw(projectRoot);
+    const m2 = join(projectRoot, "m2");
+    const { content } = materialize(m2, CP_UNIX, []);
+    let first = true;
+    const { exec } = stubExec(async (cmd, args, opts) => {
+      if (args.includes("dependency:sources")) return { stdout: "", stderr: "", code: 0 };
+      if (first && effectiveMvn({ cmd, args, opts }).cmd === "mvn") {
+        first = false;
+        throw new TimeoutError("mvn", 300_000);
+      }
+      return writeCp(content, args, opts);
+    });
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+  });
+
+  it("win32 auto: system first via cmd /c mvn, wrapper retry via cmd /c mvnw.cmd", async () => {
+    const projectRoot = scratch();
+    stubPlatform("win32");
+    writeFileSync(join(projectRoot, "mvnw.cmd"), "@echo off\r\n");
+    const m2 = join(projectRoot, "m2");
+    const { content } = materialize(m2, CP_UNIX, []);
+    const { exec, calls } = systemFailsWrapperSucceeds(content, { code: 1, stderr: "boom" });
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls[0].cmd).toBe("cmd");
+    expect(calls[0].args.slice(0, 2)).toEqual(["/c", "mvn"]);
+    expect(calls[1].cmd).toBe("cmd");
+    expect(calls[1].args.slice(0, 2)).toEqual(["/c", join(projectRoot, "mvnw.cmd")]);
+  });
+
+  it("a partial system success is a win — the wrapper is never retried", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeMvnw(projectRoot);
+    const m2 = join(projectRoot, "m2");
+    const mod = join(projectRoot, "mod");
+    mkdirSync(mod, { recursive: true });
+    writeFileSync(join(mod, "pom.xml"), "<project/>");
+    const { content } = materialize(m2, CP_UNIX, []);
+    const { exec, calls } = reactorCpExec([{ dir: projectRoot, content }], { exit: 1 }); // mod failed
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolution.partial).toContain("mod");
+    expect(calls.every((c) => effectiveMvn(c).cmd === "mvn")).toBe(true);
   });
 });
 
