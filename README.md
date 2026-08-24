@@ -165,8 +165,8 @@ the one named artifact.
 
 | Knob | Meaning |
 | --- | --- |
-| `--build-tool <auto\|system\|wrapper>` | CLI global flag: which mvn/gradle runs resolves (`auto` = system first, wrapper fallback) |
-| `JARPEEK_BUILD_TOOL` | Same tri-state via environment; beats config, loses to the flag |
+| `--build-tool <auto\|system\|wrapper>` | CLI global flag (all subcommands incl. `mcp`): which mvn/gradle runs resolves (`auto` = system first, wrapper fallback) |
+| `JARPEEK_BUILD_TOOL` | Same tri-state via environment; beats config, loses to the flag — the layer to use for harness-spawned MCP servers without server args |
 | `JARPEEK_HOME` | Override the home directory used for user-scoped harness configs |
 | `JARPEEK_PRIME_MODE` | Default `prime` mode (`cli` or `mcp`) when config is absent |
 | `.jarpeek/PRIME.md` | Replaces the agent cheatsheet verbatim, every mode |

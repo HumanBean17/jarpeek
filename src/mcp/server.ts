@@ -221,9 +221,10 @@ export function createMcpServer(ctx: QueryContext): McpServer {
  * until the first tool call — and every diagnostic goes to stderr so the
  * stdout channel carries protocol frames only.
  */
-export async function startMcpServer(projectRoot?: string): Promise<void> {
+export async function startMcpServer(projectRoot?: string, buildToolFlag?: string): Promise<void> {
   const ctx = openContext(projectRoot ?? process.cwd(), {
     onNotice: (msg) => process.stderr.write(`[jarpeek] ${msg}...\n`),
+    buildToolFlag,
   });
   const server = createMcpServer(ctx);
   await server.connect(new StdioServerTransport());

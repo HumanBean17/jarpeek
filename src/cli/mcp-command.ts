@@ -12,6 +12,8 @@ import { MCP_HELP } from "./help.js";
 
 export interface McpOptions {
   project?: string;
+  /** The global --build-tool value, threaded into the server's context. */
+  buildTool?: string;
 }
 
 /** Wire the mcp subcommand onto the program. */
@@ -21,6 +23,7 @@ export function registerMcpCommand(program: Command): void {
     .description("serve the MCP stdio server for this project")
     .addHelpText("after", MCP_HELP)
     .action(async () => {
-      await startMcpServer(program.opts<McpOptions>().project ?? process.cwd());
+      const opts = program.opts<McpOptions>();
+      await startMcpServer(opts.project ?? process.cwd(), opts.buildTool);
     });
 }

@@ -54,6 +54,12 @@ describe("CLI smoke", () => {
     }
   });
 
+  it("--build-tool is rejected on the mcp subcommand too (bad value, exit 1)", async () => {
+    const { stderr, code } = await runCli(["--build-tool", "bogus", "mcp"]);
+    expect(code).toBe(1);
+    expect(stderr).toContain("build-tool");
+  });
+
   it("--build-tool accepts a valid value end-to-end (status exits 0)", async () => {
     const { code } = await runCli(["--build-tool", "system", "status"]);
     expect(code).toBe(0);
