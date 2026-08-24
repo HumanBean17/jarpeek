@@ -94,6 +94,9 @@ Nothing needs to be primed by hand. The first query on a fresh project —
 or after the build files change or a recorded jar vanishes —
 auto-resolves: one bounded Gradle/Maven pass, one stderr notice line
 (plus a 30s heartbeat while it runs), and the manifest is rewritten.
+Resolves run the system `mvn`/`gradle` from PATH first, the project's
+root wrapper as fallback — including a retry after a failed system run —
+so a CI-only wrapper never blocks local use (see `--build-tool`).
 
 A resolve that fails never fails the query: with a manifest on disk it is
 served flagged `stale` with a warning; without one the query answers as a
@@ -162,10 +165,16 @@ the one named artifact.
 
 | Knob | Meaning |
 | --- | --- |
+| `--build-tool <auto\|system\|wrapper>` | CLI global flag: which mvn/gradle runs resolves (`auto` = system first, wrapper fallback) |
+| `JARPEEK_BUILD_TOOL` | Same tri-state via environment; beats config, loses to the flag |
 | `JARPEEK_HOME` | Override the home directory used for user-scoped harness configs |
 | `JARPEEK_PRIME_MODE` | Default `prime` mode (`cli` or `mcp`) when config is absent |
 | `.jarpeek/PRIME.md` | Replaces the agent cheatsheet verbatim, every mode |
-| `.jarpeek/config.json` | Written by `init`; records the wired `primeMode` |
+| `.jarpeek/config.json` | Written by `init`; records the wired `primeMode`; a hand-added `buildTool` field sets the persistent strategy default |
+
+Flipping the build-tool setting re-resolves: the strategy is part of the
+manifest fingerprint, so a manifest produced by the other tool is never
+served as fresh.
 
 `.jarpeek/` is per-machine state (the manifest, prime config) — gitignore
 it (`init` adds it). The manifest is the only derived state jarpeek ever
