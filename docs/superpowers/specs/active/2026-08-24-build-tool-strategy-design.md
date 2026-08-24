@@ -1,6 +1,6 @@
 # Build-tool selection strategy — system-first with wrapper fallback
 
-**Status:** draft
+**Status:** in_progress
 
 ## Problem
 
