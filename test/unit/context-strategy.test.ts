@@ -64,6 +64,7 @@ describe("openContext build-tool strategy", () => {
       resolvers: capturingMaven(seen),
     });
 
+    expect(ctx.buildTool).toBe("wrapper");
     await ctx.ensureReady();
 
     expect(seen).toEqual({ calls: 1, strategy: "wrapper" });
@@ -75,6 +76,7 @@ describe("openContext build-tool strategy", () => {
     const seen = { calls: 0 };
     const ctx = openContext(projectRoot, { resolvers: capturingMaven(seen) });
 
+    expect(ctx.buildTool).toBe("system");
     await ctx.ensureReady();
 
     expect(seen).toEqual({ calls: 1, strategy: "system" });
@@ -87,6 +89,7 @@ describe("openContext build-tool strategy", () => {
     const seen = { calls: 0 };
     const ctx = openContext(projectRoot, { resolvers: capturingMaven(seen) });
 
+    expect(ctx.buildTool).toBe("wrapper");
     await ctx.ensureReady();
 
     expect(seen).toEqual({ calls: 1, strategy: "wrapper" });
@@ -101,6 +104,7 @@ describe("openContext build-tool strategy", () => {
       resolvers: capturingMaven(seen),
     });
 
+    expect(ctx.buildTool).toBe("system");
     await ctx.ensureReady();
 
     expect(seen).toEqual({ calls: 1, strategy: "system" });
@@ -114,6 +118,7 @@ describe("openContext build-tool strategy", () => {
       resolvers: { ...capturingMaven(seen), strategy: "wrapper" },
     });
 
+    expect(ctx.buildTool).toBe("wrapper");
     await ctx.ensureReady();
 
     expect(seen).toEqual({ calls: 1, strategy: "wrapper" });

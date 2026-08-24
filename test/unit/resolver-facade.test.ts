@@ -127,20 +127,20 @@ describe("resolveDependencies", () => {
 
     seen.gradle = undefined;
     seen.maven = undefined;
+    // gradle fails so maven also runs: both halves of the assertion are live
     await resolveDependencies(projectRoot, {
       includeJdk: false,
       gradle: async (_root, opts) => {
         seen.gradle = opts?.strategy;
-        return { ok: true, artifacts: [artifact("g:g:1")] };
+        return { ok: false, artifacts: [], reason: "gradle-failed:nope" };
       },
       maven: async (_root, opts) => {
         seen.maven = opts?.strategy;
-        return { ok: false, artifacts: [], reason: "mvn-failed:nope" };
+        return { ok: true, artifacts: [artifact("g:g:1")] };
       },
     });
     expect(seen).toEqual({ gradle: undefined, maven: undefined });
   });
-
 
   it("gradle-only project: gradle result wins, maven and cache scan never run", async () => {
     const dir = scratch();

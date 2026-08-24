@@ -690,6 +690,75 @@ describe("resolveMaven: build-tool strategy", () => {
     expect(calls[1].args.slice(0, 2)).toEqual(["/c", join(projectRoot, "mvnw.cmd")]);
   });
 
+  it("a failed system attempt's leftover classpath file never passes for the wrapper's output", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeMvnw(projectRoot);
+    const m2 = join(projectRoot, "m2");
+    const { content, jars } = materialize(m2, CP_UNIX, []);
+    // system: writes an unparseable (non-m2) cp file AND fails; wrapper: valid cp
+    const { exec } = stubExec(async (cmd, args, opts) => {
+      if (args.includes("dependency:sources")) return { stdout: "", stderr: "", code: 0 };
+      if (effectiveMvn({ cmd, args, opts: opts ?? {} }).cmd === "mvn") {
+        const file = join(projectRoot, "target", "jarpeek-classpath.txt");
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, "/opt/custom/repo/org/junk/j/1.0/j-1.0.jar", "utf8");
+        return { stdout: "", stderr: "sysboom", code: 1 };
+      }
+      const rel = args.find((a) => a.startsWith("-Dmdep.outputFile="))!.slice("-Dmdep.outputFile=".length);
+      const file = join(projectRoot, ...rel.split("/"));
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, content, "utf8");
+      return { stdout: "", stderr: "", code: 0 };
+    });
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    const coordinates = resolution.artifacts.map((a) => a.coordinates);
+    expect(coordinates).toContain(SPRING_TX); // the wrapper's fixture entries won
+    expect(coordinates).not.toContain("org.junk:j:1.0"); // the system's junk did not
+    expect(jars.length).toBeGreaterThan(0);
+  });
+
+  it("combined failure carries heterogeneous details: timeout | stderr tail", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeMvnw(projectRoot);
+    const { exec } = stubExec(async (cmd, args) => {
+      if (args.includes("dependency:sources")) return { stdout: "", stderr: "", code: 0 };
+      if (cmd === "mvn") throw new TimeoutError("mvn", 300_000);
+      return { stdout: "", stderr: "boom", code: 1 };
+    });
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
+
+    expect(resolution).toEqual({
+      ok: false,
+      artifacts: [],
+      reason: "mvn-failed:system: timeout | wrapper: boom",
+    });
+  });
+
+  it("combined failure uses the exit marker when both attempts print nothing", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeMvnw(projectRoot);
+    const { exec } = stubExec(async (cmd, args) =>
+      args.includes("dependency:sources")
+        ? { stdout: "", stderr: "", code: 0 }
+        : { stdout: "", stderr: "", code: 1 },
+    );
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
+
+    expect(resolution).toEqual({
+      ok: false,
+      artifacts: [],
+      reason: "mvn-failed:system: exit 1 (no output) | wrapper: exit 1 (no output)",
+    });
+  });
+
   it("a partial system success is a win — the wrapper is never retried", async () => {
     const projectRoot = scratch();
     stubPlatform("darwin");

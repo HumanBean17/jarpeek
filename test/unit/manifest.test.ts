@@ -106,12 +106,16 @@ describe("computeDependencySetHash", () => {
 
   it("includes the strategy in the fingerprint: stable per value, different across values", async () => {
     const root = tmpProjectRoot();
-    writeFileSync(join(root, "pom.xml"), "<project/>");
+    try {
+      writeFileSync(join(root, "pom.xml"), "<project/>");
 
-    const auto = await computeDependencySetHash(root, "auto");
-    expect(await computeDependencySetHash(root, "auto")).toBe(auto);
-    expect(await computeDependencySetHash(root, "wrapper")).not.toBe(auto);
-    expect(await computeDependencySetHash(root, "system")).not.toBe(auto);
+      const auto = await computeDependencySetHash(root, "auto");
+      expect(await computeDependencySetHash(root, "auto")).toBe(auto);
+      expect(await computeDependencySetHash(root, "wrapper")).not.toBe(auto);
+      expect(await computeDependencySetHash(root, "system")).not.toBe(auto);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -207,11 +211,15 @@ describe("readManifest / writeManifest", () => {
 describe("isStale", () => {
   it("a strategy change alone flips staleness", async () => {
     const root = tmpProjectRoot();
-    writeFileSync(join(root, "pom.xml"), "<project/>");
-    const m = manifestFor(await computeDependencySetHash(root, "wrapper"), [artifact({})]);
+    try {
+      writeFileSync(join(root, "pom.xml"), "<project/>");
+      const m = manifestFor(await computeDependencySetHash(root, "wrapper"), [artifact({})]);
 
-    expect(await isStale(root, m, "auto")).toBe(true);
-    expect(await isStale(root, m, "wrapper")).toBe(false);
+      expect(await isStale(root, m, "auto")).toBe(true);
+      expect(await isStale(root, m, "wrapper")).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("fresh manifest is not stale; missing artifact jar or changed build file is", async () => {

@@ -556,6 +556,39 @@ describe("resolveGradle: build-tool strategy", () => {
     expect(calls[0].cmd).toBe("/opt/gradle/bin/gradle");
   });
 
+  it("combined failure carries heterogeneous details: timeout | stderr tail", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeGradlew(projectRoot);
+    const { exec } = stubExec(async (cmd) => {
+      if (cmd === "gradle") throw new TimeoutError("gradle", 180_000);
+      return { stdout: "", stderr: "boom", code: 1 };
+    });
+
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
+
+    expect(resolution).toEqual({
+      ok: false,
+      artifacts: [],
+      reason: "gradle-failed:system: timeout | wrapper: boom",
+    });
+  });
+
+  it("auto advances past a system timeout to a working wrapper", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    writeGradlew(projectRoot);
+    const { exec } = stubExec(async (cmd) =>
+      cmd === "gradle"
+        ? Promise.reject(new TimeoutError("gradle", 180_000))
+        : Promise.resolve({ stdout: SAMPLE_OUTPUT, stderr: "", code: 0 }),
+    );
+
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
+
+    expect(resolution.ok).toBe(true);
+  });
+
   it("win32 auto: system first via cmd /c gradle, wrapper retry via cmd /c gradlew.bat", async () => {
     const projectRoot = scratch();
     stubPlatform("win32");
