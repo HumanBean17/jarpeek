@@ -36,3 +36,20 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  # The dependency floors in package.json are load-bearing for users behind
+  # lagging registry mirrors — this job installs the oldest allowed pair and
+  # proves the whole contract (types + goldens + schema-error behavior) holds
+  # there too. Keep these pins in sync with the floors in package.json.
+  floor-compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm install --no-save @modelcontextprotocol/sdk@1.21.0 zod@3.25.76
+      - run: npm run typecheck
+      - run: npm test

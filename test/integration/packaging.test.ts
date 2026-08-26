@@ -77,6 +77,7 @@ describe("packaging", () => {
       "@clack/prompts",
       "@modelcontextprotocol/sdk",
       "commander",
+      "zod",
     ]);
   });
 
