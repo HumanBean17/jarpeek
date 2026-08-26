@@ -77,6 +77,32 @@ one they answer as a miss.
   a planned extension, not a feature: on a miss, jarpeek reports what it
   searched and stops rather than fetching.
 
+## Dependency floors
+
+Users sit behind registry mirrors that lag npm by months — jarpeek met
+that as an install failure, because it demanded a then-one-month-old MCP
+SDK. The floors exist to make the oldest installable pair a tested
+contract, not a hope:
+
+- `@modelcontextprotocol/sdk ^1.21.0` — the registerTool API jarpeek
+  speaks was complete by 1.12, but 1.21 is where invalid tool arguments
+  started answering as a tool error (`isError: true`) instead of a
+  protocol-level rejection; that behavior is asserted by the
+  `search_symbols` schema test and is the real floor. The SDK's 2.x line
+  ships under new scoped package names, so `^1` can never resolve into
+  a breaking upgrade.
+- `zod ^3.25.1 || ^4.0.0` — declared because `src/mcp/server.ts`
+  imports it directly; before this it resolved only as a hoisted
+  transitive of the SDK. The range intersects every SDK in `^1.21` so
+  npm always dedupes to a single zod instance (3.25.x with older SDKs,
+  4.x with 1.23+). `.1` skips 3.25.0 — a publish whose tarball shipped
+  no `dist/` at all. Dev pins older than 3.25.76 hit TS2589
+  ("type instantiation is excessively deep") under pre-1.23 SDK types.
+- CI (`floor-compat` job) installs exactly `sdk@1.21.0 + zod@3.25.76`
+  and runs the full suite — the golden-pinned MCP contract is proven at
+  both ends of the range on every push. The pins are kept in sync with
+  the manifest floors by hand.
+
 ## Migrating from 0.1.x
 
 0.2.0 was breaking: the eager index and its cache are gone. A v1

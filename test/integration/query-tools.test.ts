@@ -350,6 +350,9 @@ describe("searchSymbols", () => {
 });
 
 describe("search_symbols MCP schema", () => {
+  // this contract is why package.json floors the SDK at ^1.21.0: older SDKs
+  // rejected invalid args at the protocol level (-32602) instead of answering
+  // with a tool error the model can see and self-correct from
   it("a call without artifact is a tool error from schema validation", async () => {
     const client = await connectClient(c.ctx);
     const result = await client.callTool({ name: "search_symbols", arguments: { query: "run" } });
