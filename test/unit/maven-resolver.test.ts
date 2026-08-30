@@ -1057,7 +1057,7 @@ describe("resolveMaven: relocated m2 roots (GH#12)", () => {
     expect(indexBy(resolution.artifacts)(SPRING_TX).binaryJar).toBe(
       join(m2, "org", "springframework", "spring-tx", "6.1.4", "spring-tx-6.1.4.jar"),
     );
-    expect(resolution.warnings).toEqual([`maven: m2-anchor-derived:${m2}`]);
+    expect(resolution.warnings).toEqual([`maven: m2-anchor-derived:${m2.replaceAll("\\", "/")}`]);
   });
 
   it("a single layout-shaped entry under an unknown root is not derived (quorum 2)", async () => {
@@ -1102,7 +1102,7 @@ describe("resolveMaven: derivation robustness", () => {
     expect(resolution.ok).toBe(true);
     expect(indexBy(resolution.artifacts)("org.a:alpha:1.0").binaryJar).toBe(ext1);
     expect(indexBy(resolution.artifacts)("com.b:beta:2.0").binaryJar).toBe(ext2);
-    expect(resolution.warnings).toEqual([`maven: m2-anchor-derived:${m2}`]);
+    expect(resolution.warnings).toEqual([`maven: m2-anchor-derived:${m2.replaceAll("\\", "/")}`]);
   });
 
   it("a stray layout-shaped jar does not drag the anchor to a shared ancestor", async () => {
@@ -1117,7 +1117,7 @@ describe("resolveMaven: derivation robustness", () => {
     const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
 
     expect(resolution.ok).toBe(true);
-    expect(resolution.warnings).toEqual([`maven: m2-anchor-derived:${repo}`]);
+    expect(resolution.warnings).toEqual([`maven: m2-anchor-derived:${repo.replaceAll("\\", "/")}`]);
     expect(resolution.artifacts.some((a) => a.coordinates === "com.v:stray:9.9")).toBe(false);
     expect(indexBy(resolution.artifacts)("org.a:alpha:1.0").binaryJar).toBe(inRepo);
   });
@@ -1132,7 +1132,7 @@ describe("resolveMaven: derivation robustness", () => {
     const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
 
     expect(resolution.ok).toBe(true);
-    expect(resolution.warnings).toEqual([`maven: m2-anchor-derived:${m2}`]);
+    expect(resolution.warnings).toEqual([`maven: m2-anchor-derived:${m2.replaceAll("\\", "/")}`]);
     expect(indexBy(resolution.artifacts)("org.springframework:spring-tx:6.1.4").binaryJar).toBe(spring);
     expect(indexBy(resolution.artifacts)("org.springframework:spring-core:6.1.4").binaryJar).toBe(other);
   });

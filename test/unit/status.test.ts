@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openContext, type QueryContext } from "../../src/core/query/context.js";
-import { renderStatus } from "../../src/cli/index.js";
+import { renderStatus } from "../../src/cli/render.js";
 import { status } from "../../src/core/query/status.js";
 import { computeDependencySetHash, writeManifest } from "../../src/index/manifest.js";
 import type { DependencyArtifact } from "../../src/core/types.js";

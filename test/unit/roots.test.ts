@@ -118,10 +118,12 @@ describe("effectiveM2Roots", () => {
   it("settings.xml localRepository is honored, with ${user.home} interpolated", () => {
     clearEnv();
     const settings = writeSettings("${user.home}/relocated/m2");
-    expect(effectiveM2Roots(scratch(), { settingsPath: settings })).toEqual([
-      { path: join(homedir(), "relocated", "m2"), source: "settings" },
-      { path: join(homedir(), ".m2", "repository"), source: "default" },
-    ]);
+    // separators normalize before comparing: the interpolated value keeps the
+    // xml's `/` verbatim while the expectation is join-built (win32 `\`)
+    const [first, ...rest] = effectiveM2Roots(scratch(), { settingsPath: settings });
+    expect(first!.path.replaceAll("\\", "/")).toBe(join(homedir(), "relocated", "m2").replaceAll("\\", "/"));
+    expect(first!.source).toBe("settings");
+    expect(rest).toEqual([{ path: join(homedir(), ".m2", "repository"), source: "default" }]);
   });
 
   it("a relative localRepository is dropped and a missing settings.xml falls to default", () => {
@@ -180,7 +182,7 @@ describe("effectiveGradleCacheRoot", () => {
     writeConfig(r, JSON.stringify({ gradleCacheDir: "/project/gradle" }));
     vi.stubEnv("GRADLE_USER_HOME", "/g");
     expect(effectiveGradleCacheRoot(r)).toEqual({
-      path: "/g/caches/modules-2/files-2.1",
+      path: join("/g", "caches", "modules-2", "files-2.1"),
       source: "env",
     });
     vi.stubEnv("JARPEEK_GRADLE_CACHE_DIR", "/explicit/gradle");
