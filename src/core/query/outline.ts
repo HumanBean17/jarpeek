@@ -129,7 +129,7 @@ function omitJavadoc(row: Declaration): Declaration {
 /** True when the served manifest no longer matches the build files / artifact paths. */
 export async function servedStale(ctx: QueryContext): Promise<boolean> {
   const manifest = await ctx.manifest();
-  return manifest !== null && isStale(ctx.projectRoot, manifest, ctx.buildTool);
+  return manifest !== null && isStale(ctx.projectRoot, manifest, ctx.buildTool, ctx.roots.m2[0].path);
 }
 
 /** Merge bootstrap warnings with per-call degradation, without duplicates. */

@@ -322,3 +322,67 @@ describe("resolveDependencies", () => {
     expect(out.warnings).toContain("degraded-to-cache-scan");
   });
 });
+
+describe("resolveDependencies: roots threading and derivation warnings", () => {
+  /** A scratch maven project so detection reaches the maven fake. */
+  function mavenProject(): string {
+    const r = scratch();
+    writeFileSync(join(r, "pom.xml"), "<project></project>\n");
+    return r;
+  }
+
+  it("merges a winning maven resolution's warnings into the outcome", async () => {
+    const projectRoot = mavenProject();
+    const { opts } = fakes({
+      maven: { ok: true, artifacts: [artifact("g:a:1")], warnings: ["maven: m2-anchor-derived:/x"] },
+    });
+
+    const outcome = await resolveDependencies(projectRoot, opts);
+
+    expect(outcome.viaCacheScan).toBe(false);
+    expect(outcome.warnings).toContain("maven: m2-anchor-derived:/x");
+  });
+
+  it("threads roots to maven (full list) and the cache scan (primary + gradle + projectRoot)", async () => {
+    const projectRoot = mavenProject();
+    const seen: { maven?: unknown; cacheScan?: unknown } = {};
+    const opts: ResolveDependenciesOptions = {
+      maven: async (_root, o) => {
+        seen.maven = o;
+        return { ok: false, artifacts: [], reason: "no-classpath" };
+      },
+      cacheScan: async (o) => {
+        seen.cacheScan = o;
+        return { artifacts: [], warnings: [] };
+      },
+      jdk: async () => ({ artifact: null, warnings: [] }),
+      roots: { m2: ["/primary/m2", "/secondary/m2"], gradle: "/gradle/cache" },
+    };
+
+    await resolveDependencies(projectRoot, opts);
+
+    expect(seen.maven).toMatchObject({ roots: { m2: ["/primary/m2", "/secondary/m2"] } });
+    expect(seen.cacheScan).toMatchObject({
+      projectRoot,
+      m2Dir: "/primary/m2",
+      gradleDir: "/gradle/cache",
+    });
+  });
+
+  it("passes projectRoot to the cache scan even without threaded roots", async () => {
+    const projectRoot = mavenProject();
+    const seen: { cacheScan?: unknown } = {};
+    const opts: ResolveDependenciesOptions = {
+      maven: async () => ({ ok: false, artifacts: [], reason: "no-classpath" }),
+      cacheScan: async (o) => {
+        seen.cacheScan = o;
+        return { artifacts: [], warnings: [] };
+      },
+      jdk: async () => ({ artifact: null, warnings: [] }),
+    };
+
+    await resolveDependencies(projectRoot, opts);
+
+    expect(seen.cacheScan).toMatchObject({ projectRoot });
+  });
+});

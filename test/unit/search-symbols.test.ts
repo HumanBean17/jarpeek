@@ -52,13 +52,16 @@ afterAll(() => {
 async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContext> {
   const projectRoot = freshRoot();
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+  // context first: the manifest must hash under the same primary m2 root
+  // the context's convergence will check staleness with
+  const ctx = openContext(projectRoot, { onNotice: () => {} });
   await writeManifest(projectRoot, {
     version: 2,
     resolvedAt: "",
-    dependencySetHash: await computeDependencySetHash(projectRoot, "auto"),
+    dependencySetHash: await computeDependencySetHash(projectRoot, "auto", ctx.roots.m2[0].path),
     artifacts,
   });
-  return openContext(projectRoot, { onNotice: () => {} });
+  return ctx;
 }
 
 /** Hand-built LocateDeps: a real ListingService over the given artifacts plus a manifest literal. */

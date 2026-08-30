@@ -40,13 +40,14 @@ afterAll(() => {
 async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContext> {
   const projectRoot = freshRoot();
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+  const ctx = openContext(projectRoot, { onNotice: () => {} });
   await writeManifest(projectRoot, {
     version: 2,
     resolvedAt: "",
-    dependencySetHash: await computeDependencySetHash(projectRoot, "auto"),
+    dependencySetHash: await computeDependencySetHash(projectRoot, "auto", ctx.roots.m2[0].path),
     artifacts,
   });
-  return openContext(projectRoot, { onNotice: () => {} });
+  return ctx;
 }
 
 const DEMO_SOURCES: DependencyArtifact = {

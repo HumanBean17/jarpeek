@@ -10,7 +10,10 @@
  * sibling never installed to the local repository). `-fae` keeps the reactor
  * going past a failing module; its failure degrades the resolution (`partial`)
  * instead of discarding the modules that resolved. The collected files are
- * reverse-mapped into m2 coordinates by path layout. `dependency:sources`
+ * reverse-mapped into m2 coordinates by path layout, anchored on the roots
+ * convergence's candidate list (see `roots.ts`: env, configs, settings.xml,
+ * default) — and when no candidate matches, on an anchor derived from mvn's
+ * own output (quorum-guaranteed, reported as a warning). `dependency:sources`
  * then runs once at the root to populate the local repository with
  * `-sources` jars; it is best-effort — its exit code is ignored.
  *
@@ -29,6 +32,7 @@ import { homedir } from "node:os";
 import { delimiter, join, relative } from "node:path";
 import type { DependencyArtifact } from "../core/types.js";
 import { moduleCoordinates } from "./module-coordinate.js";
+import { effectiveM2Roots } from "./roots.js";
 import type { BuildToolStrategy } from "./strategy.js";
 import { runWithTimeout, SpawnError, TimeoutError, type RunResult } from "../util/exec.js";
 
@@ -47,14 +51,28 @@ export interface MavenResolution {
    * dependencies are missing. Names the failed module directories.
    */
   partial?: string;
+  /**
+   * Non-fatal observations the caller should surface as warnings — today
+   * only `maven: m2-anchor-derived:<path>`: the anchor came from mvn's own
+   * output because no configured root matched (see `roots.ts`).
+   */
+  warnings?: string[];
 }
 
 export interface ResolveMavenOptions {
   timeoutMs?: number;
   /** Injectable for tests; defaults to the real spawner. */
   exec?: typeof runWithTimeout;
-  /** m2 repository root anchoring the layout reverse-map; default `~/.m2/repository`. */
+  /**
+   * m2 repository root anchoring the layout reverse-map; top-precedence
+   * override of the roots convergence (see `roots.ts`).
+   */
   m2Dir?: string;
+  /**
+   * The full m2 anchor list, threaded by the resolver facade — replaces the
+   * self-computed convergence entirely when present.
+   */
+  roots?: { m2: string[] };
   /** Injectable PATH probe consulted whenever the system mvn is a candidate. */
   mvnOnPath?: () => boolean;
   /** Which mvn runs resolves; undefined means `auto` (system first, wrapper fallback). */
@@ -243,21 +261,84 @@ function matchModuleClasses(raw: string, modules: string[]): string | null {
   return null;
 }
 
+/** Whether a forward-slashed entry's last three segments satisfy the m2 filename contract (`<a>/<v>/<a>-<v>.jar`). */
+function isLayoutShaped(normalized: string): boolean {
+  const parts = normalized.split("/");
+  if (parts.length < 4) return false;
+  const [artifact, version, file] = parts.slice(-3);
+  return file === `${artifact}-${version}.jar`;
+}
+
+/**
+ * A directory segment that names a repository: any `[._-]`-delimited part
+ * that is `m2`, `repo`, or `repository` with optional trailing digits —
+ * `m2`, `repository`, `custom-m2`, `repo2`, `unknown-m2`, `m2.repo`.
+ */
+function isRepoSegment(segment: string): boolean {
+  return segment.split(/[._-]+/).some((part) => /^(m2|repo|repository)\d*$/i.test(part));
+}
+
+/**
+ * The anchor mvn's own output reveals when no configured root matched.
+ * Each layout-shaped entry proposes every repository-named path boundary
+ * above its layout tail as a candidate anchor; the candidate backed by the
+ * most distinct entries wins (deepest breaks ties), at a quorum of two.
+ * Majority voting is what keeps a stray system-scoped jar — which proposes
+ * nothing, or proposes a boundary of its own — from dragging the anchor to
+ * a shared ancestor and swallowing itself plus everyone's group prefix;
+ * requiring a repository-named boundary refuses derivation outright for a
+ * root too blandly named to recognize, preserving the loud
+ * `classpath-not-in-m2-layout` failure rather than guessing coordinates.
+ * A lone layout-shaped entry never reaches quorum: the protection the
+ * fixed anchor always provided.
+ */
+function voteDerivedAnchor(entries: string[]): string | undefined {
+  const voters = [...new Set(entries.map(toForwardSlashes).filter(isLayoutShaped))];
+  if (voters.length < 2) return undefined;
+  const votes = new Map<string, Set<string>>();
+  for (const voter of voters) {
+    const parts = voter.split("/");
+    for (let depth = parts.length - 4; depth >= 1; depth--) {
+      if (!isRepoSegment(parts[depth - 1])) continue;
+      const anchor = parts.slice(0, depth).join("/");
+      const distinct = votes.get(anchor) ?? new Set<string>();
+      distinct.add(voter);
+      votes.set(anchor, distinct);
+    }
+  }
+  let best: { anchor: string; count: number; depth: number } | undefined;
+  for (const [anchor, distinct] of votes) {
+    const depth = anchor.split("/").length;
+    if (
+      best === undefined ||
+      distinct.size > best.count ||
+      (distinct.size === best.count && depth > best.depth)
+    ) {
+      best = { anchor, count: distinct.size, depth };
+    }
+  }
+  return best !== undefined && best.count >= 2 ? best.anchor : undefined;
+}
+
 /**
  * Parse the collected build-classpath outputs into artifacts, deduplicated by
- * coordinates with the first module in discovery order winning. A sibling
- * reactor module appears as its `<module>/target/classes` output — mapped to
- * a `kind: "module"` artifact on the module directory itself, so its sources
- * are indexed in place exactly like a Gradle module's. An output that is
- * missing or empty contributes nothing; only when every output was empty is
- * the resolution a `no-classpath` failure (the root POM may legitimately be
- * a dep-less aggregator whose submodules carry everything). Outputs that
- * carried entries but matched neither m2 layout nor a module directory mean
- * the local repository was relocated out of `~/.m2/repository` — reported as
- * a named failure rather than a misleading empty success.
+ * coordinates with the first module in discovery order winning. Each entry is
+ * matched against EVERY anchor in `m2Dirs` (the roots convergence's candidate
+ * list — env, configs, settings.xml, default) with the first match winning.
+ * A sibling reactor module appears as its `<module>/target/classes` output —
+ * mapped to a `kind: "module"` artifact on the module directory itself, so
+ * its sources are indexed in place exactly like a Gradle module's. An output
+ * that is missing or empty contributes nothing; only when every output was
+ * empty is the resolution a `no-classpath` failure (the root POM may
+ * legitimately be a dep-less aggregator whose submodules carry everything).
+ * Entries that carried content but matched no anchor and no module trigger
+ * anchor DERIVATION: mvn's own output votes on the root it used (quorum 2),
+ * the winner joins the anchor list, and the resolution carries a
+ * `m2-anchor-derived` warning. Only when derivation also fails does the
+ * resolution report `classpath-not-in-m2-layout`.
  */
-function parseOutputs(outputs: string[], m2Dir: string, projectRoot: string, modules: string[]): MavenResolution {
-  const byCoordinates = new Map<string, DependencyArtifact>();
+function parseOutputs(outputs: string[], m2Dirs: string[], projectRoot: string, modules: string[]): MavenResolution {
+  const entries: string[] = [];
   let sawContent = false;
   for (const output of outputs) {
     let content: string;
@@ -268,8 +349,20 @@ function parseOutputs(outputs: string[], m2Dir: string, projectRoot: string, mod
     }
     if (content.trim().length === 0) continue;
     sawContent = true;
-    for (const raw of splitClasspath(content)) {
-      const hit = parseM2Entry(raw, m2Dir);
+    entries.push(...splitClasspath(content));
+  }
+
+  /** One anchored mapping pass: first matching anchor wins per entry. */
+  const map = (anchors: string[]): { byCoordinates: Map<string, DependencyArtifact>; anchored: number } => {
+    const byCoordinates = new Map<string, DependencyArtifact>();
+    let anchored = 0;
+    for (const raw of entries) {
+      let hit: M2Coordinates | null = null;
+      for (const anchor of anchors) {
+        hit = parseM2Entry(raw, anchor);
+        if (hit !== null) break;
+      }
+      if (hit !== null) anchored++;
       if (hit === null) {
         // a reactor sibling's compiled output is the module itself, not an
         // external jar; anything else (system-scoped jars, IDE caches) is
@@ -302,12 +395,31 @@ function parseOutputs(outputs: string[], m2Dir: string, projectRoot: string, mod
         ...(sourcesJar !== undefined ? { sourcesJar } : {}),
       });
     }
+    return { byCoordinates, anchored };
+  };
+
+  // derivation keys on ANCHOR matches, not artifacts: module `target/classes`
+  // entries populate the same map without ever anchoring, and must not mask
+  // a wholly unanchored classpath (its externals would silently vanish from
+  // an ok resolution)
+  let { byCoordinates, anchored } = map(m2Dirs);
+  let derivedWarning: string | undefined;
+  if (sawContent && anchored === 0) {
+    const derived = voteDerivedAnchor(entries);
+    if (derived !== undefined) {
+      byCoordinates = map([...m2Dirs, derived]).byCoordinates;
+      derivedWarning = `maven: m2-anchor-derived:${derived}`;
+    }
   }
   if (!sawContent) return { ok: false, artifacts: [], reason: "no-classpath" };
   if (byCoordinates.size === 0) {
     return { ok: false, artifacts: [], reason: "mvn-failed:classpath-not-in-m2-layout" };
   }
-  return { ok: true, artifacts: [...byCoordinates.values()] };
+  return {
+    ok: true,
+    artifacts: [...byCoordinates.values()],
+    ...(derivedWarning !== undefined ? { warnings: [derivedWarning] } : {}),
+  };
 }
 
 /** Absolute path of a directory's classpath output file. */
@@ -350,7 +462,7 @@ export async function resolveMaven(
 ): Promise<MavenResolution> {
   const exec = opts.exec ?? runWithTimeout;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const m2Dir = opts.m2Dir ?? join(homedir(), ".m2", "repository");
+  const m2Dirs = opts.roots?.m2 ?? effectiveM2Roots(projectRoot, { m2Dir: opts.m2Dir }).map((c) => c.path);
   const strategy = opts.strategy ?? "auto";
 
   const wrapper = wrapperCandidate(projectRoot);
@@ -422,7 +534,7 @@ export async function resolveMaven(
       }
 
       const outputs = targets.filter((target) => existsSync(target));
-      const parsed = parseOutputs(outputs, m2Dir, projectRoot, modules);
+      const parsed = parseOutputs(outputs, m2Dirs, projectRoot, modules);
       if (!parsed.ok) {
         // nothing survived this candidate: with a non-zero exit the mvn
         // failure is the story, else every module simply produced an empty

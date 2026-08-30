@@ -51,3 +51,39 @@ export function numberLines(lines: string[], start = 1): string[] {
 
 /** Uniform truncation for tabular cell values (single-line strings). */
 export const clipCell = (text: string): string => clip(text, CELL_MAX);
+
+/**
+ * The status table: KEY/VALUE rows for the manifest, the effective
+ * resolver roots (rendered `<path> (<source>)` — the layer is the
+ * diagnostic), and the JVM. Lives here, beside the other renderers,
+ * because importing the CLI entry module from a test would execute it.
+ */
+export function renderStatus(result: {
+  projectRoot: string;
+  manifest: {
+    present: boolean;
+    resolvedAt?: string;
+    stale: boolean;
+    artifactCount: number;
+    dependencySetHash?: string;
+  };
+  resolver: { m2Root: { path: string; source: string }; gradleCacheRoot: { path: string; source: string } };
+  jvm: { available: boolean; version?: string };
+}): string {
+  return renderTable([
+    ["KEY", "VALUE"],
+    ["projectRoot", result.projectRoot],
+    ["manifest.present", String(result.manifest.present)],
+    ["manifest.resolvedAt", result.manifest.resolvedAt ?? ""],
+    ["manifest.stale", String(result.manifest.stale)],
+    ["manifest.artifactCount", String(result.manifest.artifactCount)],
+    ["manifest.dependencySetHash", result.manifest.dependencySetHash ?? ""],
+    ["resolver.m2Root", `${result.resolver.m2Root.path} (${result.resolver.m2Root.source})`],
+    [
+      "resolver.gradleCacheRoot",
+      `${result.resolver.gradleCacheRoot.path} (${result.resolver.gradleCacheRoot.source})`,
+    ],
+    ["jvm.available", String(result.jvm.available)],
+    ["jvm.version", result.jvm.version ?? ""],
+  ]);
+}

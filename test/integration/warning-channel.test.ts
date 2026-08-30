@@ -166,7 +166,7 @@ describe("zero-artifact manifest scoping", () => {
     await writeManifest(projectRoot, {
       version: 2,
       resolvedAt: new Date().toISOString(),
-      dependencySetHash: await computeDependencySetHash(projectRoot, "auto"),
+      dependencySetHash: await computeDependencySetHash(projectRoot, "auto", ctx.roots.m2[0].path),
       artifacts: [],
     });
 

@@ -121,22 +121,11 @@ afterAll(() => {
   for (const dir of roots) rmSync(dir, { recursive: true, force: true });
 });
 
-/** Open a context over a manifest written BEFORE construction (fresh, non-stale). */
+/** Open a context over a manifest hashing under the context's own primary root (fresh, non-stale). */
 async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContext> {
   const projectRoot = freshRoot();
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
-  await writeManifest(projectRoot, {
-    version: 2,
-    resolvedAt: "",
-    dependencySetHash: await computeDependencySetHash(projectRoot, "auto"),
-    artifacts,
-  });
-  // resolvers stubbed to fail-and-degrade: the stale-index suites bootstrap
-  // after making their manifests stale, and the REAL cascade's duration is a
-  // fact about the host (windows CI images ship Gradle — a cold daemon runs
-  // past every test timeout). Degrade-to-cache-scan instantly, serve stale —
-  // the behavior under test.
-  return openContext(projectRoot, {
+  const ctx = openContext(projectRoot, {
     onNotice: () => {},
     resolvers: {
       gradle: async () => ({ ok: false, artifacts: [], reason: "no-wrapper-no-gradle" }),
@@ -145,6 +134,15 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
       includeJdk: false,
     },
   });
+  // the manifest hashes under the context's own primary m2 root, so the
+  // same convergence checks it back (fresh, non-stale)
+  await writeManifest(projectRoot, {
+    version: 2,
+    resolvedAt: "",
+    dependencySetHash: await computeDependencySetHash(projectRoot, "auto", ctx.roots.m2[0].path),
+    artifacts,
+  });
+  return ctx;
 }
 
 async function demoSource(): Promise<string> {

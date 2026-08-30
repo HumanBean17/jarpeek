@@ -49,6 +49,30 @@ of a cache-scan-flagged manifest; **queries never adopt a cache-scan
 manifest** — with a manifest on disk they are served from it, without
 one they answer as a miss.
 
+Cache roots converge through the same shape (`roots.ts`): an ordered
+candidate list — `JARPEEK_M2_DIR`, `M2_REPO`, the project config's
+`m2Dir`, the machine-wide `~/.config/jarpeek/config.json`, maven's own
+`settings.xml` `<localRepository>`, then the default `~/.m2/repository`
+— with env beating config for the same hand-authored-machine-fact
+reason. The gradle side is a single root, not a list:
+`JARPEEK_GRADLE_CACHE_DIR`, then the `GRADLE_USER_HOME`-derived
+`caches/modules-2/files-2.1`, then the two configs, then the default.
+The Maven resolver anchors each classpath entry against every candidate
+(a classpath spanning several roots parses completely); when no entry
+anchors anywhere, it derives the root from mvn's own output — each
+layout-shaped entry proposes its repository-named path boundaries, the
+boundary backed by the most distinct entries wins at a quorum of two,
+and a root too blandly named to recognize refuses derivation outright,
+preserving the loud `classpath-not-in-m2-layout` failure rather than
+guessing coordinates — and a successful derivation carries
+`m2-anchor-derived:<path>` as a warning, so a relocated repository
+resolves correctly even with nothing configured instead of degrading
+into a whole-directory cache scan (GH#12). The cache scan walks the
+convergence's primary m2 root. The primary root joins the manifest
+fingerprint beside the strategy, with the same re-resolve-on-flip and
+one-time-stale-for-upgraders consequences; `status` reports both roots
+with the layer each came from.
+
 ## Failure and degradation contract
 
 - A resolve that fails never fails the query. With a manifest on disk it

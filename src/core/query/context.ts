@@ -37,6 +37,7 @@ import {
 } from "../../index/manifest.js";
 import { resolveDependencies, type ResolveDependenciesOptions } from "../../resolver/index.js";
 import { effectiveBuildToolStrategy, type BuildToolStrategy } from "../../resolver/strategy.js";
+import { effectiveRoots, type EffectiveRoots } from "../../resolver/roots.js";
 import { ListingService } from "../listing.js";
 import { createDecompiler, type DecompileFn } from "../../decompile/cfr.js";
 
@@ -53,6 +54,12 @@ export interface QueryContext {
   readonly resolvers: ResolveDependenciesOptions;
   /** The effective build-tool strategy this context resolves and hashes under. */
   readonly buildTool: BuildToolStrategy;
+  /**
+   * The effective cache roots this context resolves and hashes under, with
+   * the layer each came from — what `status` reports and what the manifest
+   * fingerprint's `m2Root` line carries.
+   */
+  readonly roots: EffectiveRoots;
   /** Listing service: provides artifact listings. */
   readonly listings: ListingService;
   /** Memoized decompiler function. */
@@ -114,7 +121,16 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
   // env, config); an explicitly injected resolvers.strategy wins over it
   const buildTool: BuildToolStrategy =
     opts.resolvers?.strategy ?? effectiveBuildToolStrategy(projectRoot, opts.buildToolFlag);
-  const resolvers: ResolveDependenciesOptions = { ...opts.resolvers, strategy: buildTool };
+  // the same single-call-site rule for the cache roots: computed once,
+  // threaded into the resolvers, fingerprinted into the manifest. Unlike
+  // strategy above, an injected resolvers.roots does NOT win — the computed
+  // convergence is the identity this context hashes under, always
+  const roots = effectiveRoots(projectRoot);
+  const resolvers: ResolveDependenciesOptions = {
+    ...opts.resolvers,
+    strategy: buildTool,
+    roots: { m2: roots.m2.map((candidate) => candidate.path), gradle: roots.gradle.path },
+  };
 
   /** When a bootstrap failed or served stale (throw, or cache-scan fallback): retries back off to this. */
   let failedAt: number | undefined;
@@ -164,7 +180,7 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       await writeManifest(projectRoot, {
         version: 2,
         resolvedAt: new Date().toISOString(),
-        dependencySetHash: await computeDependencySetHash(projectRoot, buildTool),
+        dependencySetHash: await computeDependencySetHash(projectRoot, buildTool, roots.m2[0].path),
         artifacts: resolution.artifacts,
       });
       failedAt = undefined;
@@ -195,11 +211,12 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
     projectRoot,
     resolvers,
     buildTool,
+    roots,
     listings,
     decompiler,
     async ensureReady(): Promise<EnsureReadyResult> {
       const manifest = await readManifest(projectRoot);
-      if (manifest !== null && !(await isStale(projectRoot, manifest, buildTool))) {
+      if (manifest !== null && !(await isStale(projectRoot, manifest, buildTool, roots.m2[0].path))) {
         return { bootstrapped: false, stale: false };
       }
       if (failedAt !== undefined && now() - failedAt < FAILED_BOOTSTRAP_BACKOFF_MS) {

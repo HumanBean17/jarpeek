@@ -42,12 +42,13 @@ const SERVER_ENTRY =
     ? { command: "cmd", args: ["/c", "jarpeek", "mcp"] }
     : { command: "jarpeek", args: ["mcp"] };
 
-/** PromptIo replaying fixed answers. */
+/** PromptIo replaying fixed answers (text prompts left empty — no root pin). */
 function fakePrompts(answers: { harnesses?: string[]; mode?: "mcp" | "cli" }): PromptIo {
   return {
     multiselect: async () => answers.harnesses ?? ["claude"],
     select: async () => answers.mode ?? "mcp",
     confirm: async () => true,
+    text: async () => "",
   };
 }
 
@@ -190,5 +191,108 @@ describe("command PATH check (the npx-first-run trap)", () => {
       command: "/usr/local/bin/jarpeek",
     });
     expect(explicit.notes.some((n) => n.includes("not on PATH"))).toBe(false);
+  });
+});
+
+describe("cache-root advanced step", () => {
+  /** fakePrompts extended with the two text answers, capturing placeholders. */
+  function rootPrompts(answers: { m2Dir?: string; gradleCacheDir?: string }): PromptIo & {
+    placeholders: string[];
+  } {
+    const placeholders: string[] = [];
+    const base = fakePrompts({ harnesses: ["claude"], mode: "mcp" });
+    return {
+      ...base,
+      placeholders,
+      text: async (message: string, placeholder?: string) => {
+        placeholders.push(placeholder ?? "");
+        return message.includes("Maven") ? answers.m2Dir ?? "" : answers.gradleCacheDir ?? "";
+      },
+    };
+  }
+
+  /** Resolvers plus an effectiveRoots seam pinning detection off the machine. */
+  function rootResolvers(m2: string): InitResolvers {
+    return {
+      ...fakeResolvers(),
+      effectiveRoots: () => ({
+        m2: [{ path: m2, source: "settings" }],
+        gradle: { path: "/detected/gradle", source: "default" },
+      }),
+    };
+  }
+
+  it("persists an explicit m2 override and notes it", async () => {
+    const root = tmpProject();
+    const result = await runInit(root, {
+      prompts: rootPrompts({ m2Dir: "/pinned/m2" }),
+      resolvers: rootResolvers("/detected/m2"),
+    });
+
+    const config = JSON.parse(readFileSync(join(root, ".jarpeek", "config.json"), "utf8"));
+    expect(config.m2Dir).toBe("/pinned/m2");
+    expect(config.gradleCacheDir).toBeUndefined();
+    expect(config.primeMode).toBe("mcp");
+    expect(result.notes.some((n) => n.includes("cache roots pinned"))).toBe(true);
+  });
+
+  it("empty answers omit the fields and add no note", async () => {
+    const root = tmpProject();
+    const result = await runInit(root, {
+      prompts: rootPrompts({}),
+      resolvers: rootResolvers("/detected/m2"),
+    });
+
+    const config = JSON.parse(readFileSync(join(root, ".jarpeek", "config.json"), "utf8"));
+    expect(config.m2Dir).toBeUndefined();
+    expect(config.gradleCacheDir).toBeUndefined();
+    expect(result.notes.some((n) => n.includes("cache roots pinned"))).toBe(false);
+  });
+
+  it("the non-interactive path skips the step entirely", async () => {
+    const root = tmpProject();
+    const result = await runInit(root, { yes: true, resolvers: rootResolvers("/detected/m2") });
+
+    const config = JSON.parse(readFileSync(join(root, ".jarpeek", "config.json"), "utf8"));
+    expect(config.m2Dir).toBeUndefined();
+    expect(result.notes.some((n) => n.includes("cache roots pinned"))).toBe(false);
+  });
+
+  it("shows the detected root as the prompt placeholder", async () => {
+    const root = tmpProject();
+    const prompts = rootPrompts({});
+    await runInit(root, { prompts, resolvers: rootResolvers("/detected/m2") });
+
+    expect(prompts.placeholders.some((p) => p.includes("/detected/m2"))).toBe(true);
+  });
+
+  it("a second run with the same override changes no target bytes", async () => {
+    const root = tmpProject();
+    const opts = {
+      prompts: rootPrompts({ m2Dir: "/pinned/m2" }),
+      resolvers: rootResolvers("/detected/m2"),
+    };
+    await runInit(root, opts);
+
+    const target = join(".jarpeek", "config.json");
+    const before = hashAll(root, [target]);
+    await runInit(root, opts);
+
+    expect(hashAll(root, [target])).toBe(before);
+    const config = JSON.parse(readFileSync(join(root, target), "utf8"));
+    expect(config.m2Dir).toBe("/pinned/m2");
+  });
+
+  it("rejects a non-absolute answer with an honest note instead of a dead pin", async () => {
+    const root = tmpProject();
+    const result = await runInit(root, {
+      prompts: rootPrompts({ m2Dir: "~/m2" }),
+      resolvers: rootResolvers("/detected/m2"),
+    });
+
+    const config = JSON.parse(readFileSync(join(root, ".jarpeek", "config.json"), "utf8"));
+    expect(config.m2Dir).toBeUndefined();
+    expect(result.notes.some((n) => n.includes("not an absolute path — not pinned: ~/m2"))).toBe(true);
+    expect(result.notes.some((n) => n.includes("cache roots pinned"))).toBe(false);
   });
 });

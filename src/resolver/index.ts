@@ -51,6 +51,13 @@ export interface ResolveDependenciesOptions {
    * fallback when unset (`auto`), or a forced direction. See `strategy.ts`.
    */
   strategy?: BuildToolStrategy;
+  /**
+   * Effective cache roots, computed once by `openContext` (the same
+   * convergence `strategy` follows): the full m2 anchor list reaches the
+   * Maven resolver, the primary m2 root and the gradle root reach the
+   * cache scan. Resolvers self-compute via `roots.ts` when unset.
+   */
+  roots?: { m2: string[]; gradle: string };
 }
 
 const DEGRADED_WARNING = "degraded-to-cache-scan";
@@ -100,7 +107,7 @@ export async function resolveDependencies(
       }
       degraded.push({ from: "gradle", reason: resolution.reason ?? NO_ARTIFACTS });
     } else {
-      const resolution = await maven(projectRoot, { strategy: opts.strategy });
+      const resolution = await maven(projectRoot, { strategy: opts.strategy, roots: opts.roots });
       if (resolution.ok && resolution.artifacts.length > 0) {
         artifacts = resolution.artifacts;
         // a reactor that partially failed still answers, but the missing
@@ -108,6 +115,9 @@ export async function resolveDependencies(
         if (resolution.partial !== undefined) {
           degraded.push({ from: "maven", reason: resolution.partial });
         }
+        // non-fatal maven observations (a derived m2 anchor) ride with the
+        // winner — they explain where the answer was anchored
+        if (resolution.warnings !== undefined) warnings.push(...resolution.warnings);
         break;
       }
       degraded.push({ from: "maven", reason: resolution.reason ?? NO_ARTIFACTS });
@@ -120,7 +130,12 @@ export async function resolveDependencies(
     // system was even attempted
     warnings.push(DEGRADED_WARNING);
     viaCacheScan = true;
-    const scan = await cacheScan();
+    const scan = await cacheScan({
+      projectRoot,
+      ...(opts.roots !== undefined
+        ? { m2Dir: opts.roots.m2[0], gradleDir: opts.roots.gradle }
+        : {}),
+    });
     artifacts = scan.artifacts;
     warnings.push(...scan.warnings);
   }

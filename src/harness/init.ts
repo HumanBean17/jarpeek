@@ -20,12 +20,15 @@ import { resolveJdk } from "../resolver/jdk.js";
 import { ensureGradleInitScript } from "../resolver/gradle-init.js";
 import { commandOnPath } from "../util/path-probe.js";
 import { PRIME_CONFIG_PATH } from "../prime/command.js";
+import { effectiveRoots, looksAbsolute } from "../resolver/roots.js";
 
 /** The prompts init asks; the real implementation is @clack/prompts. */
 export interface PromptIo {
   multiselect(message: string, choices: string[], defaults?: string[]): Promise<string[]>;
   select(message: string, choices: string[], dflt?: string): Promise<string>;
   confirm(message: string, dflt: boolean): Promise<boolean>;
+  /** Free-text answer; `dflt` is the editable current value, `placeholder` the detected hint. */
+  text(message: string, placeholder?: string, dflt?: string): Promise<string>;
 }
 
 /** Seams injectable per call. */
@@ -34,6 +37,8 @@ export interface InitResolvers extends ResolveDependenciesOptions {
   ensureGradleInitScript?: typeof ensureGradleInitScript;
   /** PATH probe for the wired command; defaults to the real one. */
   commandOnPath?: typeof commandOnPath;
+  /** Cache-root detection for the advanced step's placeholders; defaults to the real convergence. */
+  effectiveRoots?: typeof effectiveRoots;
 }
 
 export interface InitOptions {
@@ -87,6 +92,8 @@ function clackPromptIo(): PromptIo {
       ) as string,
     confirm: async (message, dflt) =>
       guard(await clack.confirm({ message, initialValue: dflt })) as boolean,
+    text: async (message, placeholder, dflt) =>
+      guard(await clack.text({ message, placeholder, defaultValue: dflt ?? "" })) as string,
   };
 }
 
@@ -109,8 +116,8 @@ function hasExistingBlock(descriptor: HarnessDescriptor, projectRoot: string): b
   }
 }
 
-/** Record the wired mode where prime's auto-detect reads it. */
-async function writePrimeMode(projectRoot: string, mode: "mcp" | "cli"): Promise<void> {
+/** Merge `fields` into `.jarpeek/config.json`, preserving everything else. */
+async function updateProjectConfig(projectRoot: string, fields: Record<string, string>): Promise<void> {
   const path = join(projectRoot, PRIME_CONFIG_PATH);
   let doc: Record<string, unknown> = {};
   try {
@@ -119,9 +126,25 @@ async function writePrimeMode(projectRoot: string, mode: "mcp" | "cli"): Promise
   } catch {
     // absent or corrupt (a corrupt config.json is ours to replace)
   }
-  doc.primeMode = mode;
+  Object.assign(doc, fields);
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
+}
+
+/** One string field of the project config, when it is a string. */
+async function readProjectConfigField(projectRoot: string, field: string): Promise<string | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(join(projectRoot, PRIME_CONFIG_PATH), "utf8")) as unknown;
+    const value = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>)[field] : undefined;
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Record the wired mode where prime's auto-detect reads it. */
+function writePrimeMode(projectRoot: string, mode: "mcp" | "cli"): Promise<void> {
+  return updateProjectConfig(projectRoot, { primeMode: mode });
 }
 
 /** The targets one harness wiring touches, for InitResult.wired. */
@@ -160,6 +183,8 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
   const interactive = opts.yes !== true && (opts.prompts !== undefined || process.stdout.isTTY === true);
   let harnessIds: HarnessId[];
   let mode: "mcp" | "cli";
+  /** Cache-root overrides the advanced step collected (empty answers omitted). */
+  let rootFields: Record<string, string> = {};
   if (interactive) {
     const prompts = opts.prompts ?? clackPromptIo();
     const ids = HARNESSES.map((d) => d.id);
@@ -170,6 +195,38 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
       notes.push("no harness selected; defaulting to claude");
     }
     mode = (await prompts.select("Wire as MCP server or CLI hints?", ["mcp", "cli"], "mcp")) === "cli" ? "cli" : "mcp";
+
+    // advanced step: show where resolution currently anchors, offer a pin.
+    // Detection reads env/configs/settings.xml only — no build runs, so
+    // "init never resolves" holds. The prompt's editable default is the
+    // existing config value (idempotent re-runs), its placeholder the
+    // detected root; an empty answer leaves the resolver cascade in charge.
+    const detected = (resolvers.effectiveRoots ?? effectiveRoots)(projectRoot);
+    const m2Answer = (
+      await prompts.text(
+        "Maven local repository override (absolute path)",
+        `detected: ${detected.m2[0].path} — leave empty to keep following Maven`,
+        await readProjectConfigField(projectRoot, "m2Dir"),
+      )
+    ).trim();
+    const gradleAnswer = (
+      await prompts.text(
+        "Gradle cache override (absolute path)",
+        `detected: ${detected.gradle.path} — leave empty to keep following Gradle`,
+        await readProjectConfigField(projectRoot, "gradleCacheDir"),
+      )
+    ).trim();
+    // the same absoluteness rule the convergence applies: a relative answer
+    // (~/m2, repo) would be a silently dead pin — say so instead of writing it
+    if (m2Answer.length > 0) {
+      if (looksAbsolute(m2Answer)) rootFields.m2Dir = m2Answer;
+      else notes.push(`not an absolute path — not pinned: ${m2Answer}`);
+    }
+    if (gradleAnswer.length > 0) {
+      if (looksAbsolute(gradleAnswer)) rootFields.gradleCacheDir = gradleAnswer;
+      else notes.push(`not an absolute path — not pinned: ${gradleAnswer}`);
+    }
+    if (Object.keys(rootFields).length > 0) notes.push("cache roots pinned in .jarpeek/config.json");
   } else {
     harnessIds = ["claude"];
     mode = "mcp";
@@ -184,6 +241,7 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
     wired.push({ harness: id, mode, targets: wiringTargets(descriptor, projectRoot, mode) });
   }
   if (mode === "mcp") await writePrimeMode(projectRoot, "mcp");
+  if (Object.keys(rootFields).length > 0) await updateProjectConfig(projectRoot, rootFields);
 
   // the configs invoke the command by bare name: if it is not on PATH the
   // wiring is dead on arrival (the classic npx-first-run trap)

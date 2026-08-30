@@ -37,13 +37,16 @@ afterAll(() => {
 async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContext> {
   const root = freshRoot();
   writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
+  // context first: the manifest must hash under the same primary m2 root
+  // the context's convergence will check staleness with
+  const ctx = openContext(root, { onNotice: () => {} });
   await writeManifest(root, {
     version: 2,
     resolvedAt: "2026-08-17T00:00:00.000Z",
-    dependencySetHash: await computeDependencySetHash(root, "auto"),
+    dependencySetHash: await computeDependencySetHash(root, "auto", ctx.roots.m2[0].path),
     artifacts,
   });
-  return openContext(root, { onNotice: () => {} });
+  return ctx;
 }
 
 describe("readResource provenance is computed", () => {

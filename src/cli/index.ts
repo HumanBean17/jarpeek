@@ -19,7 +19,7 @@ import { Command, InvalidArgumentError, Option } from "commander";
 import { KIND_VALUES, VISIBILITY_VALUES } from "../core/enums.js";
 import { VERSION } from "../version.js";
 import { renderJson } from "./json.js";
-import { clipCell, numberLines, renderTable } from "./render.js";
+import { clipCell, numberLines, renderTable, renderStatus } from "./render.js";
 import { handleMiss, type MissResult } from "../core/miss.js";
 import { fuzzyScore } from "../core/fuzzy.js";
 import { openContext, type QueryContext } from "../core/query/context.js";
@@ -265,20 +265,6 @@ function renderResolve(result: ResolveNowResult): string {
     ...shown,
     ...(rest > 0 ? [`+${rest} more (see: jarpeek status)`] : []),
   ].join("\n");
-}
-
-function renderStatus(result: StatusResult): string {
-  return renderTable([
-    ["KEY", "VALUE"],
-    ["projectRoot", result.projectRoot],
-    ["manifest.present", String(result.manifest.present)],
-    ["manifest.resolvedAt", result.manifest.resolvedAt ?? ""],
-    ["manifest.stale", String(result.manifest.stale)],
-    ["manifest.artifactCount", String(result.manifest.artifactCount)],
-    ["manifest.dependencySetHash", result.manifest.dependencySetHash ?? ""],
-    ["jvm.available", String(result.jvm.available)],
-    ["jvm.version", result.jvm.version ?? ""],
-  ]);
 }
 
 function renderWhere(result: WhereResult): string {

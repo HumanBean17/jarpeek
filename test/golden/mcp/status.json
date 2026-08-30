@@ -11,5 +11,15 @@
     "available": "<jvmAvailable>",
     "version": "<jvmVersion>"
   },
+  "resolver": {
+    "m2Root": {
+      "path": "<m2Root>",
+      "source": "<m2Source>"
+    },
+    "gradleCacheRoot": {
+      "path": "<gradleRoot>",
+      "source": "<gradleSource>"
+    }
+  },
   "degraded": []
 }

@@ -48,13 +48,9 @@ afterAll(() => {
 async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContext> {
   const root = freshRoot();
   writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
-  await writeManifest(root, {
-    version: 2,
-    resolvedAt: "2026-08-17T00:00:00.000Z",
-    dependencySetHash: await computeDependencySetHash(root, "auto"),
-    artifacts,
-  });
-  return openContext(root, {
+  // context first: the manifest must hash under the same primary m2 root
+  // the context's convergence will check staleness with
+  const ctx = openContext(root, {
     onNotice: () => {},
     resolvers: {
       gradle: async () => ({ ok: false, artifacts: [], reason: "no-wrapper-no-gradle" }),
@@ -63,6 +59,13 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
       includeJdk: false,
     },
   });
+  await writeManifest(root, {
+    version: 2,
+    resolvedAt: "2026-08-17T00:00:00.000Z",
+    dependencySetHash: await computeDependencySetHash(root, "auto", ctx.roots.m2[0].path),
+    artifacts,
+  });
+  return ctx;
 }
 
 describe("where lists recorded paths", () => {
