@@ -37,17 +37,18 @@ afterAll(() => {
   for (const dir of roots) rmSync(dir, { recursive: true, force: true });
 });
 
-/** A context over a manifest written BEFORE construction (fresh, non-stale). */
+/** A context over a manifest hashing under the context's own primary root (fresh, non-stale). */
 async function contextWith(artifacts: DependencyArtifact[]): Promise<{ ctx: QueryContext; root: string }> {
   const root = freshRoot();
   writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
+  const ctx = openContext(root, { onNotice: () => {} });
   await writeManifest(root, {
     version: 2,
     resolvedAt: "2026-08-17T00:00:00.000Z",
-    dependencySetHash: await computeDependencySetHash(root, "auto"),
+    dependencySetHash: await computeDependencySetHash(root, "auto", ctx.roots.m2[0].path),
     artifacts,
   });
-  return { ctx: openContext(root, { onNotice: () => {} }), root };
+  return { ctx, root };
 }
 
 const JVM = { available: true, version: "25.0.2" };

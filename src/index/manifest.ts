@@ -80,15 +80,17 @@ export async function writeManifest(projectRoot: string, m: Manifest): Promise<v
 /**
  * sha256 hex over the sorted lines `<relpath>\t<size>\t<mtimeMs>` of the
  * build files that exist under `projectRoot`, plus one `strategy\t<value>`
- * line: the effective build-tool strategy is part of the dependency set's
- * identity, so flipping the knob re-resolves instead of serving a manifest
- * the other tool produced. An empty candidate set hashes just the strategy
- * line, so a project with no build files still has a stable (and
+ * line and one `m2Root\t<path>` line: the effective build-tool strategy and
+ * the effective primary m2 root are both part of the dependency set's
+ * identity, so flipping either re-resolves instead of serving a manifest
+ * anchored somewhere else. An empty candidate set hashes just those two
+ * lines, so a project with no build files still has a stable (and
  * distinguishable-from-null) fingerprint.
  */
 export async function computeDependencySetHash(
   projectRoot: string,
   strategy: BuildToolStrategy,
+  m2Root: string,
 ): Promise<string> {
   const lines = candidateFiles(projectRoot)
     .map((relpath) => {
@@ -101,7 +103,7 @@ export async function computeDependencySetHash(
         return `${relpath}\t(vanished)`;
       }
     })
-    .concat(`strategy\t${strategy}`)
+    .concat(`strategy\t${strategy}`, `m2Root\t${m2Root}`)
     .sort();
   return createHash("sha256").update(lines.join("\n")).digest("hex");
 }
@@ -110,17 +112,18 @@ export async function computeDependencySetHash(
  * Stale when the build files' fingerprint moved or any artifact's recorded
  * backing (binary/sources jar, source dir) disappeared — either way the
  * manifest no longer reflects what a resolve would produce today. The
- * fingerprint includes the strategy, so a strategy change alone is stale.
- * Source TREE contents are deliberately not fingerprinted: the manifest
- * promises which artifacts back the project, not that their contents have
- * not been rebuilt since.
+ * fingerprint includes the strategy and the m2 root, so a change in either
+ * alone is stale. Source TREE contents are deliberately not fingerprinted:
+ * the manifest promises which artifacts back the project, not that their
+ * contents have not been rebuilt since.
  */
 export async function isStale(
   projectRoot: string,
   m: Manifest,
   strategy: BuildToolStrategy,
+  m2Root: string,
 ): Promise<boolean> {
-  if ((await computeDependencySetHash(projectRoot, strategy)) !== m.dependencySetHash) {
+  if ((await computeDependencySetHash(projectRoot, strategy, m2Root)) !== m.dependencySetHash) {
     return true;
   }
   for (const artifact of m.artifacts) {
