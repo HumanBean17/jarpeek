@@ -1,6 +1,6 @@
 # Cache-root convergence — following Maven wherever it puts the repository
 
-**Status:** draft
+**Status:** in_progress
 
 ## Problem
 
