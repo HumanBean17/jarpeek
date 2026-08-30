@@ -167,14 +167,28 @@ the one named artifact.
 | --- | --- |
 | `--build-tool <auto\|system\|wrapper>` | CLI global flag (all subcommands incl. `mcp`): which mvn/gradle runs resolves (`auto` = system first, wrapper fallback) |
 | `JARPEEK_BUILD_TOOL` | Same tri-state via environment; beats config, loses to the flag — the layer to use for harness-spawned MCP servers without server args |
-| `JARPEEK_HOME` | Override the home directory used for user-scoped harness configs |
+| `JARPEEK_M2_DIR` / `M2_REPO` | Where the Maven local repository lives; steers both the Maven resolver's anchor and the cache scan |
+| `JARPEEK_GRADLE_CACHE_DIR` / `GRADLE_USER_HOME` | Where the Gradle modules-2 cache lives (`GRADLE_USER_HOME` is the cache's parent — the scan walks `<it>/caches/modules-2/files-2.1`) |
+| `JARPEEK_HOME` | Override the home directory used for user-scoped harness configs and the global config below |
 | `JARPEEK_PRIME_MODE` | Default `prime` mode (`cli` or `mcp`) when config is absent |
 | `.jarpeek/PRIME.md` | Replaces the agent cheatsheet verbatim, every mode |
-| `.jarpeek/config.json` | Written by `init`; records the wired `primeMode`; a hand-added `buildTool` field sets the persistent strategy default |
+| `.jarpeek/config.json` | Written by `init`; records the wired `primeMode`; hand-added `buildTool`, `m2Dir`, and `gradleCacheDir` fields set persistent defaults |
+| `~/.config/jarpeek/config.json` | Machine-wide defaults: the same `m2Dir` / `gradleCacheDir` fields, read when the project config names none |
 
-Flipping the build-tool setting re-resolves: the strategy is part of the
-manifest fingerprint, so a manifest produced by the other tool is never
-served as fresh.
+Cache roots converge in a fixed order — explicit env var, project config,
+global config, maven's `settings.xml` `<localRepository>` (m2 only), then
+the default `~/.m2/repository` — and env beats config, like `buildTool`:
+both are hand-authored machine facts a one-off shell override should win
+against. `init` shows the detected roots and persists only an explicit
+override. Nothing to configure still works: when no candidate matches
+mvn's classpath output, the resolver derives the repository root from the
+output itself (quorum-guaranteed) and says so with a
+`maven: m2-anchor-derived:<path>` warning; `jarpeek status` prints the
+effective roots and the layer each came from.
+
+Flipping the build-tool setting or the m2 root re-resolves: both are part
+of the manifest fingerprint, so a manifest produced by the other tool —
+or anchored at another repository — is never served as fresh.
 
 `.jarpeek/` is per-machine state (the manifest, prime config) — gitignore
 it (`init` adds it). The manifest is the only derived state jarpeek ever

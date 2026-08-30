@@ -181,6 +181,16 @@ function normalizeStatus(result: any): any {
   return {
     ...result,
     projectRoot: "<projectRoot>",
+    // the effective roots are machine facts (this machine's home); only
+    // their shape and source layer are the contract under test
+    ...(result.resolver !== undefined
+      ? {
+          resolver: {
+            m2Root: { path: "<m2Root>", source: "<m2Source>" },
+            gradleCacheRoot: { path: "<gradleRoot>", source: "<gradleSource>" },
+          },
+        }
+      : {}),
     ...(result.manifest !== undefined
       ? {
           manifest: {
