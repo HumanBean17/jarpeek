@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -22,6 +22,7 @@ function jar(path: string, sources = false): void {
 afterEach(() => {
   if (root !== undefined) rmSync(root, { recursive: true, force: true });
   root = undefined;
+  vi.unstubAllEnvs();
 });
 
 describe("scanCaches", () => {
@@ -193,5 +194,48 @@ describe("scanCaches", () => {
     });
     expect(artifacts).toEqual([]);
     expect(warnings).toEqual([]);
+  });
+});
+
+describe("scanCaches: roots convergence", () => {
+  it("walks the m2 dir named by the project config when no explicit dir is given", async () => {
+    const { m2, gradle } = scratch();
+    jar(join(m2, "org/a/lib/1.0/lib-1.0.jar"), true);
+    const projectRoot = join(root!, "project");
+    mkdirSync(join(projectRoot, ".jarpeek"), { recursive: true });
+    writeFileSync(
+      join(projectRoot, ".jarpeek", "config.json"),
+      JSON.stringify({ m2Dir: m2, gradleCacheDir: gradle }),
+    );
+
+    const { artifacts } = await scanCaches({ projectRoot });
+
+    expect(artifacts.find((a) => a.coordinates === "org.a:lib:1.0")).toBeDefined();
+  });
+
+  it("an explicit m2Dir beats the project config", async () => {
+    const { m2, gradle } = scratch();
+    jar(join(m2, "org/a/lib/1.0/lib-1.0.jar"));
+    const other = join(root!, "other-m2");
+    jar(join(other, "com/x/y/2.0/y-2.0.jar"));
+    const projectRoot = join(root!, "project");
+    mkdirSync(join(projectRoot, ".jarpeek"), { recursive: true });
+    writeFileSync(join(projectRoot, ".jarpeek", "config.json"), JSON.stringify({ m2Dir: m2 }));
+
+    const { artifacts } = await scanCaches({ projectRoot, m2Dir: other, gradleDir: gradle });
+
+    expect(artifacts.find((a) => a.coordinates === "org.a:lib:1.0")).toBeUndefined();
+    expect(artifacts.find((a) => a.coordinates === "com.x:y:2.0")).toBeDefined();
+  });
+
+  it("without a projectRoot the env chain still applies", async () => {
+    const { gradle } = scratch();
+    const m2 = join(root!, "env-m2");
+    jar(join(m2, "org/env/dep/3.0/dep-3.0.jar"));
+    vi.stubEnv("JARPEEK_M2_DIR", m2);
+
+    const { artifacts } = await scanCaches({ gradleDir: gradle });
+
+    expect(artifacts.find((a) => a.coordinates === "org.env:dep:3.0")).toBeDefined();
   });
 });

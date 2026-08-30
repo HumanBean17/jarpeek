@@ -10,11 +10,16 @@
  * into a warning, never a throw.
  */
 import { readdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import type { DependencyArtifact } from "../core/types.js";
+import { effectiveGradleCacheRoot, effectiveM2Roots } from "./roots.js";
 
 export interface ScanCachesOptions {
+  /**
+   * Project root for the roots convergence's config layers; the env chain
+   * applies without it (see `roots.ts`). The facade always passes it.
+   */
+  projectRoot?: string;
   m2Dir?: string;
   gradleDir?: string;
   maxEntries?: number;
@@ -26,10 +31,11 @@ export interface ScanCachesResult {
 }
 
 /**
- * Cache-root env overrides, consulted only when no explicit dir is passed:
- * `JARPEEK_M2_DIR` / `JARPEEK_GRADLE_CACHE_DIR` steer the scan away from the
- * real machine caches (the `JARPEEK_HOME` pattern) — how the end-to-end
- * output-budget tests pin the scan to a fake m2 tree without touching `~`.
+ * Cache roots come from the roots convergence (`roots.ts`): explicit dirs
+ * here top the chain, then the jarpeek/maven/gradle env vars, then the
+ * project and global configs. `JARPEEK_M2_DIR` / `JARPEEK_GRADLE_CACHE_DIR`
+ * steering the scan away from the real machine caches is how the end-to-end
+ * output-budget tests pin it to a fake m2 tree without touching `~`.
  */
 
 const DEFAULT_MAX_ENTRIES = 20_000;
@@ -199,11 +205,10 @@ function collectCoordinates(finds: Found[]): Map<string, Coordinate> {
  * the scan's result; a missing root is simply an empty walk.
  */
 export async function scanCaches(opts: ScanCachesOptions = {}): Promise<ScanCachesResult> {
-  const m2Dir = opts.m2Dir ?? process.env.JARPEEK_M2_DIR ?? join(homedir(), ".m2", "repository");
-  const gradleDir =
-    opts.gradleDir ??
-    process.env.JARPEEK_GRADLE_CACHE_DIR ??
-    join(homedir(), ".gradle", "caches", "modules-2", "files-2.1");
+  // the scan walks ONE root per cache: the convergence's primary m2
+  // candidate and its single gradle root
+  const m2Dir = effectiveM2Roots(opts.projectRoot, { m2Dir: opts.m2Dir })[0].path;
+  const gradleDir = effectiveGradleCacheRoot(opts.projectRoot, { gradleDir: opts.gradleDir }).path;
   const maxEntries = opts.maxEntries ?? DEFAULT_MAX_ENTRIES;
 
   // m2 first: its finds are inserted first, so collectCoordinates keeps them.
