@@ -9,6 +9,7 @@
  */
 import { isStale } from "../../index/manifest.js";
 import { probeJvmOnce, type JvmProbe } from "../../util/jvm.js";
+import type { RootCandidate } from "../../resolver/roots.js";
 import type { QueryContext } from "./context.js";
 import { mergedDegraded } from "./outline.js";
 
@@ -20,6 +21,11 @@ export interface StatusResult {
     stale: boolean;
     artifactCount: number;
     dependencySetHash?: string;
+  };
+  /** Effective cache roots with the layer each came from — a GH#12-class misconfiguration is a one-command diagnosis. */
+  resolver: {
+    m2Root: RootCandidate;
+    gradleCacheRoot: RootCandidate;
   };
   jvm: {
     available: boolean;
@@ -47,6 +53,7 @@ export async function status(ctx: QueryContext, opts: StatusOptions = {}): Promi
       artifactCount: manifest?.artifacts.length ?? 0,
     },
     jvm: await (opts.jvm ?? probeJvmOnce)(),
+    resolver: { m2Root: ctx.roots.m2[0], gradleCacheRoot: ctx.roots.gradle },
     degraded: await mergedDegraded(ctx, stale ? ["stale index served"] : []),
   };
 }

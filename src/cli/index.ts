@@ -276,6 +276,11 @@ function renderStatus(result: StatusResult): string {
     ["manifest.stale", String(result.manifest.stale)],
     ["manifest.artifactCount", String(result.manifest.artifactCount)],
     ["manifest.dependencySetHash", result.manifest.dependencySetHash ?? ""],
+    ["resolver.m2Root", `${result.resolver.m2Root.path} (${result.resolver.m2Root.source})`],
+    [
+      "resolver.gradleCacheRoot",
+      `${result.resolver.gradleCacheRoot.path} (${result.resolver.gradleCacheRoot.source})`,
+    ],
     ["jvm.available", String(result.jvm.available)],
     ["jvm.version", result.jvm.version ?? ""],
   ]);
