@@ -1087,3 +1087,69 @@ describe("resolveMaven: relocated m2 roots (GH#12)", () => {
     expect(resolution.warnings).toBeUndefined();
   });
 });
+
+describe("resolveMaven: derivation robustness", () => {
+  it("derives even when module target/classes entries also ride the classpath (anchor hits, not artifacts)", async () => {
+    const projectRoot = scratch();
+    const m2 = join(projectRoot, "unknown-m2");
+    const ext1 = m2Jar(m2, "org", "a", "alpha", "1.0", "alpha-1.0.jar");
+    const ext2 = m2Jar(m2, "com", "b", "beta", "2.0", "beta-2.0.jar");
+    const moduleClasses = join(projectRoot, "target", "classes");
+    const { exec } = cpExec([moduleClasses, ext1, ext2].join(delimiter));
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
+
+    expect(resolution.ok).toBe(true);
+    expect(indexBy(resolution.artifacts)("org.a:alpha:1.0").binaryJar).toBe(ext1);
+    expect(indexBy(resolution.artifacts)("com.b:beta:2.0").binaryJar).toBe(ext2);
+    expect(resolution.warnings).toEqual([`maven: m2-anchor-derived:${m2}`]);
+  });
+
+  it("a stray layout-shaped jar does not drag the anchor to a shared ancestor", async () => {
+    const projectRoot = scratch();
+    const home = join(projectRoot, "home");
+    const repo = join(home, "repository");
+    const inRepo = m2Jar(repo, "org", "a", "alpha", "1.0", "alpha-1.0.jar");
+    const inRepo2 = m2Jar(repo, "com", "b", "beta", "2.0", "beta-2.0.jar");
+    const stray = m2Jar(join(home, "vendor"), "com", "v", "stray", "9.9", "stray-9.9.jar");
+    const { exec } = cpExec([inRepo, inRepo2, stray].join(delimiter));
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolution.warnings).toEqual([`maven: m2-anchor-derived:${repo}`]);
+    expect(resolution.artifacts.some((a) => a.coordinates === "com.v:stray:9.9")).toBe(false);
+    expect(indexBy(resolution.artifacts)("org.a:alpha:1.0").binaryJar).toBe(inRepo);
+  });
+
+  it("a digit-suffixed root with a single shared top group still derives the true root", async () => {
+    const projectRoot = scratch();
+    const m2 = join(projectRoot, "repo2");
+    const spring = m2Jar(m2, "org", "springframework", "spring-tx", "6.1.4", "spring-tx-6.1.4.jar");
+    const other = m2Jar(m2, "org", "springframework", "spring-core", "6.1.4", "spring-core-6.1.4.jar");
+    const { exec } = cpExec([spring, other].join(delimiter));
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolution.warnings).toEqual([`maven: m2-anchor-derived:${m2}`]);
+    expect(indexBy(resolution.artifacts)("org.springframework:spring-tx:6.1.4").binaryJar).toBe(spring);
+    expect(indexBy(resolution.artifacts)("org.springframework:spring-core:6.1.4").binaryJar).toBe(other);
+  });
+
+  it("refuses derivation for an unrecognized root name — the loud failure contract holds", async () => {
+    const projectRoot = scratch();
+    const m2 = join(projectRoot, "plain");
+    const a = m2Jar(m2, "org", "a", "alpha", "1.0", "alpha-1.0.jar");
+    const b = m2Jar(m2, "com", "b", "beta", "2.0", "beta-2.0.jar");
+    const { exec } = cpExec([a, b].join(delimiter));
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
+
+    expect(resolution).toEqual({
+      ok: false,
+      artifacts: [],
+      reason: "mvn-failed:classpath-not-in-m2-layout",
+    });
+  });
+});

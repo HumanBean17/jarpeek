@@ -20,7 +20,7 @@ import { resolveJdk } from "../resolver/jdk.js";
 import { ensureGradleInitScript } from "../resolver/gradle-init.js";
 import { commandOnPath } from "../util/path-probe.js";
 import { PRIME_CONFIG_PATH } from "../prime/command.js";
-import { effectiveRoots } from "../resolver/roots.js";
+import { effectiveRoots, looksAbsolute } from "../resolver/roots.js";
 
 /** The prompts init asks; the real implementation is @clack/prompts. */
 export interface PromptIo {
@@ -216,8 +216,16 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
         await readProjectConfigField(projectRoot, "gradleCacheDir"),
       )
     ).trim();
-    if (m2Answer.length > 0) rootFields.m2Dir = m2Answer;
-    if (gradleAnswer.length > 0) rootFields.gradleCacheDir = gradleAnswer;
+    // the same absoluteness rule the convergence applies: a relative answer
+    // (~/m2, repo) would be a silently dead pin — say so instead of writing it
+    if (m2Answer.length > 0) {
+      if (looksAbsolute(m2Answer)) rootFields.m2Dir = m2Answer;
+      else notes.push(`not an absolute path — not pinned: ${m2Answer}`);
+    }
+    if (gradleAnswer.length > 0) {
+      if (looksAbsolute(gradleAnswer)) rootFields.gradleCacheDir = gradleAnswer;
+      else notes.push(`not an absolute path — not pinned: ${gradleAnswer}`);
+    }
     if (Object.keys(rootFields).length > 0) notes.push("cache roots pinned in .jarpeek/config.json");
   } else {
     harnessIds = ["claude"];

@@ -47,11 +47,21 @@ export interface EffectiveRoots {
 /** A windows drive-letter root: `C:\` or `C:/` — absolute on any host platform. */
 const WINDOWS_DRIVE = /^[A-Za-z]:[\\/]/;
 
+/**
+ * Whether `raw` is a usable root: a non-empty absolute path (drive-letter
+ * paths count on any host platform, so unix tests can exercise windows
+ * spellings). The same rule every convergence layer applies — init reuses
+ * it to reject answers that would become silently dead config pins.
+ */
+export function looksAbsolute(raw: string): boolean {
+  const trimmed = raw.trim();
+  return trimmed.length > 0 && (isAbsolute(trimmed) || WINDOWS_DRIVE.test(trimmed));
+}
+
 /** A non-empty absolute path — relative config values drop out silently. */
 function validAbsolute(raw: string | undefined): string | undefined {
   if (raw === undefined) return undefined;
-  const trimmed = raw.trim();
-  return trimmed.length > 0 && (isAbsolute(trimmed) || WINDOWS_DRIVE.test(trimmed)) ? trimmed : undefined;
+  return looksAbsolute(raw) ? raw.trim() : undefined;
 }
 
 /** `field` of a JSON config document; absent/corrupt/non-absolute → undefined. */

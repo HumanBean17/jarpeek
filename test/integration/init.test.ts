@@ -282,4 +282,17 @@ describe("cache-root advanced step", () => {
     const config = JSON.parse(readFileSync(join(root, target), "utf8"));
     expect(config.m2Dir).toBe("/pinned/m2");
   });
+
+  it("rejects a non-absolute answer with an honest note instead of a dead pin", async () => {
+    const root = tmpProject();
+    const result = await runInit(root, {
+      prompts: rootPrompts({ m2Dir: "~/m2" }),
+      resolvers: rootResolvers("/detected/m2"),
+    });
+
+    const config = JSON.parse(readFileSync(join(root, ".jarpeek", "config.json"), "utf8"));
+    expect(config.m2Dir).toBeUndefined();
+    expect(result.notes.some((n) => n.includes("not an absolute path — not pinned: ~/m2"))).toBe(true);
+    expect(result.notes.some((n) => n.includes("cache roots pinned"))).toBe(false);
+  });
 });

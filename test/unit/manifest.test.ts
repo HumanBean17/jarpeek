@@ -48,7 +48,7 @@ function touchPlusOneSecond(path: string): void {
 }
 
 describe("computeDependencySetHash", () => {
-  it("empty project hashes just the strategy line (stable, distinguishable from null)", async () => {
+  it("empty project hashes just the m2Root + strategy lines (stable, distinguishable from null)", async () => {
     const root = tmpProjectRoot();
     try {
       expect(await computeDependencySetHash(root, "auto", M2)).toBe(EMPTY_SHA256);

@@ -199,6 +199,12 @@ describe("scanCaches", () => {
 
 describe("scanCaches: roots convergence", () => {
   it("walks the m2 dir named by the project config when no explicit dir is given", async () => {
+    // env beats config: a host exporting M2_REPO/JARPEEK_M2_DIR (exactly the
+    // GH#12 persona) would otherwise steer this walk — pin it off
+    vi.stubEnv("JARPEEK_M2_DIR", "");
+    vi.stubEnv("M2_REPO", "");
+    vi.stubEnv("JARPEEK_GRADLE_CACHE_DIR", "");
+    vi.stubEnv("GRADLE_USER_HOME", "");
     const { m2, gradle } = scratch();
     jar(join(m2, "org/a/lib/1.0/lib-1.0.jar"), true);
     const projectRoot = join(root!, "project");

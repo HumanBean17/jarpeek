@@ -54,11 +54,17 @@ candidate list — `JARPEEK_M2_DIR`, `M2_REPO`, the project config's
 `m2Dir`, the machine-wide `~/.config/jarpeek/config.json`, maven's own
 `settings.xml` `<localRepository>`, then the default `~/.m2/repository`
 — with env beating config for the same hand-authored-machine-fact
-reason. The Maven resolver anchors each classpath entry against every
-candidate (a classpath spanning several roots parses completely); when
-none matches, it derives the root from mvn's own output — the common
-prefix of the layout-shaped entries, quorum two distinct entries, with a
-preference for a repository-named boundary — and carries
+reason. The gradle side is a single root, not a list:
+`JARPEEK_GRADLE_CACHE_DIR`, then the `GRADLE_USER_HOME`-derived
+`caches/modules-2/files-2.1`, then the two configs, then the default.
+The Maven resolver anchors each classpath entry against every candidate
+(a classpath spanning several roots parses completely); when no entry
+anchors anywhere, it derives the root from mvn's own output — each
+layout-shaped entry proposes its repository-named path boundaries, the
+boundary backed by the most distinct entries wins at a quorum of two,
+and a root too blandly named to recognize refuses derivation outright,
+preserving the loud `classpath-not-in-m2-layout` failure rather than
+guessing coordinates — and a successful derivation carries
 `m2-anchor-derived:<path>` as a warning, so a relocated repository
 resolves correctly even with nothing configured instead of degrading
 into a whole-directory cache scan (GH#12). The cache scan walks the

@@ -122,7 +122,9 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
   const buildTool: BuildToolStrategy =
     opts.resolvers?.strategy ?? effectiveBuildToolStrategy(projectRoot, opts.buildToolFlag);
   // the same single-call-site rule for the cache roots: computed once,
-  // threaded into the resolvers, fingerprinted into the manifest
+  // threaded into the resolvers, fingerprinted into the manifest. Unlike
+  // strategy above, an injected resolvers.roots does NOT win — the computed
+  // convergence is the identity this context hashes under, always
   const roots = effectiveRoots(projectRoot);
   const resolvers: ResolveDependenciesOptions = {
     ...opts.resolvers,

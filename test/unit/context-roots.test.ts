@@ -21,11 +21,14 @@ function scratch(): string {
   return root;
 }
 
-/** Pin the env layer off unless a test pins it on. */
-function noEnv(): void {
+/** Pin the env layer off unless a test pins it on: all knobs cleared, the home relocated to a scratch dir. */
+function noEnv(): string {
+  const home = mkdtempSync(join(tmpdir(), "jarpeek-ctx-roots-home-"));
   for (const name of ["JARPEEK_M2_DIR", "M2_REPO", "JARPEEK_GRADLE_CACHE_DIR", "GRADLE_USER_HOME"]) {
     vi.stubEnv(name, "");
   }
+  vi.stubEnv("JARPEEK_HOME", home);
+  return home;
 }
 
 afterEach(() => {
@@ -54,11 +57,12 @@ describe("openContext roots convergence", () => {
     await ctx.ensureReady();
 
     expect(ctx.roots.m2[0]).toEqual({ path: "/custom/m2", source: "env" });
-    // the threaded list is the full chain — env root first, default anchoring last
-    expect(seen.roots).toEqual({
-      m2: ["/custom/m2", join(homedir(), ".m2", "repository")],
-      gradle: "/custom/gradle",
-    });
+    // head + tail only: the threaded list is the full chain, and a machine
+    // with its own settings.xml relocation contributes a middle candidate —
+    // a machine fact, not the contract under test
+    expect(seen.roots!.m2[0]).toBe("/custom/m2");
+    expect(seen.roots!.m2.at(-1)).toBe(join(homedir(), ".m2", "repository"));
+    expect(seen.roots!.gradle).toBe("/custom/gradle");
   });
 
   it("recomputes per context — a different env is a different convergence", () => {

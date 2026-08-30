@@ -269,46 +269,55 @@ function isLayoutShaped(normalized: string): boolean {
   return file === `${artifact}-${version}.jar`;
 }
 
-/** A directory segment that names a repository: `m2`, `repository`, `custom-m2`, `my-repository`, … */
+/**
+ * A directory segment that names a repository: any `[._-]`-delimited part
+ * that is `m2`, `repo`, or `repository` with optional trailing digits —
+ * `m2`, `repository`, `custom-m2`, `repo2`, `unknown-m2`, `m2.repo`.
+ */
 function isRepoSegment(segment: string): boolean {
-  return /^(.*[._-])?m2$/i.test(segment) || /^(.*[._-])?repo(sitory)?$/i.test(segment);
+  return segment.split(/[._-]+/).some((part) => /^(m2|repo|repository)\d*$/i.test(part));
 }
 
 /**
- * The anchor mvn's own output reveals when no configured root matched: the
- * common path prefix of the layout-shaped entries, popped back until every
- * voter keeps at least one group segment below it, then — among the levels
- * above that stay valid — the DEEPEST one ending in a repository-named
- * segment (`…/custom-m2`, `…/repo`). The name signal separates the root from
- * a group level every voter shares (`…/m2/org` for an all-org classpath);
- * without it the deepest valid level stands, which merely folds that shared
- * segment into the group string. Quorum of two distinct entries: a lone
- * layout-shaped system-scoped jar must not conjure a root — the protection
- * the fixed anchor always provided. Undefined when no anchor survives (no
- * quorum, or a prefix degenerated to the filesystem root).
+ * The anchor mvn's own output reveals when no configured root matched.
+ * Each layout-shaped entry proposes every repository-named path boundary
+ * above its layout tail as a candidate anchor; the candidate backed by the
+ * most distinct entries wins (deepest breaks ties), at a quorum of two.
+ * Majority voting is what keeps a stray system-scoped jar — which proposes
+ * nothing, or proposes a boundary of its own — from dragging the anchor to
+ * a shared ancestor and swallowing itself plus everyone's group prefix;
+ * requiring a repository-named boundary refuses derivation outright for a
+ * root too blandly named to recognize, preserving the loud
+ * `classpath-not-in-m2-layout` failure rather than guessing coordinates.
+ * A lone layout-shaped entry never reaches quorum: the protection the
+ * fixed anchor always provided.
  */
 function voteDerivedAnchor(entries: string[]): string | undefined {
   const voters = [...new Set(entries.map(toForwardSlashes).filter(isLayoutShaped))];
   if (voters.length < 2) return undefined;
-  let prefix = voters[0].split("/");
-  for (const voter of voters.slice(1)) {
+  const votes = new Map<string, Set<string>>();
+  for (const voter of voters) {
     const parts = voter.split("/");
-    // first index where they disagree truncates the prefix
-    let cut = 0;
-    while (cut < prefix.length && cut < parts.length && prefix[cut] === parts[cut]) cut++;
-    prefix = prefix.slice(0, cut);
-  }
-  while (prefix.length > 0 && voters.some((voter) => voter.split("/").length - prefix.length < 4)) {
-    prefix.pop();
-  }
-  for (let depth = prefix.length; depth >= 1; depth--) {
-    const anchor = prefix.slice(0, depth).join("/");
-    if (anchor.length > 0 && !/^[A-Za-z]:$/.test(anchor) && isRepoSegment(prefix[depth - 1])) {
-      return anchor;
+    for (let depth = parts.length - 4; depth >= 1; depth--) {
+      if (!isRepoSegment(parts[depth - 1])) continue;
+      const anchor = parts.slice(0, depth).join("/");
+      const distinct = votes.get(anchor) ?? new Set<string>();
+      distinct.add(voter);
+      votes.set(anchor, distinct);
     }
   }
-  const anchor = prefix.join("/");
-  return anchor.length > 0 && !/^[A-Za-z]:$/.test(anchor) ? anchor : undefined;
+  let best: { anchor: string; count: number; depth: number } | undefined;
+  for (const [anchor, distinct] of votes) {
+    const depth = anchor.split("/").length;
+    if (
+      best === undefined ||
+      distinct.size > best.count ||
+      (distinct.size === best.count && depth > best.depth)
+    ) {
+      best = { anchor, count: distinct.size, depth };
+    }
+  }
+  return best !== undefined && best.count >= 2 ? best.anchor : undefined;
 }
 
 /**
@@ -344,14 +353,16 @@ function parseOutputs(outputs: string[], m2Dirs: string[], projectRoot: string, 
   }
 
   /** One anchored mapping pass: first matching anchor wins per entry. */
-  const map = (anchors: string[]): Map<string, DependencyArtifact> => {
+  const map = (anchors: string[]): { byCoordinates: Map<string, DependencyArtifact>; anchored: number } => {
     const byCoordinates = new Map<string, DependencyArtifact>();
+    let anchored = 0;
     for (const raw of entries) {
-      let hit: { group: string; artifact: string; version: string } | null = null;
+      let hit: M2Coordinates | null = null;
       for (const anchor of anchors) {
         hit = parseM2Entry(raw, anchor);
         if (hit !== null) break;
       }
+      if (hit !== null) anchored++;
       if (hit === null) {
         // a reactor sibling's compiled output is the module itself, not an
         // external jar; anything else (system-scoped jars, IDE caches) is
@@ -384,15 +395,19 @@ function parseOutputs(outputs: string[], m2Dirs: string[], projectRoot: string, 
         ...(sourcesJar !== undefined ? { sourcesJar } : {}),
       });
     }
-    return byCoordinates;
+    return { byCoordinates, anchored };
   };
 
-  let byCoordinates = map(m2Dirs);
+  // derivation keys on ANCHOR matches, not artifacts: module `target/classes`
+  // entries populate the same map without ever anchoring, and must not mask
+  // a wholly unanchored classpath (its externals would silently vanish from
+  // an ok resolution)
+  let { byCoordinates, anchored } = map(m2Dirs);
   let derivedWarning: string | undefined;
-  if (sawContent && byCoordinates.size === 0) {
+  if (sawContent && anchored === 0) {
     const derived = voteDerivedAnchor(entries);
     if (derived !== undefined) {
-      byCoordinates = map([...m2Dirs, derived]);
+      byCoordinates = map([...m2Dirs, derived]).byCoordinates;
       derivedWarning = `maven: m2-anchor-derived:${derived}`;
     }
   }

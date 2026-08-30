@@ -37,12 +37,14 @@ machine-wide fact.
 Mirrors `strategy.ts` (config read per call, injectable environment and
 settings path for tests, never throws, never writes). Two functions:
 
-- `effectiveM2Roots(projectRoot)` — an ordered, deduplicated candidate
-  list: injected override → `JARPEEK_M2_DIR` → `M2_REPO` → project
-  `.jarpeek/config.json` `m2Dir` → global config `m2Dir` → `settings.xml`
-  `<localRepository>` (user `~/.m2/settings.xml`; `${user.home}`
-  interpolated; absent or unparseable contributes nothing) → default
-  `~/.m2/repository`.
+- `effectiveM2Roots(projectRoot)` — a deduplicated candidate list:
+  `JARPEEK_M2_DIR` → `M2_REPO` → project `.jarpeek/config.json` `m2Dir`
+  → global config `m2Dir` → `settings.xml` `<localRepository>` (user
+  `~/.m2/settings.xml`; `${user.home}` interpolated; absent or
+  unparseable contributes nothing) → default `~/.m2/repository`. An
+  explicit `opts.m2Dir` (or the resolver's threaded `roots`) replaces
+  the chain rather than topping it — test injection names exactly one
+  anchor and cannot accidentally pick up a real env layer.
 - `effectiveGradleCacheRoot(projectRoot)` — `JARPEEK_GRADLE_CACHE_DIR` →
   `GRADLE_USER_HOME`-derived `<it>/caches/modules-2/files-2.1` → project
   config `gradleCacheDir` → global config `gradleCacheDir` → default
@@ -59,15 +61,21 @@ against **any** candidate root instead of one hardcoded anchor — a
 classpath spanning several configured roots parses completely. The
 per-entry layout contract (`<group…>/<artifact>/<version>/<a>-<v>.jar`,
 group variable-depth, case-insensitive prefix per `parseM2Entry`) is
-unchanged. When the candidates match zero entries, derivation engages:
-layout-shaped entries majority-vote their common path prefix as one extra
-anchor, with a quorum of at least two agreeing entries — a lone
-layout-shaped system-scoped jar still maps to nothing, preserving the
-protection the fixed anchor existed for. Engaging derivation adds
-`warning: maven: m2-anchor-derived:<path>` to the resolution warnings, so
-this failure class is visible instead of silently degrading into
-cache-scan artifact soup. `ResolveMavenOptions.m2Dir` remains the
-top-precedence injection point for tests.
+unchanged. When no entry anchors anywhere (anchor hits, not artifacts —
+module `target/classes` entries never count), derivation engages: each
+layout-shaped entry proposes every repository-named path boundary above
+its layout tail (`m2`, `repository`, `repo`, digit-suffixed and
+delimiter-compound spellings) as a candidate anchor; the candidate backed
+by the most distinct entries wins, deepest breaking ties, at a quorum of
+two. Majority voting keeps a stray system-scoped jar from dragging the
+anchor to a shared ancestor, and requiring a recognized boundary refuses
+derivation for a too-blandly-named root — the loud
+`classpath-not-in-m2-layout` failure — rather than guessing coordinates.
+A successful derivation adds `warning: maven: m2-anchor-derived:<path>`
+to the resolution warnings, so this failure class is visible instead of
+silently degrading into cache-scan artifact soup. An explicit
+`ResolveMavenOptions.m2Dir` (or threaded `roots`) replaces the candidate
+chain rather than topping it — the caller said exactly where to look.
 
 ### Cache scan
 
@@ -84,8 +92,10 @@ threads them through a new `ResolveDependenciesOptions.roots` field;
 resolvers self-compute when called directly (tests, `jarpeek resolve`),
 the same dual path `strategy` follows. The `dependencySetHash` input in
 `src/index/manifest.ts` gains an `m2Root` line naming the effective
-primary root, so flipping any layer of the convergence re-resolves rather
-than serving a manifest resolved against another root.
+primary root, so flipping the layer that owns the primary slot re-resolves
+rather than serving a manifest resolved against another root (a
+non-primary layer flip changes the candidate list but not the hash —
+accepted; the primary is the root the scan walks and the status reports).
 
 ### Global config file
 
@@ -119,8 +129,10 @@ one-command diagnosis.
   `JARPEEK_HOME`-scoping the global config, `${user.home}` interpolation,
   relative-path fallthrough, injectable settings path.
 - Maven: GH#12 regression (`JARPEEK_M2_DIR` honored), `M2_REPO`,
-  settings.xml fixture, multi-root classpath, derive-fallback quorum and
-  single-entry non-mapping, the `m2-anchor-derived` warning.
+  settings.xml fixture, multi-root classpath, derive quorum and
+  single-entry non-mapping, module-entries-don't-suppress-derivation,
+  stray-entry isolation, unrecognized-root refusal, the
+  `m2-anchor-derived` warning.
 - Cache scan: default roots come from the module (both knobs).
 - Manifest: flipping any layer changes the fingerprint and forces
   re-resolution.

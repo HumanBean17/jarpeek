@@ -172,7 +172,7 @@ the one named artifact.
 | `JARPEEK_HOME` | Override the home directory used for user-scoped harness configs and the global config below |
 | `JARPEEK_PRIME_MODE` | Default `prime` mode (`cli` or `mcp`) when config is absent |
 | `.jarpeek/PRIME.md` | Replaces the agent cheatsheet verbatim, every mode |
-| `.jarpeek/config.json` | Written by `init`; records the wired `primeMode`; hand-added `buildTool`, `m2Dir`, and `gradleCacheDir` fields set persistent defaults |
+| `.jarpeek/config.json` | Written by `init`; records the wired `primeMode`; `buildTool` is hand-added, `m2Dir`/`gradleCacheDir` are pinned by `init`'s advanced step (or by hand) — persistent defaults |
 | `~/.config/jarpeek/config.json` | Machine-wide defaults: the same `m2Dir` / `gradleCacheDir` fields, read when the project config names none |
 
 Cache roots converge in a fixed order — explicit env var, project config,

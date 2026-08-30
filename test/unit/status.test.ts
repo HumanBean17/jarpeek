@@ -11,13 +11,14 @@
  * depend on the host machine having a `java`); the default is the shared
  * per-process probe.
  */
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openContext, type QueryContext } from "../../src/core/query/context.js";
+import { renderStatus } from "../../src/cli/index.js";
 import { status } from "../../src/core/query/status.js";
 import { computeDependencySetHash, writeManifest } from "../../src/index/manifest.js";
 import type { DependencyArtifact } from "../../src/core/types.js";
@@ -35,6 +36,10 @@ function freshRoot(): string {
 
 afterAll(() => {
   for (const dir of roots) rmSync(dir, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 /** A context over a manifest hashing under the context's own primary root (fresh, non-stale). */
@@ -122,14 +127,49 @@ describe("status resolver roots", () => {
   it("reports the context's effective roots with their source layers", async () => {
     const { ctx } = await contextWith([]);
     vi.stubEnv("JARPEEK_M2_DIR", "/custom/m2");
+    vi.stubEnv("JARPEEK_GRADLE_CACHE_DIR", "/custom/gradle");
 
     // the env stub postdates this context — a fresh one converges under it
     const fresh = openContext(ctx.projectRoot, { onNotice: () => {} });
     const result = await status(fresh, { jvm: () => Promise.resolve(JVM) });
 
     expect(result.resolver.m2Root).toEqual({ path: "/custom/m2", source: "env" });
-    expect(["env", "config", "settings", "default"]).toContain(result.resolver.gradleCacheRoot.source);
-    expect(typeof result.resolver.gradleCacheRoot.path).toBe("string");
-    vi.unstubAllEnvs();
+    expect(result.resolver.gradleCacheRoot).toEqual({ path: "/custom/gradle", source: "env" });
+    // the CLI table renders the row as `<path> (<source>)`
+    const table = renderStatus(result);
+    expect(table).toContain("resolver.m2Root");
+    expect(table).toContain("/custom/m2 (env)");
+    expect(table).toContain("resolver.gradleCacheRoot");
+    expect(table).toContain("/custom/gradle (env)");
   });
+
+  // unix-only: hermetic default-source assertions need HOME relocated (the
+  // settings.xml and default-root layers read the real home; win32 homedir
+  // ignores $HOME)
+  it.skipIf(process.platform === "win32")(
+    "reports the default roots when nothing is configured",
+    async () => {
+      const root = freshRoot();
+      writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
+      const home = mkdtempSync(join(tmpdir(), "jarpeek-status-home-"));
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("JARPEEK_HOME", home);
+      for (const name of ["JARPEEK_M2_DIR", "M2_REPO", "JARPEEK_GRADLE_CACHE_DIR", "GRADLE_USER_HOME"]) {
+        vi.stubEnv(name, "");
+      }
+
+      const result = await status(openContext(root, { onNotice: () => {} }), {
+        jvm: () => Promise.resolve(JVM),
+      });
+
+      expect(result.resolver.m2Root).toEqual({
+        path: join(home, ".m2", "repository"),
+        source: "default",
+      });
+      expect(result.resolver.gradleCacheRoot).toEqual({
+        path: join(home, ".gradle", "caches", "modules-2", "files-2.1"),
+        source: "default",
+      });
+    },
+  );
 });

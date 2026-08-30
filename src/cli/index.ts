@@ -267,7 +267,7 @@ function renderResolve(result: ResolveNowResult): string {
   ].join("\n");
 }
 
-function renderStatus(result: StatusResult): string {
+export function renderStatus(result: StatusResult): string {
   return renderTable([
     ["KEY", "VALUE"],
     ["projectRoot", result.projectRoot],

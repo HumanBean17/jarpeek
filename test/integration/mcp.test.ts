@@ -181,8 +181,8 @@ function normalizeStatus(result: any): any {
   return {
     ...result,
     projectRoot: "<projectRoot>",
-    // the effective roots are machine facts (this machine's home); only
-    // their shape and source layer are the contract under test
+    // the effective roots are machine facts (this machine's home, its
+    // settings.xml layer); only their shape is the contract under test
     ...(result.resolver !== undefined
       ? {
           resolver: {
