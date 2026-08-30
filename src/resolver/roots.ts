@@ -44,11 +44,14 @@ export interface EffectiveRoots {
   gradle: RootCandidate;
 }
 
+/** A windows drive-letter root: `C:\` or `C:/` — absolute on any host platform. */
+const WINDOWS_DRIVE = /^[A-Za-z]:[\\/]/;
+
 /** A non-empty absolute path — relative config values drop out silently. */
 function validAbsolute(raw: string | undefined): string | undefined {
   if (raw === undefined) return undefined;
   const trimmed = raw.trim();
-  return trimmed.length > 0 && isAbsolute(trimmed) ? trimmed : undefined;
+  return trimmed.length > 0 && (isAbsolute(trimmed) || WINDOWS_DRIVE.test(trimmed)) ? trimmed : undefined;
 }
 
 /** `field` of a JSON config document; absent/corrupt/non-absolute → undefined. */
