@@ -129,4 +129,13 @@ describe("catalog", () => {
     expect(catalog("ru")).toBe(ru);
     expect(LOCALE_VALUES).toEqual(["en", "ru"]);
   });
+
+  it("ru covers every en key with a non-empty string", () => {
+    // the type already forces coverage at compile time; this runtime guard
+    // keeps built/generated output honest if the typing is ever loosened
+    for (const key of Object.keys(en) as Array<keyof typeof en>) {
+      expect(typeof ru[key], `ru key ${String(key)}`).toBe("string");
+      expect(ru[key].length, `ru key ${String(key)}`).toBeGreaterThan(0);
+    }
+  });
 });

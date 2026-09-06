@@ -38,11 +38,11 @@ New `src/cli/i18n/` directory:
   helper for `{param}` interpolation, and `choose(locale, count, forms)`
   plural selection backed by `Intl.PluralRules`.
 
-Message values are plain strings or tiny template functions where a value
-embeds data (`(n: number) => string`); `t()` covers named-parameter
-substitution for the common case. Commands names, flag names, FQNs,
-coordinates, and file paths are never translated — they are copy-pasteable
-invocation surface.
+Message values are plain strings; `t()` covers named-parameter
+substitution, and counted strings come from plural key families
+(`key.one`/`few`/`many`/`other`) selected by `choose()`. Commands names,
+flag names, FQNs, coordinates, and file paths are never translated — they
+are copy-pasteable invocation surface.
 
 ### Locale convergence
 
@@ -50,7 +50,8 @@ invocation surface.
 `src/cli/i18n/index.ts`: the parsed `--lang` value when present and valid,
 else the `language` field of `.jarpeek/config.json` (read via the same
 absent/corrupt/invalid → fall-through contract as `readPrimeModeConfig`),
-else `"en"`. The config path constant stays shared (`PRIME_CONFIG_PATH`).
+else `"en"`. The i18n module keeps its own `CONFIG_PATH` constant (same
+`.jarpeek/config.json` value) so it imports nothing from `src/prime/`.
 
 ### Program construction: the pre-scan
 
