@@ -167,12 +167,13 @@ the one named artifact.
 | --- | --- |
 | `--build-tool <auto\|system\|wrapper>` | CLI global flag (all subcommands incl. `mcp`): which mvn/gradle runs resolves (`auto` = system first, wrapper fallback) |
 | `JARPEEK_BUILD_TOOL` | Same tri-state via environment; beats config, loses to the flag — the layer to use for harness-spawned MCP servers without server args |
+| `--lang <en\|ru>` | CLI global flag: interface language for human-mode output (help, tables' framing, warnings, errors). Flag beats the `language` config field; default English. `--json`, the MCP server, and `prime` output stay English — they are agent/machine contract |
 | `JARPEEK_M2_DIR` / `M2_REPO` | Where the Maven local repository lives; steers both the Maven resolver's anchor and the cache scan |
 | `JARPEEK_GRADLE_CACHE_DIR` / `GRADLE_USER_HOME` | Where the Gradle modules-2 cache lives (`GRADLE_USER_HOME` is the cache's parent — the scan walks `<it>/caches/modules-2/files-2.1`) |
 | `JARPEEK_HOME` | Override the home directory used for user-scoped harness configs and the global config below |
 | `JARPEEK_PRIME_MODE` | Default `prime` mode (`cli` or `mcp`) when config is absent |
 | `.jarpeek/PRIME.md` | Replaces the agent cheatsheet verbatim, every mode |
-| `.jarpeek/config.json` | Written by `init`; records the wired `primeMode`; `buildTool` is hand-added, `m2Dir`/`gradleCacheDir` are pinned by `init`'s advanced step (or by hand) — persistent defaults |
+| `.jarpeek/config.json` | Written by `init`; records the wired `primeMode`; `buildTool` and `language` (`"en"`/`"ru"`) are hand-added, `m2Dir`/`gradleCacheDir` are pinned by `init`'s advanced step (or by hand) — persistent defaults |
 | `~/.config/jarpeek/config.json` | Machine-wide defaults: the same `m2Dir` / `gradleCacheDir` fields, read when the project config names none |
 
 Cache roots converge in a fixed order — explicit env var, project config,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Declaration, DeclKind, Visibility } from "../../src/core/types.js";
 import type { Sections } from "../../src/core/query/outline.js";
 import { renderSkeleton, summarizeJavadoc } from "../../src/cli/skeleton.js";
+import { catalog } from "../../src/cli/i18n/index.js";
 
 const ALL: Sections = { imports: true, fields: true, methods: true, inner: true, javadoc: true };
 const NO_JAVADOC: Sections = { ...ALL, javadoc: false };
@@ -31,6 +32,7 @@ describe("renderSkeleton layout", () => {
       { fqn: "a.b.Demo", coordinates: "g:a:1", provenance: "source", rows: [DEMO_CLASS] },
       ALL,
       "summary",
+      catalog("en"),
     );
     expect(out).toBe(
       ["// a.b.Demo", "// g:a:1  provenance source", "", "package a.b;", "", "public class Demo {", "}"].join("\n"),
@@ -42,6 +44,7 @@ describe("renderSkeleton layout", () => {
       { fqn: "a.b.Demo", coordinates: "g:a:1", provenance: "source", stale: true, rows: [DEMO_CLASS] },
       ALL,
       "summary",
+      catalog("en"),
     );
     expect(out.split("\n").slice(0, 3)).toEqual([
       "// a.b.Demo",
@@ -56,6 +59,7 @@ describe("renderSkeleton layout", () => {
       { fqn: "Demo", coordinates: "g:a:1", provenance: "source", rows: [cls] },
       ALL,
       "summary",
+      catalog("en"),
     );
     expect(out).toBe(
       ["// Demo", "// g:a:1  provenance source", "", "public class Demo {", "}"].join("\n"),
@@ -73,6 +77,7 @@ describe("renderSkeleton layout", () => {
       },
       ALL,
       "summary",
+      catalog("en"),
     );
     expect(withImports).toContain(
       ["package a.b;", "import java.net.URI;", "import static java.util.Objects.requireNonNull;", ""].join("\n"),
@@ -81,6 +86,7 @@ describe("renderSkeleton layout", () => {
       { fqn: "a.b.Demo", coordinates: "g:a:1", provenance: "source", rows: [DEMO_CLASS] },
       ALL,
       "summary",
+      catalog("en"),
     );
     expect(without).not.toContain("import ");
   });
@@ -99,6 +105,7 @@ describe("renderSkeleton layout", () => {
       },
       ALL,
       "summary",
+      catalog("en"),
     );
     expect(out).toContain(
       ["public class Demo {", "    private static final String NAME;", "    public Object run(String,int);", "}"].join(
@@ -124,6 +131,7 @@ describe("renderSkeleton layout", () => {
       },
       ALL,
       "summary",
+      catalog("en"),
     );
     expect(out).toContain(
       [
@@ -151,6 +159,7 @@ describe("renderSkeleton layout", () => {
       },
       ALL,
       "summary",
+      catalog("en"),
     );
     expect(out).toBe(
       [
@@ -189,6 +198,7 @@ describe("renderSkeleton javadoc and detail", () => {
       },
       ALL,
       "summary",
+      catalog("en"),
     );
     expect(out).toContain(
       ["    /** Runs the demo. */", "    public Object run(String,int);"].join("\n"),
@@ -214,6 +224,7 @@ describe("renderSkeleton javadoc and detail", () => {
       },
       ALL,
       "summary",
+      catalog("en"),
     );
     expect(out).not.toContain("/**");
   });
@@ -245,6 +256,7 @@ describe("renderSkeleton javadoc and detail", () => {
       },
       ALL,
       "full",
+      catalog("en"),
     );
     expect(out).toContain(
       [
@@ -277,6 +289,7 @@ describe("renderSkeleton javadoc and detail", () => {
       },
       ALL,
       "summary",
+      catalog("en"),
     );
     expect(out).toContain(`    ${long};`);
   });
@@ -300,6 +313,7 @@ describe("renderSkeleton javadoc and detail", () => {
       },
       NO_JAVADOC,
       "summary",
+      catalog("en"),
     );
     expect(out).not.toContain("/**");
     expect(out).toContain("    public Object run(String,int);");

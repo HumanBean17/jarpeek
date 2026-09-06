@@ -9,6 +9,7 @@
  */
 import type { Declaration, Provenance } from "../core/types.js";
 import { isClassKind, type Sections } from "../core/query/outline.js";
+import { t, type Catalog } from "./i18n/index.js";
 
 /** Structural subset of OutlineResult the renderer reads. */
 export interface SkeletonInput {
@@ -139,11 +140,12 @@ export function renderSkeleton(
   input: SkeletonInput,
   sections: Sections,
   detail: "summary" | "full",
+  tr: Catalog,
 ): string {
   const out: string[] = [
     `// ${input.fqn}`,
-    `// ${input.coordinates}  provenance ${input.provenance}`,
-    ...(input.stale ? ["// stale index served"] : []),
+    `// ${t(tr["skeleton.header"], { coords: input.coordinates, provenance: input.provenance })}`,
+    ...(input.stale ? [`// ${tr["skeleton.stale"]}`] : []),
     "",
   ];
   const head: string[] = [];
