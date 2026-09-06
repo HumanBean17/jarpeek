@@ -90,6 +90,30 @@ with the layer each came from.
   on stderr (a `degraded[]` field in JSON), aggregated so an invocation
   never exceeds the three-line warning budget.
 
+## Localization (the `--lang` boundary)
+
+Human-mode CLI output localizes (Russian ships first: `--lang ru` or a
+`language` field in `.jarpeek/config.json`; flag beats config, default
+English). Everything an agent or a script consumes does not: `--json`
+output, the MCP server, the `prime` cheatsheet, and every string produced
+by core/resolver (degradation warnings, miss notes and reasons) stay
+English — they are contract surface, not prose. The same rule splits the
+human surface itself: sentences translate, schema-shaped tokens stay
+verbatim in both locales (command/flag names, FQNs, coordinates, table
+column headers, enum-ish cell values) — a translated header over
+untranslated cells would read as mixed language.
+
+Mechanics: typed message catalogs in `src/cli/i18n/` — the English catalog
+is the source of truth, every locale is `Catalog = typeof en`, so the
+compiler rejects a partial translation (no runtime fallback machinery).
+Plurals go through `Intl.PluralRules` (Russian one/few/many). Because
+commander builds the program — descriptions, option help, help blocks —
+before parsing, build-time strings converge on a raw-argv pre-scan of
+`--lang`/`--project`; runtime actions re-resolve through the parsed
+options, so a trailing `--lang ru` localizes everything rendered after
+the parse (the one exception: flag-coercion errors, which fire at parse
+time and use the pre-scan locale).
+
 ## Gone by design
 
 - **No index, ever.** The manifest is the only derived state jarpeek
