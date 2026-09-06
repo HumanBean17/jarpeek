@@ -133,4 +133,8 @@ export const ru: Catalog = {
   "render.wired": "настроено {harness} ({mode}): {targets}",
   "render.note": "примечание: {note}",
   "render.outlineTable": "{fqn}  {coords}  происхождение {provenance}",
+
+  // -- skeleton view (outline's default; --table uses render.outlineTable) --
+  "skeleton.header": "{coords}  происхождение {provenance}",
+  "skeleton.stale": "подан устаревший индекс",
 };

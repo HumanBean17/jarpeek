@@ -84,6 +84,9 @@ help was built at load time.
   verbatim per the rule below, so it gains no catalog parameter.
 - `mcp-command.ts` — the one-line command description and MCP_HELP prose
   translate; the server itself does not.
+- `skeleton.ts` — the skeleton view's header label (`provenance`) and the
+  stale marker localize; the skeleton body (package/imports/signatures) is
+  verbatim source rendering and never translates.
 
 Counts (artifactCount, warnings, "+N more") render through `choose()`:
 Russian uses one/few/many via `Intl.PluralRules`; English one/other.

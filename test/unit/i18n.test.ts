@@ -121,6 +121,11 @@ describe("preScan", () => {
     expect(preScan(["--", "--lang", "ru"])).toEqual({});
     expect(preScan(["--limit", "5"])).toEqual({});
   });
+
+  it("a valueless --lang and an empty --lang= are what they look like", () => {
+    expect(preScan(["--lang"])).toEqual({});
+    expect(preScan(["--lang="])).toEqual({ lang: "" });
+  });
 });
 
 describe("catalog", () => {
@@ -136,6 +141,15 @@ describe("catalog", () => {
     for (const key of Object.keys(en) as Array<keyof typeof en>) {
       expect(typeof ru[key], `ru key ${String(key)}`).toBe("string");
       expect(ru[key].length, `ru key ${String(key)}`).toBeGreaterThan(0);
+    }
+  });
+
+  it("every ru value carries the same {token} set as its en counterpart", () => {
+    // a translator's typo ({м} for {n}) would otherwise ship as a literal
+    const tokens = (value: string): string =>
+      (value.match(/\{(\w+)\}/g) ?? []).sort().join(",");
+    for (const key of Object.keys(en) as Array<keyof typeof en>) {
+      expect(tokens(ru[key]), `ru key ${String(key)}`).toBe(tokens(en[key]));
     }
   });
 });

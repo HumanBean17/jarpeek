@@ -48,7 +48,6 @@ import { renderSkeleton } from "./skeleton.js";
 import {
   findClassHelp,
   initHelp,
-  mcpHelp,
   outlineHelp,
   primeHelp,
   readMemberHelp,
@@ -231,7 +230,7 @@ function renderReadSource(result: ReadSourceResult, locale: Locale): string {
     // unreachable from CLI flags (no flag selects outline mode) — kept so a
     // future flag and the MCP surface render the same skeleton, never a table
     return [
-      renderSkeleton(result, resolveSections("outline", undefined), "summary"),
+      renderSkeleton(result, resolveSections("outline", undefined), "summary", tr),
       ...(result.alternatives?.map((alt) => t(tr["render.alternative"], { coords: alt.coordinates })) ?? []),
     ].join("\n");
   }
@@ -418,7 +417,9 @@ program
  * `descKey`/`helpFn` come from the build-time catalog (help renders
  * before actions run).
  */
-function command(name: string, descKey: keyof typeof ui, helpFn?: (t: typeof ui) => string) {
+type CmdKey = Extract<keyof typeof ui, `cmd.${string}`>;
+
+function command(name: string, descKey: CmdKey, helpFn?: (t: typeof ui) => string) {
   const sub = program.command(name);
   sub.description(ui[descKey]);
   if (helpFn !== undefined) {
@@ -540,7 +541,7 @@ command("outline", "cmd.outline", outlineHelp)
         // the skeleton: same rows, code-shaped — full adds javadoc blocks
         // and body markers over the identical section booleans
         return [
-          renderSkeleton(result, sections, preset === "full" ? "full" : "summary"),
+          renderSkeleton(result, sections, preset === "full" ? "full" : "summary", tr),
           ...(alternatives ?? []),
         ].join("\n");
       });
@@ -615,16 +616,12 @@ command("search-symbols", "cmd.search-symbols", searchSymbolsHelp)
         limit: cmd.limit,
         ...(cmd.kind !== undefined ? { kind: cmd.kind } : {}),
       });
-      emit(
-        result,
-        inv,
-        () => {
+      emit(result, inv, () => {
         const tr = catalog(inv.locale);
         return result.rows.length > 0
           ? renderSearchSymbols(result)
           : t(tr["render.noSymbols"], { query });
-      },
-      );
+      });
       if (result.degraded.length > 0) warn(inv.locale, ...result.degraded);
     });
   });
@@ -655,7 +652,7 @@ command("where", "cmd.where", whereHelp)
     });
   });
 
-registerMcpCommand(program, ui, () => catalog(buildLocale));
+registerMcpCommand(program, ui);
 
 command("prime", "cmd.prime", primeHelp)
   .option("--full", ui["opt.primeFull"])

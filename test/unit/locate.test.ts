@@ -7,6 +7,7 @@ import { ListingService } from "../../src/core/listing.js";
 import { classFamily, locateClass, type LocateDeps } from "../../src/core/query/locate.js";
 import { LookupMissError } from "../../src/core/query/outline.js";
 import { renderSkeleton } from "../../src/cli/skeleton.js";
+import { catalog } from "../../src/cli/i18n/index.js";
 import type { DependencyArtifact } from "../../src/core/types.js";
 import type { Manifest } from "../../src/index/manifest.js";
 
@@ -495,6 +496,7 @@ describe("full-family retention (outline skeleton data)", () => {
         },
         { imports: true, fields: true, methods: true, inner: true, javadoc: true },
         "summary",
+        catalog("en"),
       );
       expect(skeleton).toContain(
         [

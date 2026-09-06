@@ -48,7 +48,7 @@ export function catalog(locale: Locale): Catalog {
 export function t(template: string, params?: Record<string, string | number>): string {
   if (params === undefined) return template;
   return template.replace(/\{(\w+)\}/g, (token, name: string) =>
-    name in params ? String(params[name]) : token,
+    Object.hasOwn(params, name) ? String(params[name]) : token,
   );
 }
 
@@ -57,7 +57,17 @@ export function t(template: string, params?: Record<string, string | number>): s
  * (Russian needs one/few/many; English one/other). A category the forms
  * object omits falls back to `other`.
  */
-export function choose(locale: Locale, count: number, forms: Record<string, string>): string {
+/** The forms `choose()` selects among; `other` is the guaranteed fallback. */
+export interface PluralForms {
+  zero?: string;
+  one?: string;
+  two?: string;
+  few?: string;
+  many?: string;
+  other: string;
+}
+
+export function choose(locale: Locale, count: number, forms: PluralForms): string {
   const category = new Intl.PluralRules(locale).select(count);
   return forms[category] ?? forms.other;
 }

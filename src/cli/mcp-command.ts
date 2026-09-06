@@ -21,11 +21,11 @@ export interface McpOptions {
  * Wire the mcp subcommand onto the program. `t` is the build-time catalog
  * (the server itself stays English — it speaks to agents, not humans).
  */
-export function registerMcpCommand(program: Command, t: Catalog, catalogAt: () => Catalog): void {
+export function registerMcpCommand(program: Command, t: Catalog): void {
   program
     .command("mcp")
     .description(t["cmd.mcp"])
-    .addHelpText("after", () => mcpHelp(catalogAt()))
+    .addHelpText("after", () => mcpHelp(t))
     .action(async () => {
       const opts = program.opts<McpOptions>();
       await startMcpServer(opts.project ?? process.cwd(), opts.buildTool);

@@ -100,10 +100,9 @@ describe("miss answers", () => {
     expect(run.stdout).toContain("com.example:demo-lib:1.0.0"); // verbatim coords
   });
 
-  it("an empty manifest renders the ru none-marker", () => {
-    const empty = {} as Suite;
-    Object.assign(empty, openSuite([]));
-    void empty.ctx.ensureReady(); // bootstrap before the subprocess asks
+  it("an empty manifest renders the ru none-marker", async () => {
+    const empty = openSuite([]);
+    await empty.ctx.ensureReady(); // manifest on disk before the subprocess asks
     const run = cli(empty.projectRoot, ["--lang", "ru", "find-class", "ZzzzZzzNoMatch"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("(нет)");
@@ -178,7 +177,15 @@ describe("result renderers (ru)", () => {
       "#nosuch()",
     ]);
     expect(run.code).toBe(0);
-    expect(run.stdout).toContain("не найдено #nosuch():");
+    // the label localizes; the core reason after it stays English
+    expect(run.stdout).toMatch(/не найдено #nosuch\(\): [A-Za-z]/);
+  });
+
+  it("outline's default skeleton view localizes the provenance label", () => {
+    const run = cli(suite.projectRoot, ["--lang", "ru", "outline", "com.example.Demo"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toMatch(/^\/\/ com\.example:demo-lib:1\.0\.0  происхождение /m);
+    expect(run.stdout).not.toContain("provenance");
   });
 
   it("read-source --lines speaks ru for header and range", () => {
@@ -206,6 +213,21 @@ describe("result renderers (ru)", () => {
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("нет подходящих записей");
     expect(run.stdout).toContain("происхождение");
+  });
+
+  it("read-resource hit path pairs the ru header with verbatim column tokens", () => {
+    const run = cli(suite.projectRoot, [
+      "--lang",
+      "ru",
+      "read-resource",
+      "com.example:demo-lib:1.0.0",
+      "com/**",
+    ]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("артефакт");
+    expect(run.stdout).toContain("происхождение");
+    expect(run.stdout).toContain("PATH");
+    expect(run.stdout).not.toContain("artifact ");
   });
 
   it("search-symbols with no hits answers in ru", () => {
@@ -246,8 +268,10 @@ describe("init (ru)", () => {
 describe("the warning channel", () => {
   // build.gradle with no wrapper (strategy pinned to wrapper above): gradle
   // degrades, the cascade falls through to a cache scan pinned at a fake m2
-  // with 3 two-version groups — 3 multiple-versions warnings plus the
-  // degradation entries, so the ru aggregate line and its plural both fire.
+  // with 4 two-version groups — 4 multiple-versions warnings + cache-scan
+  // degradation + the JDK resolver's no-JAVA_HOME = 6 distinct warnings:
+  // the resolved line carries the exact ru plural suffix and the 6th warning
+  // surfaces as the ru more-line under resolve's 5-line cap.
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-lang-warn-"));
   const m2 = mkdtempSync(join(tmpdir(), "jarpeek-lang-m2-"));
   roots.push(projectRoot, m2);
@@ -255,7 +279,7 @@ describe("the warning channel", () => {
 
   beforeAll(() => {
     writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
-    for (let g = 1; g <= 3; g++) {
+    for (let g = 1; g <= 4; g++) {
       for (const v of ["1.0.0", "2.0.0"]) {
         const dir = join(m2, "com", `g${g}`, "lib", v);
         mkdirSync(dir, { recursive: true });
@@ -270,8 +294,12 @@ describe("the warning channel", () => {
     expect(run.code).toBe(0);
     expect(run.stderr).toContain("предупреждение: ");
     expect(run.stderr).not.toContain("warning: ");
-    // 3 kept artifacts is the "few" plural; core warnings stay en
-    expect(run.stdout).toMatch(/^разрешено 3 артефакта за \d+ мс/);
+    // 4 kept artifacts (few) and 6 warnings (many): both plurals pinned exact;
+    // the 6th warning past the 5-line cap renders as the ru more-line
+    expect(run.stdout.split("\n")[0]).toMatch(
+      /^разрешено 4 артефакта за \d+ мс \(6 предупреждений\)$/,
+    );
+    expect(run.stdout).toContain("+1 ещё (см. jarpeek status)");
     expect(run.stdout).not.toContain("resolved");
   });
 

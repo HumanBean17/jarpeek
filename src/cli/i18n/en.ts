@@ -133,6 +133,10 @@ export const en = {
   "render.wired": "wired {harness} ({mode}): {targets}",
   "render.note": "note: {note}",
   "render.outlineTable": "{fqn}  {coords}  provenance {provenance}",
+
+  // -- skeleton view (outline's default; --table uses render.outlineTable) --
+  "skeleton.header": "{coords}  provenance {provenance}",
+  "skeleton.stale": "stale index served",
 };
 
 /** The shape every locale's catalog must satisfy exactly. */

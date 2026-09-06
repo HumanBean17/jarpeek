@@ -129,6 +129,15 @@ describe("help constants (en)", () => {
     }
   });
 
+  it("the wiring blocks localize labels but keep their examples", () => {
+    expect(mcpHelp(ru)).toContain("Примеры:");
+    expect(mcpHelp(ru)).toContain("jarpeek mcp");
+    expect(primeHelp(ru)).toContain("Примеры:");
+    expect(primeHelp(ru)).toContain("jarpeek prime --full");
+    expect(initHelp(ru)).toContain("Примеры:");
+    expect(initHelp(ru)).toContain("jarpeek init --yes");
+  });
+
   it("the wiring-command blocks carry their examples", () => {
     expect(mcpHelp(en)).toContain("jarpeek mcp");
     expect(mcpHelp(en)).toContain("init");
@@ -226,6 +235,7 @@ describe("help output (--lang ru)", () => {
     const { stderr, code } = await runCli(["--lang", "fr", "prime"]);
     expect(code).toBe(1);
     expect(stderr).toContain("fr");
+    expect(stderr).toContain("en, ru");
   });
 
   it("config alone flips help: --project into a ru config renders ru", async () => {
