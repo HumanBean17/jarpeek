@@ -152,6 +152,97 @@ describe("usage errors", () => {
   });
 });
 
+describe("result renderers (ru)", () => {
+  const suite = {} as Suite;
+
+  beforeAll(async () => {
+    Object.assign(suite, openSuite(DEMO_ARTIFACTS));
+    await suite.ctx.ensureReady();
+  });
+
+  it("read-member localizes the span and provenance labels", () => {
+    const run = cli(suite.projectRoot, ["--lang", "ru", "read-member", "com.example.Demo", "#run(String,int)"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toMatch(/строки \d+–\d+/);
+    expect(run.stdout).toContain("происхождение");
+    expect(run.stdout).not.toMatch(/lines \d+–\d+/);
+  });
+
+  it("a member miss labels in ru, the reason stays core-en", () => {
+    const run = cli(suite.projectRoot, [
+      "--lang",
+      "ru",
+      "read-member",
+      "com.example.Demo",
+      "#run",
+      "#nosuch()",
+    ]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("не найдено #nosuch():");
+  });
+
+  it("read-source --lines speaks ru for header and range", () => {
+    const run = cli(suite.projectRoot, ["--lang", "ru", "read-source", "com.example.Demo", "--lines", "2:3"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("файл ");
+    expect(run.stdout).toContain("строки 2–3 из");
+    expect(run.stdout).not.toContain("provenance");
+  });
+
+  it("read-source --full renders the ru full-range header", () => {
+    const run = cli(suite.projectRoot, ["--lang", "ru", "read-source", "com.example.Demo", "--full"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toMatch(/строки 1-\d+/);
+  });
+
+  it("read-resource reports no matches in ru", () => {
+    const run = cli(suite.projectRoot, [
+      "--lang",
+      "ru",
+      "read-resource",
+      "com.example:demo-lib:1.0.0",
+      "NO/SUCH/**",
+    ]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("нет подходящих записей");
+    expect(run.stdout).toContain("происхождение");
+  });
+
+  it("search-symbols with no hits answers in ru", () => {
+    const run = cli(suite.projectRoot, [
+      "--lang",
+      "ru",
+      "search-symbols",
+      "zzznope",
+      "--artifact",
+      "demo-lib",
+    ]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("символы по запросу zzznope не найдены");
+  });
+
+  it("where renders coordinates and existence in ru", () => {
+    const run = cli(suite.projectRoot, ["--lang", "ru", "where", "com.example:demo-lib:1.0.0"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("координаты com.example:demo-lib:1.0.0");
+    expect(run.stdout).toContain("(существует)");
+    expect(run.stdout).not.toContain("(exists)");
+  });
+});
+
+describe("init (ru)", () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-lang-init-"));
+  roots.push(projectRoot);
+
+  it("the report labels localize", () => {
+    const run = cli(projectRoot, ["--lang", "ru", "init", "--yes"]);
+    expect(run.code).toBe(0);
+    expect(run.stdout).toContain("системы сборки:");
+    expect(run.stdout).toContain("(нет)");
+    expect(run.stdout).toContain("jdk:");
+  });
+});
+
 describe("the warning channel", () => {
   // build.gradle with no wrapper (strategy pinned to wrapper above): gradle
   // degrades, the cascade falls through to a cache scan pinned at a fake m2
@@ -174,16 +265,36 @@ describe("the warning channel", () => {
     }
   });
 
-  it("warnings render under the ru prefix, the aggregate names jarpeek status", () => {
+  it("warnings render under the ru prefix, the resolved line takes the few plural", () => {
     const run = cli(projectRoot, ["--lang", "ru", "resolve"], pin);
     expect(run.code).toBe(0);
     expect(run.stderr).toContain("предупреждение: ");
     expect(run.stderr).not.toContain("warning: ");
+    // 3 kept artifacts is the "few" plural; core warnings stay en
+    expect(run.stdout).toMatch(/^разрешено 3 артефакта за \d+ мс/);
+    expect(run.stdout).not.toContain("resolved");
   });
 
   it("the en prefix stands without --lang", () => {
     const run = cli(projectRoot, ["resolve"], pin);
     expect(run.code).toBe(0);
     expect(run.stderr).toContain("warning: ");
+  });
+});
+
+describe("resolve line plural (one)", () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-lang-one-"));
+  roots.push(projectRoot);
+
+  beforeAll(() => {
+    writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+    writeFakeGradlew(projectRoot, DEMO_JAR, DEMO_SOURCES_JAR);
+  });
+
+  it("one artifact takes the ru one-form", () => {
+    const run = cli(projectRoot, ["--lang", "ru", "resolve"], { JAVA_HOME: "" });
+    expect(run.code).toBe(0);
+    expect(run.stdout).toMatch(/^разрешен 1 артефакт за \d+ мс/);
+    expect(run.stdout).not.toContain("resolved");
   });
 });

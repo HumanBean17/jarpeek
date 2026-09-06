@@ -198,50 +198,64 @@ function renderOutlineRows(rows: Declaration[]): string {
   ]);
 }
 
-function renderMember(member: MemberSlice, fqn: string, provenance: string): string {
+function renderMember(member: MemberSlice, fqn: string, provenance: string, locale: Locale): string {
+  const tr = catalog(locale);
   const numbered = member.startLine > 0 ? numberLines(member.lines, member.startLine) : member.lines;
   const span =
     member.startLine > 0
-      ? `lines ${member.startLine}–${member.endLine}`
-      : "signature only";
-  return [`${fqn}#${member.selector}  (${span}  provenance ${provenance})`, ...numbered].join("\n");
+      ? t(tr["render.spanLines"], { a: member.startLine, b: member.endLine })
+      : tr["render.signatureOnly"];
+  return [
+    t(tr["render.memberHeader"], { fqn, selector: member.selector, span, provenance }),
+    ...numbered,
+  ].join("\n");
 }
 
-function renderReadMember(result: ReadMemberResult): string {
-  const blocks = result.members.map((member) => renderMember(member, result.fqn, result.provenance));
+function renderReadMember(result: ReadMemberResult, locale: Locale): string {
+  const tr = catalog(locale);
+  const blocks = result.members.map((member) =>
+    renderMember(member, result.fqn, result.provenance, locale),
+  );
   return [
     ...blocks,
-    ...result.misses.map((miss) => `miss ${miss.selector}: ${miss.reason}`),
-    ...(result.alternatives?.map((alt) => `alternative: ${alt.coordinates}`) ?? []),
+    ...result.misses.map((miss) =>
+      t(tr["render.miss"], { selector: miss.selector, reason: miss.reason }),
+    ),
+    ...(result.alternatives?.map((alt) => t(tr["render.alternative"], { coords: alt.coordinates })) ?? []),
   ].join("\n\n");
 }
 
-function renderReadSource(result: ReadSourceResult): string {
+function renderReadSource(result: ReadSourceResult, locale: Locale): string {
+  const tr = catalog(locale);
   if (result.mode === "outline") {
     // unreachable from CLI flags (no flag selects outline mode) — kept so a
     // future flag and the MCP surface render the same skeleton, never a table
     return [
       renderSkeleton(result, resolveSections("outline", undefined), "summary"),
-      ...(result.alternatives?.map((alt) => `alternative: ${alt.coordinates}`) ?? []),
+      ...(result.alternatives?.map((alt) => t(tr["render.alternative"], { coords: alt.coordinates })) ?? []),
     ].join("\n");
   }
-  const header = `file ${result.file} provenance ${result.provenance}`;
+  const header = t(tr["render.fileHeader"], { file: result.file, provenance: result.provenance });
   if (result.mode === "full") {
-    return [`${header} lines 1-${result.lineCount}`, ...numberLines(result.content.split("\n"), 1)].join("\n");
+    return [
+      `${header} ${t(tr["render.linesFull"], { n: result.lineCount })}`,
+      ...numberLines(result.content.split("\n"), 1),
+    ].join("\n");
   }
-  const clamp = result.clamped ? " (clamped)" : "";
+  const clamp = result.clamped ? tr["render.clamped"] : "";
   return [
-    `${header} lines ${result.startLine}-${result.endLine} of ${result.lineCount}${clamp}`,
+    `${header} ${t(tr["render.linesOf"], { a: result.startLine, b: result.endLine, n: result.lineCount })}${clamp}`,
     ...numberLines(result.lines, result.startLine),
   ].join("\n");
 }
 
-function renderReadResource(result: ReadResourceResult): string {
+function renderReadResource(result: ReadResourceResult, locale: Locale): string {
+  const tr = catalog(locale);
   if (result.entries.length === 0) {
-    return `artifact ${result.artifact}: no matching entries (provenance ${result.provenance})`;
+    return t(tr["render.noEntries"], { artifact: result.artifact, provenance: result.provenance });
   }
   return [
-    `artifact ${result.artifact} provenance ${result.provenance}`,
+    t(tr["render.artifactHeader"], { artifact: result.artifact, provenance: result.provenance }),
     renderTable([
       ["PATH", "SIZE", "CONTENT"],
       ...result.entries.map((entry) => [
@@ -270,26 +284,50 @@ function renderSearchSymbols(result: SymbolResult): string {
 /** Warnings a human `resolve` prints before collapsing the rest into one line. */
 const RESOLVE_WARNING_LINES = 5;
 
-function renderResolve(result: ResolveNowResult): string {
-  const warnings = result.warnings.length > 0 ? ` (${result.warnings.length} warnings)` : "";
+function renderResolve(result: ResolveNowResult, locale: Locale): string {
+  const tr = catalog(locale);
+  const warnings =
+    result.warnings.length > 0
+      ? t(
+          choose(locale, result.warnings.length, {
+            one: tr["render.warningsSuffix.one"],
+            few: tr["render.warningsSuffix.few"],
+            many: tr["render.warningsSuffix.many"],
+            other: tr["render.warningsSuffix.other"],
+          }),
+          { w: result.warnings.length },
+        )
+      : "";
+  const resolved = t(
+    choose(locale, result.artifactCount, {
+      one: tr["render.resolved.one"],
+      few: tr["render.resolved.few"],
+      many: tr["render.resolved.many"],
+      other: tr["render.resolved.other"],
+    }),
+    { n: result.artifactCount, ms: result.durationMs },
+  );
   // the cap is presentation-only: --json prints the full array, a human gets
   // the first few and a pointer — a cache-scan resolve can carry one warning
   // per ambiguous g:a, and v1's line-spew must not come back through stdout
   const shown = result.warnings.slice(0, RESOLVE_WARNING_LINES);
   const rest = result.warnings.length - shown.length;
   return [
-    `resolved ${result.artifactCount} artifacts in ${result.durationMs}ms${warnings}`,
+    `${resolved}${warnings}`,
     ...shown,
-    ...(rest > 0 ? [`+${rest} more (see: jarpeek status)`] : []),
+    ...(rest > 0 ? [t(tr["render.moreLine"], { n: rest })] : []),
   ].join("\n");
 }
 
-function renderWhere(result: WhereResult): string {
+function renderWhere(result: WhereResult, locale: Locale): string {
   // one line per path, not a table: the paths are the payload and must never
   // be clipped by the 60-char column cap
+  const tr = catalog(locale);
   return [
-    `coordinates ${result.coordinates}`,
-    ...result.paths.map((row) => `${row.role} ${row.path} (${row.exists ? "exists" : "missing"})`),
+    t(tr["render.coordinates"], { coords: result.coordinates }),
+    ...result.paths.map(
+      (row) => `${row.role} ${row.path} ${row.exists ? tr["render.exists"] : tr["render.missing"]}`,
+    ),
   ].join("\n");
 }
 
@@ -322,14 +360,22 @@ function parsePositiveInt(value: string): number {
   return n;
 }
 
-function renderInit(result: InitResult): string {
+function renderInit(result: InitResult, locale: Locale): string {
+  const tr = catalog(locale);
   return [
-    `build systems: ${result.detected.buildSystems.join(", ") || "(none)"}`,
-    `jdk: ${result.detected.jdk ?? "(not detected)"}`,
-    ...result.wired.map(
-      (entry) => `wired ${entry.harness} (${entry.mode}): ${entry.targets.join(", ")}`,
+    t(tr["render.buildSystems"], {
+      list: result.detected.buildSystems.join(", ") || tr["render.none"],
+    }),
+    // jdk: is a proper-noun label; only the fallback parenthetical localizes
+    `jdk: ${result.detected.jdk ?? tr["render.notDetected"]}`,
+    ...result.wired.map((entry) =>
+      t(tr["render.wired"], {
+        harness: entry.harness,
+        mode: entry.mode,
+        targets: entry.targets.join(", "),
+      }),
     ),
-    ...result.notes.map((note) => `note: ${note}`),
+    ...result.notes.map((note) => t(tr["render.note"], { note })),
   ].join("\n");
 }
 
@@ -476,18 +522,26 @@ command("outline", "cmd.outline", outlineHelp)
         ...(overrides !== undefined ? { sections: overrides } : {}),
       });
       emit(result, inv, () => {
+        const tr = catalog(inv.locale);
+        const alternatives = result.alternatives?.map((alt) =>
+          t(tr["render.alternative"], { coords: alt.coordinates }),
+        );
         if (cmd.table) {
           return [
-            `${result.fqn}  ${result.coordinates}  provenance ${result.provenance}`,
+            t(tr["render.outlineTable"], {
+              fqn: result.fqn,
+              coords: result.coordinates,
+              provenance: result.provenance,
+            }),
             renderOutlineRows(result.rows),
-            ...(result.alternatives?.map((alt) => `alternative: ${alt.coordinates}`) ?? []),
+            ...(alternatives ?? []),
           ].join("\n");
         }
         // the skeleton: same rows, code-shaped — full adds javadoc blocks
         // and body markers over the identical section booleans
         return [
           renderSkeleton(result, sections, preset === "full" ? "full" : "summary"),
-          ...(result.alternatives?.map((alt) => `alternative: ${alt.coordinates}`) ?? []),
+          ...(alternatives ?? []),
         ].join("\n");
       });
       if (result.degraded.length > 0) warn(inv.locale, ...result.degraded);
@@ -503,7 +557,7 @@ command("read-member", "cmd.read-member", readMemberHelp)
     await runQuery(inv, ctx, async () => {
       // space-separated args and one comma-joined string are the same list
       const result = await readMember(ctx, fqn, selectors.join(","));
-      emit(result, inv, () => renderReadMember(result));
+      emit(result, inv, () => renderReadMember(result, inv.locale));
       // one warn call for the whole invocation: the budget is per run, not
       // per warn site, so misses and degradations share the two-line ceiling
       warn(
@@ -530,7 +584,7 @@ command("read-source", "cmd.read-source", readSourceHelp)
         : cmd.lines !== undefined
           ? await readSource(ctx, fqn, { mode: "lines", ...parseLinesFlag(cmd.lines) })
           : await readSource(ctx, fqn);
-      emit(result, inv, () => renderReadSource(result));
+      emit(result, inv, () => renderReadSource(result, inv.locale));
       if (result.degraded.length > 0) warn(inv.locale, ...result.degraded);
     });
   });
@@ -543,7 +597,7 @@ command("read-resource", "cmd.read-resource", readResourceHelp)
     const ctx = ctxFor(inv);
     await runQuery(inv, ctx, async () => {
       const result = await readResource(ctx, artifact, glob);
-      emit(result, inv, () => renderReadResource(result));
+      emit(result, inv, () => renderReadResource(result, inv.locale));
     });
   });
 
@@ -564,7 +618,12 @@ command("search-symbols", "cmd.search-symbols", searchSymbolsHelp)
       emit(
         result,
         inv,
-        () => (result.rows.length > 0 ? renderSearchSymbols(result) : `no symbols found for ${query}`),
+        () => {
+        const tr = catalog(inv.locale);
+        return result.rows.length > 0
+          ? renderSearchSymbols(result)
+          : t(tr["render.noSymbols"], { query });
+      },
       );
       if (result.degraded.length > 0) warn(inv.locale, ...result.degraded);
     });
@@ -574,7 +633,7 @@ command("resolve", "cmd.resolve", resolveHelp).action(async () => {
   const inv = invocation();
   const ctx = ctxFor(inv);
   const result = await resolveNow(ctx);
-  emit(result, inv, () => renderResolve(result));
+  emit(result, inv, () => renderResolve(result, inv.locale));
   warn(inv.locale, ...result.degraded.map((entry) => `${entry.from}: ${entry.reason}`));
 });
 
@@ -592,7 +651,7 @@ command("where", "cmd.where", whereHelp)
     const ctx = ctxFor(inv);
     await runQuery(inv, ctx, async () => {
       const result = await where(ctx, coordinates);
-      emit(result, inv, () => renderWhere(result));
+      emit(result, inv, () => renderWhere(result, inv.locale));
     });
   });
 
@@ -622,7 +681,7 @@ command("init", "cmd.init", initHelp)
   .action(async (cmd: { yes?: boolean }) => {
     const inv = invocation();
     const result = await runInit(inv.project, { yes: cmd.yes === true });
-    emit(result, inv, () => renderInit(result));
+    emit(result, inv, () => renderInit(result, inv.locale));
   });
 
 program.action((...rest: unknown[]) => {
