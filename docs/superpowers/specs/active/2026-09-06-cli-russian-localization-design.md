@@ -78,9 +78,9 @@ help was built at load time.
   "(none)"), and the human renderers (`renderMember` spans,
   "signature only", "miss …", "alternative:", "no symbols found for …",
   "resolved N artifacts in Xms", "+N more", renderWhere/renderInit labels).
-- `render.ts` — `renderStatus` gains a catalog parameter; its rows are all
-  schema tokens (KEY column names config surface, values are paths/numbers)
-  and stay verbatim per the rule below.
+- `render.ts` — unchanged: `renderStatus` output is entirely schema tokens
+  (KEY column names config surface, values are paths/numbers) and stays
+  verbatim per the rule below, so it gains no catalog parameter.
 - `mcp-command.ts` — the one-line command description and MCP_HELP prose
   translate; the server itself does not.
 
