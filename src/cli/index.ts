@@ -60,7 +60,7 @@ import {
   topLevelHelp,
   whereHelp,
 } from "./help.js";
-import { catalog, LOCALE_VALUES, preScan, resolveLocale } from "./i18n/index.js";
+import { catalog, LOCALE_VALUES, preScan, resolveLocale, t, choose, type Locale } from "./i18n/index.js";
 
 /** Per-invocation flags of the prime subcommand. */
 interface PrimeFlags extends PrimeOptions {
@@ -83,6 +83,8 @@ interface Invocation {
   json: boolean;
   project: string;
   buildTool?: string;
+  /** The runtime locale: parsed `--lang`, else config, else en. */
+  locale: Locale;
 }
 
 /** Context with the bootstrap's one notice line routed to stderr. */
@@ -101,14 +103,23 @@ function ctxFor(inv: Invocation): QueryContext {
  * bootstrap notice this keeps any invocation at ≤3 stderr lines — the number
  * is the product feature (v1 printed one line per artifact). Bootstrap
  * heartbeats are the sanctioned exception: one line per 30s while a resolve
- * runs, never more.
+ * runs, never more. Only the prefix and the aggregate localize; the warning
+ * payloads are core-produced diagnostics and stay as they are.
  */
-function warn(...messages: string[]): void {
+function warn(locale: Locale, ...messages: string[]): void {
   const unique = [...new Set(messages)];
   if (unique.length === 0) return;
-  process.stderr.write(`warning: ${unique[0]}\n`);
+  const tr = catalog(locale);
+  process.stderr.write(`${tr["warn.prefix"]}: ${unique[0]}\n`);
   if (unique.length > 1) {
-    process.stderr.write(`warning: +${unique.length - 1} more (see: jarpeek status)\n`);
+    const n = unique.length - 1;
+    const template = choose(locale, n, {
+      one: tr["warn.more.one"],
+      few: tr["warn.more.few"],
+      many: tr["warn.more.many"],
+      other: tr["warn.more.other"],
+    });
+    process.stderr.write(`${tr["warn.prefix"]}: ${t(template, { n })}\n`);
   }
 }
 
@@ -119,25 +130,28 @@ function emit(result: unknown, inv: Invocation, render: () => string): void {
 
 /**
  * Print a miss-protocol answer to stdout. Misses are definitive answers, not
- * errors — the process exits 0 after this.
+ * errors — the process exits 0 after this. The framing localizes; the note
+ * and the searched coordinates are core contract surface and stay verbatim.
  */
 function emitMiss(miss: MissResult, label: string, inv: Invocation): void {
   if (inv.json) {
     process.stdout.write(`${renderJson(miss)}\n`);
     return;
   }
+  const tr = catalog(inv.locale);
   if (miss.found && miss.via === "fuzzy-candidates") {
     process.stdout.write(
-      `no indexed class for ${label}; did you mean:\n${renderFindClassRows(miss.hits)}\n`,
+      `${t(tr["miss.fuzzy"], { label })}\n${renderFindClassRows(miss.hits)}\n`,
     );
     return;
   }
-  const searched = miss.searchedArtifacts.length > 0 ? miss.searchedArtifacts.join("\n  ") : "(none)";
-  process.stdout.write(`${label} ${miss.note}\nsearched:\n  ${searched}\n`);
+  const searched =
+    miss.searchedArtifacts.length > 0 ? miss.searchedArtifacts.join("\n  ") : tr["miss.none"];
+  process.stdout.write(`${label} ${miss.note}\n${tr["miss.searched"]}\n  ${searched}\n`);
   // a miss born of a failed resolve carries the reason (spec decision #1):
   // the negative's degraded set warns through the same budgeted channel the
   // hits path uses, so "(none)" searched never reads as "nothing to resolve"
-  if (miss.degraded.length > 0) warn(...miss.degraded);
+  if (miss.degraded.length > 0) warn(inv.locale, ...miss.degraded);
 }
 
 /**
@@ -285,12 +299,12 @@ function renderWhere(result: WhereResult): string {
 function parseLinesFlag(value: string): { from: number; to: number } {
   const match = /^(\d+):(\d+)$/.exec(value);
   if (match === null) {
-    throw new InvalidArgumentError(`--lines expects from:to (e.g. 2:3), got "${value}"`);
+    throw new InvalidArgumentError(t(ui["err.lines.format"], { value }));
   }
   const from = Number(match[1]);
   const to = Number(match[2]);
   if (from < 1 || to < from) {
-    throw new InvalidArgumentError(`--lines expects 1-based from:to with to >= from, got "${value}"`);
+    throw new InvalidArgumentError(t(ui["err.lines.range"], { value }));
   }
   return { from, to };
 }
@@ -303,7 +317,7 @@ function parseLinesFlag(value: string): { from: number; to: number } {
 function parsePositiveInt(value: string): number {
   const n = Number(value);
   if (!Number.isInteger(n) || n <= 0) {
-    throw new InvalidArgumentError(`expected a positive integer, got "${value}"`);
+    throw new InvalidArgumentError(t(ui["err.positiveInt"], { value }));
   }
   return n;
 }
@@ -375,7 +389,13 @@ function command(name: string, descKey: keyof typeof ui, helpFn?: (t: typeof ui)
  */
 function invocation(): Invocation {
   const opts = program.opts<GlobalOptions>();
-  return { json: opts.json === true, project: opts.project ?? process.cwd(), buildTool: opts.buildTool };
+  const project = opts.project ?? process.cwd();
+  return {
+    json: opts.json === true,
+    project,
+    buildTool: opts.buildTool,
+    locale: resolveLocale({ flag: opts.lang, projectRoot: project }),
+  };
 }
 
 command("find-class", "cmd.find-class", findClassHelp)
@@ -392,7 +412,7 @@ command("find-class", "cmd.find-class", findClassHelp)
         return;
       }
       emit(result, inv, () => renderFindClassRows(result.hits));
-      if (result.degraded.length > 0) warn(...result.degraded);
+      if (result.degraded.length > 0) warn(inv.locale, ...result.degraded);
     });
   });
 
@@ -430,10 +450,10 @@ command("outline", "cmd.outline", outlineHelp)
   .option("--no-javadoc", ui["opt.noJavadoc"])
   .option("--table", ui["opt.table"])
   .action(async (fqn: string, cmd: OutlineCmd) => {
-    if (cmd.minimal && cmd.full) {
-      throw new InvalidArgumentError("--minimal and --full are mutually exclusive");
-    }
     const inv = invocation();
+    if (cmd.minimal && cmd.full) {
+      throw new InvalidArgumentError(catalog(inv.locale)["err.exclusive.minFull"]);
+    }
     const ctx = ctxFor(inv);
     await runQuery(inv, ctx, async () => {
       const preset: OutlinePreset = cmd.minimal ? "minimal" : cmd.full ? "full" : "outline";
@@ -470,7 +490,7 @@ command("outline", "cmd.outline", outlineHelp)
           ...(result.alternatives?.map((alt) => `alternative: ${alt.coordinates}`) ?? []),
         ].join("\n");
       });
-      if (result.degraded.length > 0) warn(...result.degraded);
+      if (result.degraded.length > 0) warn(inv.locale, ...result.degraded);
     });
   });
 
@@ -487,6 +507,7 @@ command("read-member", "cmd.read-member", readMemberHelp)
       // one warn call for the whole invocation: the budget is per run, not
       // per warn site, so misses and degradations share the two-line ceiling
       warn(
+        inv.locale,
         ...result.misses.map((miss) => `${miss.selector}: ${miss.reason}`),
         ...result.degraded,
       );
@@ -502,7 +523,7 @@ command("read-source", "cmd.read-source", readSourceHelp)
     const ctx = ctxFor(inv);
     await runQuery(inv, ctx, async () => {
       if (cmd.full && cmd.lines !== undefined) {
-        throw new InvalidArgumentError("--full and --lines are mutually exclusive");
+        throw new InvalidArgumentError(catalog(inv.locale)["err.exclusive.fullLines"]);
       }
       const result = cmd.full
         ? await readSource(ctx, fqn, { mode: "full" })
@@ -510,7 +531,7 @@ command("read-source", "cmd.read-source", readSourceHelp)
           ? await readSource(ctx, fqn, { mode: "lines", ...parseLinesFlag(cmd.lines) })
           : await readSource(ctx, fqn);
       emit(result, inv, () => renderReadSource(result));
-      if (result.degraded.length > 0) warn(...result.degraded);
+      if (result.degraded.length > 0) warn(inv.locale, ...result.degraded);
     });
   });
 
@@ -545,7 +566,7 @@ command("search-symbols", "cmd.search-symbols", searchSymbolsHelp)
         inv,
         () => (result.rows.length > 0 ? renderSearchSymbols(result) : `no symbols found for ${query}`),
       );
-      if (result.degraded.length > 0) warn(...result.degraded);
+      if (result.degraded.length > 0) warn(inv.locale, ...result.degraded);
     });
   });
 
@@ -554,14 +575,14 @@ command("resolve", "cmd.resolve", resolveHelp).action(async () => {
   const ctx = ctxFor(inv);
   const result = await resolveNow(ctx);
   emit(result, inv, () => renderResolve(result));
-  warn(...result.degraded.map((entry) => `${entry.from}: ${entry.reason}`));
+  warn(inv.locale, ...result.degraded.map((entry) => `${entry.from}: ${entry.reason}`));
 });
 
 command("status", "cmd.status", statusHelp).action(async () => {
   const inv = invocation();
   const result = await status(ctxFor(inv));
   emit(result, inv, () => renderStatus(result));
-  if (result.degraded.length > 0) warn(...result.degraded);
+  if (result.degraded.length > 0) warn(inv.locale, ...result.degraded);
 });
 
 command("where", "cmd.where", whereHelp)
@@ -631,18 +652,23 @@ program.action((...rest: unknown[]) => {
     })
     .filter((entry): entry is { name: string; score: number } => entry !== null)
     .sort((a, b) => b.score - a.score);
-  const suggestion = scored.length > 0 ? ` — did you mean '${scored[0]!.name}'?` : "";
+  const suggestion = scored.length > 0 ? scored[0]!.name : undefined;
+  const tr = catalog(invocation().locale);
   throw new InvalidArgumentError(
-    `unknown command '${operands[0]}'${suggestion} (see: jarpeek --help)`,
+    suggestion !== undefined
+      ? t(tr["err.unknownCommand"], { name: operands[0]!, suggestion })
+      : t(tr["err.unknownCommandPlain"], { name: operands[0]! }),
   );
 });
 
 program.parseAsync().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
+  // the fatal prefix localizes through the build-time catalog (a parse-time
+  // failure never reaches a parsed Invocation); the payload stays verbatim
   process.stderr.write(
     error instanceof SelectorError || error instanceof InvalidArgumentError
       ? `${message}\n`
-      : `error: ${message}\n`,
+      : `${ui["err.fatal"]}: ${message}\n`,
   );
   process.exit(EXIT_FATAL);
 });

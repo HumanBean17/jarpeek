@@ -80,6 +80,28 @@ export const en = {
   "related.resolve": "status reports what the manifest now holds.",
   "related.status": "resolve forces a re-resolve.",
   "related.where": "read-resource reads non-class entries of the same artifact.",
+
+  // -- runtime: the warning channel (plural families feed choose()) ----------------
+  "warn.prefix": "warning",
+  "warn.more.one": "+{n} more (see: jarpeek status)",
+  "warn.more.few": "+{n} more (see: jarpeek status)",
+  "warn.more.many": "+{n} more (see: jarpeek status)",
+  "warn.more.other": "+{n} more (see: jarpeek status)",
+
+  // -- runtime: miss-protocol rendering ----------------------------------------------
+  "miss.fuzzy": "no indexed class for {label}; did you mean:",
+  "miss.searched": "searched:",
+  "miss.none": "(none)",
+
+  // -- runtime: usage errors ------------------------------------------------------------
+  "err.lines.format": "--lines expects from:to (e.g. 2:3), got \"{value}\"",
+  "err.lines.range": "--lines expects 1-based from:to with to >= from, got \"{value}\"",
+  "err.positiveInt": "expected a positive integer, got \"{value}\"",
+  "err.exclusive.minFull": "--minimal and --full are mutually exclusive",
+  "err.exclusive.fullLines": "--full and --lines are mutually exclusive",
+  "err.unknownCommand": "unknown command '{name}' — did you mean '{suggestion}'? (see: jarpeek --help)",
+  "err.unknownCommandPlain": "unknown command '{name}' (see: jarpeek --help)",
+  "err.fatal": "error",
 };
 
 /** The shape every locale's catalog must satisfy exactly. */

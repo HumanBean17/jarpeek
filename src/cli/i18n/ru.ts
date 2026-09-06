@@ -79,4 +79,27 @@ export const ru: Catalog = {
   "related.resolve": "status показывает, что теперь находится в манифесте.",
   "related.status": "resolve запускает повторное разрешение.",
   "related.where": "read-resource читает неклассовые записи того же артефакта.",
+
+  // -- runtime: the warning channel (plural families feed choose()) ----------------
+  "warn.prefix": "предупреждение",
+  "warn.more.one": "ещё {n} предупреждение (см. jarpeek status)",
+  "warn.more.few": "ещё {n} предупреждения (см. jarpeek status)",
+  "warn.more.many": "ещё {n} предупреждений (см. jarpeek status)",
+  "warn.more.other": "ещё {n} предупреждений (см. jarpeek status)",
+
+  // -- runtime: miss-protocol rendering ----------------------------------------------
+  "miss.fuzzy": "нет индексированного класса для {label}; возможно, вы имели в виду:",
+  "miss.searched": "просмотрено:",
+  "miss.none": "(нет)",
+
+  // -- runtime: usage errors ------------------------------------------------------------
+  "err.lines.format": "--lines ожидает from:to (напр. 2:3), получено \"{value}\"",
+  "err.lines.range": "--lines ожидает from:to с нумерацией от 1 и to >= from, получено \"{value}\"",
+  "err.positiveInt": "ожидается целое положительное число, получено \"{value}\"",
+  "err.exclusive.minFull": "--minimal и --full взаимоисключающие",
+  "err.exclusive.fullLines": "--full и --lines взаимоисключающие",
+  "err.unknownCommand":
+    "неизвестная команда '{name}' — возможно, вы имели в виду '{suggestion}'? (см. jarpeek --help)",
+  "err.unknownCommandPlain": "неизвестная команда '{name}' (см. jarpeek --help)",
+  "err.fatal": "ошибка",
 };
