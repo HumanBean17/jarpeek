@@ -8,7 +8,8 @@
  */
 import type { Command } from "commander";
 import { startMcpServer } from "../mcp/server.js";
-import { MCP_HELP } from "./help.js";
+import { mcpHelp } from "./help.js";
+import type { Catalog } from "./i18n/index.js";
 
 export interface McpOptions {
   project?: string;
@@ -16,12 +17,15 @@ export interface McpOptions {
   buildTool?: string;
 }
 
-/** Wire the mcp subcommand onto the program. */
-export function registerMcpCommand(program: Command): void {
+/**
+ * Wire the mcp subcommand onto the program. `t` is the build-time catalog
+ * (the server itself stays English — it speaks to agents, not humans).
+ */
+export function registerMcpCommand(program: Command, t: Catalog, catalogAt: () => Catalog): void {
   program
     .command("mcp")
-    .description("serve the MCP stdio server for this project")
-    .addHelpText("after", MCP_HELP)
+    .description(t["cmd.mcp"])
+    .addHelpText("after", () => mcpHelp(catalogAt()))
     .action(async () => {
       const opts = program.opts<McpOptions>();
       await startMcpServer(opts.project ?? process.cwd(), opts.buildTool);

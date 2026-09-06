@@ -46,19 +46,21 @@ import { registerMcpCommand } from "./mcp-command.js";
 import { prime, type PrimeOptions } from "../prime/command.js";
 import { renderSkeleton } from "./skeleton.js";
 import {
-  FIND_CLASS_HELP,
-  INIT_HELP,
-  OUTLINE_HELP,
-  PRIME_HELP,
-  READ_MEMBER_HELP,
-  READ_RESOURCE_HELP,
-  READ_SOURCE_HELP,
-  RESOLVE_HELP,
-  SEARCH_SYMBOLS_HELP,
-  STATUS_HELP,
-  TOP_LEVEL_HELP,
-  WHERE_HELP,
+  findClassHelp,
+  initHelp,
+  mcpHelp,
+  outlineHelp,
+  primeHelp,
+  readMemberHelp,
+  readResourceHelp,
+  readSourceHelp,
+  resolveHelp,
+  searchSymbolsHelp,
+  statusHelp,
+  topLevelHelp,
+  whereHelp,
 } from "./help.js";
+import { catalog, LOCALE_VALUES, preScan, resolveLocale } from "./i18n/index.js";
 
 /** Per-invocation flags of the prime subcommand. */
 interface PrimeFlags extends PrimeOptions {
@@ -73,6 +75,7 @@ interface GlobalOptions {
   json?: boolean;
   project?: string;
   buildTool?: string;
+  lang?: string;
 }
 
 /** Per-invocation view of the global options. */
@@ -318,28 +321,48 @@ function renderInit(result: InitResult): string {
 
 // -- command surface -------------------------------------------------------------
 
+/**
+ * The build-time locale: commander constructs the program — descriptions,
+ * option help, help blocks — before parsing, so these strings converge on
+ * a raw-argv pre-scan of `--lang`/`--project` instead of parsed options.
+ * Runtime actions re-resolve through the parsed `Invocation` (see
+ * `invocation()`); a trailing `--lang ru` still localizes every output
+ * site that renders after the parse.
+ */
+const scanned = preScan(process.argv.slice(2));
+const buildLocale = resolveLocale({
+  flag: scanned.lang,
+  projectRoot: scanned.project ?? process.cwd(),
+});
+const ui = catalog(buildLocale);
+
 const program = new Command();
 
 program
   .name("jarpeek")
-  .description("Dependency source access for AI agents on JVM projects")
+  .description(ui["cli.description"])
   .version(VERSION)
-  .option("--json", "machine-readable output (the exact MCP result object)")
-  .option("--project <dir>", "project root (default: cwd)")
+  .option("--json", ui["opt.json"])
+  .option("--project <dir>", ui["opt.project"])
   .addOption(
     new Option(
       "--build-tool <strategy>",
-      "which mvn/gradle runs resolves: system from PATH, the root wrapper, or system-first with wrapper fallback (default)",
+      ui["opt.buildTool"],
     ).choices([...BUILD_TOOL_STRATEGIES]),
   )
-  .addHelpText("after", TOP_LEVEL_HELP);
+  .addOption(new Option("--lang <locale>", ui["opt.lang"]).choices([...LOCALE_VALUES]))
+  .addHelpText("after", () => topLevelHelp(catalog(buildLocale)));
 
-/** Declare a subcommand. Global flags are program-level and sticky. */
-function command(name: string, description: string, helpText?: string) {
+/**
+ * Declare a subcommand. Global flags are program-level and sticky.
+ * `descKey`/`helpFn` come from the build-time catalog (help renders
+ * before actions run).
+ */
+function command(name: string, descKey: keyof typeof ui, helpFn?: (t: typeof ui) => string) {
   const sub = program.command(name);
-  sub.description(description);
-  if (helpText !== undefined) {
-    sub.addHelpText("after", helpText);
+  sub.description(ui[descKey]);
+  if (helpFn !== undefined) {
+    sub.addHelpText("after", () => helpFn(catalog(buildLocale)));
   }
   return sub;
 }
@@ -355,9 +378,9 @@ function invocation(): Invocation {
   return { json: opts.json === true, project: opts.project ?? process.cwd(), buildTool: opts.buildTool };
 }
 
-command("find-class", "find classes by FQN, suffix, simple name, or fuzzy name", FIND_CLASS_HELP)
+command("find-class", "cmd.find-class", findClassHelp)
   .argument("<query>")
-  .option("--limit <n>", "max hits", parsePositiveInt, 20)
+  .option("--limit <n>", ui["opt.limitHits"], parsePositiveInt, 20)
   .action(async (query: string, cmd: { limit: number }) => {
     const inv = invocation();
     const ctx = ctxFor(inv);
@@ -387,29 +410,25 @@ interface OutlineCmd {
   table?: boolean;
 }
 
-command(
-  "outline",
-  "java-shaped class skeleton (presets + section toggles; --table for the legacy view)",
-  OUTLINE_HELP,
-)
+command("outline", "cmd.outline", outlineHelp)
   .argument("<fqn>")
   // choice-constrained so an invalid value is a named usage error, and the
   // valid set renders into --help from the same arrays the MCP schema uses
-  .addOption(new Option("--kind <k>", "filter by declaration kind").choices(KIND_VALUES))
-  .addOption(new Option("--visibility <v>", "filter by visibility").choices(VISIBILITY_VALUES))
-  .option("--minimal", "preset: no imports, no fields, no javadoc")
-  .option("--full", "preset: everything, javadoc blocks and body markers")
-  .option("--imports", "show imports (overrides the preset)")
-  .option("--no-imports", "hide imports (overrides the preset)")
-  .option("--fields", "show fields/properties/enum constants (overrides the preset)")
-  .option("--no-fields", "hide fields/properties/enum constants (overrides the preset)")
-  .option("--methods", "show methods/constructors (overrides the preset)")
-  .option("--no-methods", "hide methods/constructors (overrides the preset)")
-  .option("--inner", "show nested classes (overrides the preset)")
-  .option("--no-inner", "hide nested classes (overrides the preset)")
-  .option("--javadoc", "show javadoc (overrides the preset)")
-  .option("--no-javadoc", "hide javadoc (overrides the preset)")
-  .option("--table", "the legacy tabular view over the same rows")
+  .addOption(new Option("--kind <k>", ui["opt.kind"]).choices(KIND_VALUES))
+  .addOption(new Option("--visibility <v>", ui["opt.visibility"]).choices(VISIBILITY_VALUES))
+  .option("--minimal", ui["opt.minimal"])
+  .option("--full", ui["opt.fullOutline"])
+  .option("--imports", ui["opt.imports"])
+  .option("--no-imports", ui["opt.noImports"])
+  .option("--fields", ui["opt.fields"])
+  .option("--no-fields", ui["opt.noFields"])
+  .option("--methods", ui["opt.methods"])
+  .option("--no-methods", ui["opt.noMethods"])
+  .option("--inner", ui["opt.inner"])
+  .option("--no-inner", ui["opt.noInner"])
+  .option("--javadoc", ui["opt.javadoc"])
+  .option("--no-javadoc", ui["opt.noJavadoc"])
+  .option("--table", ui["opt.table"])
   .action(async (fqn: string, cmd: OutlineCmd) => {
     if (cmd.minimal && cmd.full) {
       throw new InvalidArgumentError("--minimal and --full are mutually exclusive");
@@ -455,7 +474,7 @@ command(
     });
   });
 
-command("read-member", "source slices for member selectors (#name, #name(T1,T2))", READ_MEMBER_HELP)
+command("read-member", "cmd.read-member", readMemberHelp)
   .argument("<fqn>")
   .argument("<selectors...>")
   .action(async (fqn: string, selectors: string[]) => {
@@ -474,10 +493,10 @@ command("read-member", "source slices for member selectors (#name, #name(T1,T2))
     });
   });
 
-command("read-source", "source text for one class (outline | full | lines)", READ_SOURCE_HELP)
+command("read-source", "cmd.read-source", readSourceHelp)
   .argument("<fqn>")
-  .option("--full", "the whole file")
-  .option("--lines <a:b>", "line range, e.g. 2:3")
+  .option("--full", ui["opt.fullFile"])
+  .option("--lines <a:b>", ui["opt.lines"])
   .action(async (fqn: string, cmd: { full?: boolean; lines?: string }) => {
     const inv = invocation();
     const ctx = ctxFor(inv);
@@ -495,7 +514,7 @@ command("read-source", "source text for one class (outline | full | lines)", REA
     });
   });
 
-command("read-resource", "non-class jar entries (config, services, manifests)", READ_RESOURCE_HELP)
+command("read-resource", "cmd.read-resource", readResourceHelp)
   .argument("<artifact>")
   .argument("<glob>")
   .action(async (artifact: string, glob: string) => {
@@ -507,11 +526,11 @@ command("read-resource", "non-class jar entries (config, services, manifests)", 
     });
   });
 
-command("search-symbols", "find declarations by member name in one artifact", SEARCH_SYMBOLS_HELP)
+command("search-symbols", "cmd.search-symbols", searchSymbolsHelp)
   .argument("<query>")
-  .requiredOption("--artifact <coords>", "g:a:v coordinates or unique artifact id")
-  .option("--limit <n>", "max rows", parsePositiveInt, 50)
-  .addOption(new Option("--kind <k>", "filter by declaration kind").choices(KIND_VALUES))
+  .requiredOption("--artifact <coords>", ui["opt.artifact"])
+  .option("--limit <n>", ui["opt.limitRows"], parsePositiveInt, 50)
+  .addOption(new Option("--kind <k>", ui["opt.kind"]).choices(KIND_VALUES))
   .action(async (query: string, cmd: { artifact: string; limit: number; kind?: DeclKind }) => {
     const inv = invocation();
     const ctx = ctxFor(inv);
@@ -530,7 +549,7 @@ command("search-symbols", "find declarations by member name in one artifact", SE
     });
   });
 
-command("resolve", "force a dependency resolve pass", RESOLVE_HELP).action(async () => {
+command("resolve", "cmd.resolve", resolveHelp).action(async () => {
   const inv = invocation();
   const ctx = ctxFor(inv);
   const result = await resolveNow(ctx);
@@ -538,14 +557,14 @@ command("resolve", "force a dependency resolve pass", RESOLVE_HELP).action(async
   warn(...result.degraded.map((entry) => `${entry.from}: ${entry.reason}`));
 });
 
-command("status", "manifest and JVM report", STATUS_HELP).action(async () => {
+command("status", "cmd.status", statusHelp).action(async () => {
   const inv = invocation();
   const result = await status(ctxFor(inv));
   emit(result, inv, () => renderStatus(result));
   if (result.degraded.length > 0) warn(...result.degraded);
 });
 
-command("where", "on-disk paths for one artifact", WHERE_HELP)
+command("where", "cmd.where", whereHelp)
   .argument("<coordinates>")
   .action(async (coordinates: string) => {
     const inv = invocation();
@@ -556,13 +575,13 @@ command("where", "on-disk paths for one artifact", WHERE_HELP)
     });
   });
 
-registerMcpCommand(program);
+registerMcpCommand(program, ui, () => catalog(buildLocale));
 
-command("prime", "the jarpeek cheatsheet for agents (this file)", PRIME_HELP)
-  .option("--full", "the full cli cheatsheet (default without MCP wiring)")
-  .option("--mcp", "the short mcp card")
-  .option("--export", "the default content even when .jarpeek/PRIME.md exists")
-  .option("--hook-json", "wrap the text as a SessionStart hook additionalContext payload")
+command("prime", "cmd.prime", primeHelp)
+  .option("--full", ui["opt.primeFull"])
+  .option("--mcp", ui["opt.primeMcp"])
+  .option("--export", ui["opt.primeExport"])
+  .option("--hook-json", ui["opt.primeHookJson"])
   .action(async (cmd: PrimeFlags) => {
     const inv = invocation();
     const result = prime(inv.project, {
@@ -577,8 +596,8 @@ command("prime", "the jarpeek cheatsheet for agents (this file)", PRIME_HELP)
     );
   });
 
-command("init", "wire AI harnesses (MCP server or CLI hints) for this project", INIT_HELP)
-  .option("--yes", "non-interactive: claude + mcp defaults")
+command("init", "cmd.init", initHelp)
+  .option("--yes", ui["opt.yes"])
   .action(async (cmd: { yes?: boolean }) => {
     const inv = invocation();
     const result = await runInit(inv.project, { yes: cmd.yes === true });

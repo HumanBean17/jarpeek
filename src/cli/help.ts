@@ -9,96 +9,128 @@
  * table, so the values an agent sees are the same ones validation enforces
  * and the MCP schema accepts; hand-copying them here is how they would
  * drift.
+ *
+ * Each block is a function of the message catalog (human-mode localization;
+ * example invocation lines stay verbatim in every locale). The English
+ * catalog's values reproduce the historical strings byte-for-byte — the
+ * default help output is the regression oracle.
  */
+import type { Catalog } from "./i18n/index.js";
 
 /** Appended to `jarpeek --help`: the decision guidance and the way out. */
-export const TOP_LEVEL_HELP = `
-the frugal path: find-class to locate the class, outline for its shape, read-member for exactly the member's code — read-source only when you need the whole file.
+export function topLevelHelp(t: Catalog): string {
+  return `
+${t["help.frugal"]}
 
-Examples:
+${t["help.examples"]}
   jarpeek find-class StringJoiner --limit 5
   jarpeek outline java.util.StringJoiner --kind method
   jarpeek read-member com.example.lib.ApiClient '#execute(Request,int)'
   jarpeek read-source com.example.lib.ApiClient --lines 40:80
   jarpeek search-symbols builder --artifact com.example:demo-lib:1.0.0 --kind method
 
-full agent cheatsheet: jarpeek prime --full
+${t["help.primePointer"]}
 `;
+}
 
-export const FIND_CLASS_HELP = `
-Examples:
+export function findClassHelp(t: Catalog): string {
+  return `
+${t["help.examples"]}
   jarpeek find-class StringJoiner --limit 5
   jarpeek find-class com.example.lib.ApiClient
-related: outline <fqn> shows a hit's shape.
+${t["help.related"]} ${t["related.find-class"]}
 `;
+}
 
-export const OUTLINE_HELP = `
-Examples:
+export function outlineHelp(t: Catalog): string {
+  return `
+${t["help.examples"]}
   jarpeek outline java.util.StringJoiner --kind method
   jarpeek outline java.util.StringJoiner --minimal
   jarpeek outline com.example.lib.ApiClient --no-fields
-related: read-member returns one member's code; --table keeps the legacy tabular view.
+${t["help.related"]} ${t["related.outline"]}
 `;
+}
 
-export const READ_MEMBER_HELP = `
-Examples:
+export function readMemberHelp(t: Catalog): string {
+  return `
+${t["help.examples"]}
   jarpeek read-member com.example.lib.ApiClient '#execute(Request,int)'
   jarpeek read-member com.example.lib.ApiClient '#builder' '#build()'
-related: read-source --lines a:b for surrounding context.
+${t["help.related"]} ${t["related.read-member"]}
 `;
+}
 
-export const READ_SOURCE_HELP = `
-Examples:
+export function readSourceHelp(t: Catalog): string {
+  return `
+${t["help.examples"]}
   jarpeek read-source com.example.lib.ApiClient --lines 40:80
   jarpeek read-source com.example.lib.ApiClient --full
-related: cheaper first — outline, then read-member.
+${t["help.related"]} ${t["related.read-source"]}
 `;
+}
 
-export const READ_RESOURCE_HELP = `
-Examples:
+export function readResourceHelp(t: Catalog): string {
+  return `
+${t["help.examples"]}
   jarpeek read-resource com.example:demo-lib:1.0.0 'META-INF/**'
-related: where <coords> for the artifact's on-disk paths.
+${t["help.related"]} ${t["related.read-resource"]}
 `;
+}
 
-export const SEARCH_SYMBOLS_HELP = `
-Examples:
+export function searchSymbolsHelp(t: Catalog): string {
+  return `
+${t["help.examples"]}
   jarpeek search-symbols builder --artifact com.example:demo-lib:1.0.0 --kind method
-related: find-class when you don't know which artifact holds the class.
+${t["help.related"]} ${t["related.search-symbols"]}
 `;
+}
 
-export const RESOLVE_HELP = `
-Examples:
+export function resolveHelp(t: Catalog): string {
+  return `
+${t["help.examples"]}
   jarpeek resolve
-related: status reports what the manifest now holds.
+${t["help.related"]} ${t["related.resolve"]}
 `;
+}
 
-export const STATUS_HELP = `
-Examples:
+export function statusHelp(t: Catalog): string {
+  return `
+${t["help.examples"]}
   jarpeek status
-related: resolve forces a re-resolve.
+${t["help.related"]} ${t["related.status"]}
 `;
+}
 
-export const WHERE_HELP = `
-Examples:
+export function whereHelp(t: Catalog): string {
+  return `
+${t["help.examples"]}
   jarpeek where com.example:demo-lib:1.0.0
-related: read-resource reads non-class entries of the same artifact.
+${t["help.related"]} ${t["related.where"]}
 `;
+}
 
-export const MCP_HELP = `
-Examples:
+export function mcpHelp(t: Catalog): string {
+  return `
+${t["help.examples"]}
   jarpeek mcp
-serves the stdio MCP server; jarpeek init writes the harness configs that launch it.
+${t["help.mcp"]}
 `;
+}
 
-export const PRIME_HELP = `
-Examples:
+export function primeHelp(t: Catalog): string {
+  return `
+${t["help.examples"]}
   jarpeek prime --full
   jarpeek prime --export
---full produces the full agent cheatsheet; --export bypasses a .jarpeek/PRIME.md override.
+${t["help.prime"]}
 `;
+}
 
-export const INIT_HELP = `
-Examples:
+export function initHelp(t: Catalog): string {
+  return `
+${t["help.examples"]}
   jarpeek init --yes
-non-interactive wiring (Claude Code + MCP).
+${t["help.init"]}
 `;
+}
