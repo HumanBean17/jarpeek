@@ -65,9 +65,16 @@ interface DumpConfiguration {
   error?: string;
 }
 
+/** One build project from the dump: its Gradle path and its source roots. */
+interface DumpProject {
+  path: string;
+  sourceDirs?: string[];
+}
+
 interface DumpDocument {
   configurations?: DumpConfiguration[];
   sources?: Record<string, string>;
+  projects?: DumpProject[];
 }
 
 /**
@@ -115,11 +122,18 @@ function failureDetail(result: RunResult): string {
 }
 
 /**
- * Dump document → artifacts, deduplicated by coordinates with the first
- * configuration in document order winning (compileClasspath precedes
- * runtimeClasspath in the init script's iteration, so main-compile labels
- * stick). External artifacts pair with the sources map; module artifacts
- * carry the project directory under namespaced coordinates — the bare
+ * Dump document → artifacts. The `projects` pass runs first and is the
+ * only source of build-module truth: every project that declares source
+ * roots with at least one root on disk becomes an artifact — the root
+ * path ":" as kind "project" (the build's own code, ranked and displayed
+ * as such downstream), subprojects as kind "module" — so projects precede
+ * externals in manifest order. Configuration module entries are ignored
+ * (the projects pass already covers them; without it, the configuration
+ * only knows whole project directories, which are not package roots).
+ * Externals dedupe by coordinates with the first configuration in
+ * document order winning (compileClasspath precedes runtimeClasspath in
+ * the init script's iteration, so main-compile labels stick) and pair
+ * with the sources map. Module coordinates are namespaced — the bare
  * project path (":app") would collide with another project's identically
  * named module in the user-global index cache. Errored configurations
  * contribute nothing.
@@ -128,16 +142,33 @@ function mapArtifacts(document: DumpDocument, projectRoot: string): DependencyAr
   const byCoordinates = new Map<string, DependencyArtifact>();
   const sources = document.sources ?? {};
 
+  for (const project of document.projects ?? []) {
+    const sourceDirs = project.sourceDirs ?? [];
+    // a sources-less aggregator has nothing to list — and recording it would
+    // surface as an unreadable backing in every query. The same skip applies
+    // when NO declared root exists on disk (the trees were never created):
+    // an all-absent artifact would wedge isStale into re-resolving every
+    // query, since a successful resolve never clears it
+    if (sourceDirs.length === 0 || !sourceDirs.some((dir) => existsSync(dir))) continue;
+    const coordinates = moduleCoordinates(projectRoot, project.path);
+    if (byCoordinates.has(coordinates)) continue;
+    byCoordinates.set(coordinates, {
+      coordinates,
+      kind: project.path === ":" ? "project" : "module",
+      sourceDirs,
+    });
+  }
+
   for (const configuration of document.configurations ?? []) {
     for (const dependency of configuration.dependencies ?? []) {
       if (dependency.kind === "module") {
-        const coordinates = moduleCoordinates(projectRoot, dependency.coordinates);
-        if (byCoordinates.has(coordinates)) continue;
-        byCoordinates.set(coordinates, {
-          coordinates,
-          kind: "module",
-          sourceDir: dependency.path,
-        });
+        // the projects pass is the source of module truth and always runs in
+        // the shipped script; a module appearing ONLY as a configuration
+        // dependency means the dump has no projects pass (a foreign or older
+        // script). The configuration entry names the whole PROJECT
+        // directory — not a package root — and walking it would mis-list
+        // fqns (`src.main/java.…`) that locate cannot read, so it
+        // contributes nothing
         continue;
       }
       if (byCoordinates.has(dependency.coordinates)) continue;

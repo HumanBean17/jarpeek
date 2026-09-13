@@ -10,7 +10,7 @@
  */
 export const en = {
   // -- program and global flags ---------------------------------------------
-  "cli.description": "Dependency source access for AI agents on JVM projects",
+  "cli.description": "JVM source access for AI agents: the project's own code and its dependencies",
   "opt.json": "machine-readable output (the exact MCP result object)",
   "opt.project": "project root (default: cwd)",
   "opt.buildTool":
@@ -18,13 +18,15 @@ export const en = {
   "opt.lang": "interface language for human-mode output (en, ru)",
 
   // -- subcommand descriptions ------------------------------------------------
-  "cmd.find-class": "find classes by FQN, suffix, simple name, or fuzzy name",
+  "cmd.find-class":
+    "find classes by FQN, suffix, simple name, or fuzzy name — project sources and dependencies alike",
   "cmd.outline":
     "java-shaped class skeleton (presets + section toggles; --table for the legacy view)",
   "cmd.read-member": "source slices for member selectors (#name, #name(T1,T2))",
   "cmd.read-source": "source text for one class (outline | full | lines)",
   "cmd.read-resource": "non-class jar entries (config, services, manifests)",
-  "cmd.search-symbols": "find declarations by member name in one artifact",
+  "cmd.search-symbols":
+    "find declarations by member name in one dependency artifact (project sources: grep)",
   "cmd.resolve": "force a dependency resolve pass",
   "cmd.status": "manifest and JVM report",
   "cmd.where": "on-disk paths for one artifact",
@@ -61,7 +63,7 @@ export const en = {
 
   // -- help-block prose ----------------------------------------------------------
   "help.frugal":
-    "the frugal path: find-class to locate the class, outline for its shape, read-member for exactly the member's code — read-source only when you need the whole file.",
+    "the frugal path: find-class to locate the class (it covers project sources and dependencies alike), outline for its shape, read-member for exactly the member's code — read-source only when you need the whole file.",
   "help.examples": "Examples:",
   "help.related": "related:",
   "help.primePointer": "full agent cheatsheet: jarpeek prime --full",

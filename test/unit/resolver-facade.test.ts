@@ -290,7 +290,7 @@ describe("resolveDependencies", () => {
     const moduleFirst: DependencyArtifact = {
       coordinates: "org.example:mod:1.0",
       kind: "module",
-      sourceDir: "/work/mod",
+      sourceDirs: ["/work/mod"],
     };
     const f = fakes({
       gradle: { ok: true, artifacts: [moduleFirst, artifact("org.example:mod:1.0")] },
@@ -300,7 +300,7 @@ describe("resolveDependencies", () => {
 
     expect(out.artifacts).toHaveLength(1);
     expect(out.artifacts[0].kind).toBe("module");
-    expect(out.artifacts[0].sourceDir).toBe("/work/mod");
+    expect(out.artifacts[0].sourceDirs).toEqual(["/work/mod"]);
   });
 
   it("empty dir: no resolvers detected, cache scan + jdk only, warnings merged, no throw", async () => {

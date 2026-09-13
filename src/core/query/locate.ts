@@ -12,8 +12,8 @@
  * memoized by coordinates+stamp.
  */
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { ArtifactListing, ListingService } from "../listing.js";
+import { sourceEntryPath } from "../listing.js";
 import type { Declaration, DependencyArtifact, Provenance } from "../types.js";
 import type { Manifest } from "../../index/manifest.js";
 import { recordsFromClassBytes, recordsFromSourceText } from "../../parse/records.js";
@@ -105,6 +105,12 @@ export interface LocatedClass {
   artifact: DependencyArtifact;
   /** Jar entry name or sourceDir relpath the records were parsed from. */
   entry: string;
+  /**
+   * Absolute on-disk path, sourceDir backings only — the winning root the
+   * listing resolved the relpath against; readers use it instead of
+   * re-joining a sourceDirs array they cannot disambiguate.
+   */
+  file?: string;
   /** The class's own row, its member rows, and (includeNested) nested class rows and their members. */
   records: Declaration[];
   /** "source" for sources/sourceDir backings; "signature" for binary — locate never decompiles. */
@@ -233,19 +239,21 @@ async function sourceLocated(
   fqn: string,
   includeNested: boolean,
   scan: Scan,
+  file?: string,
 ): Promise<LocatedClass> {
   let text: string;
   try {
     text = await readText();
   } catch {
     scan.failed++;
-    return { artifact, entry, records: [], provenance: "source" };
+    return { artifact, entry, records: [], provenance: "source", ...(file !== undefined ? { file } : {}) };
   }
   const { records, diagnostics, imports } = recordsFromSourceText(text, entry);
   if (diagnostics.length > 0) scan.failed++;
   return {
     artifact,
     entry,
+    ...(file !== undefined ? { file } : {}),
     records: familyRecords(records, fqn, includeNested),
     provenance: "source",
     imports,
@@ -315,16 +323,18 @@ async function locateInListing(
   if (hit === null) return null;
   // nothing source-ish yields the entry: fall back to the hit's own backing
   if (listing.source === "sourceDir") {
-    const root = artifact.sourceDir!;
+    const file = sourceEntryPath(listing, hit.name);
+    if (file === undefined) return null;
     return sourceLocated(
       artifact,
       hit.name,
       // readFileSync throws sync on a vanished file; the async wrapper keeps
       // sourceLocated's single try/catch honest for both backings
-      async () => readFileSync(join(root, hit.name), "utf8"),
+      async () => readFileSync(file, "utf8"),
       fqn,
       includeNested,
       scan,
+      file,
     );
   }
   const zipHit = findZipHit(listing, fqn);
@@ -365,20 +375,23 @@ async function parseBackingFor(
   includeNested: boolean,
   scan: Scan,
 ): Promise<LocatedClass | null> {
-  if (artifact.sourceDir !== undefined) {
+  if (artifact.sourceDirs !== undefined && artifact.sourceDirs.length > 0) {
     const listing = await deps.listings.listing(artifact, { backing: "sourceDir" });
     if (listing.unreadable === undefined) {
       const relpath = findSourceDirHit(listing, fqn);
       if (relpath !== null) {
-        const root = artifact.sourceDir;
-        return sourceLocated(
-          artifact,
-          relpath,
-          async () => readFileSync(join(root, relpath), "utf8"),
-          fqn,
-          includeNested,
-          scan,
-        );
+        const file = sourceEntryPath(listing, relpath);
+        if (file !== undefined) {
+          return sourceLocated(
+            artifact,
+            relpath,
+            async () => readFileSync(file, "utf8"),
+            fqn,
+            includeNested,
+            scan,
+            file,
+          );
+        }
       }
     }
   }
@@ -464,11 +477,14 @@ async function parseOneEntry(
   entryName: string,
 ): Promise<{ records: Declaration[]; diagnostics?: string[]; warning?: string }> {
   if (listing.source === "sourceDir") {
-    const root = artifact.sourceDir!;
+    const file = sourceEntryPath(listing, entryName);
+    if (file === undefined) {
+      return { records: [], diagnostics: [`missing entry ${entryName}`] };
+    }
     try {
       // readFileSync throws sync on a vanished file; the async wrapper keeps
       // one try/catch honest for both dir and jar backings
-      const text = await (async () => readFileSync(join(root, entryName), "utf8"))();
+      const text = await (async () => readFileSync(file, "utf8"))();
       return recordsFromSourceText(text, entryName);
     } catch {
       return { records: [], diagnostics: [`failed to read ${entryName}`] };

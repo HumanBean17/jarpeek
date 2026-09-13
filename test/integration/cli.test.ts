@@ -487,9 +487,9 @@ describe("resolve", () => {
     expect(actual.artifactCount).toBeGreaterThanOrEqual(1);
     expect(actual.viaCacheScan).toBe(false);
     expect(actual.durationMs).toBeGreaterThanOrEqual(0);
-    // the forced resolve rewrote the v2 manifest
+    // the forced resolve rewrote the manifest
     expect(readFileSync(join(resolveSuite.projectRoot, ".jarpeek", "manifest.json"), "utf8")).toContain(
-      '"version":2',
+      '"version":3',
     );
   });
 });

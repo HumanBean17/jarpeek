@@ -143,7 +143,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
   // the context's convergence will check staleness with
   const ctx = openContext(projectRoot, { onNotice: () => {} });
   await writeManifest(projectRoot, {
-    version: 2,
+    version: 3,
     resolvedAt: "",
     dependencySetHash: await computeDependencySetHash(projectRoot, "auto", ctx.roots.m2[0].path),
     artifacts,
@@ -313,6 +313,50 @@ describe("findClass kind refinement", () => {
   });
 });
 
+describe("findClass origin and ordering", () => {
+  it("every hit carries its artifact's origin", async () => {
+    const dir = freshRoot();
+    mkdirSync(join(dir, "com", "mod"), { recursive: true });
+    writeFileSync(
+      join(dir, "com", "mod", "Svc.java"),
+      "package com.mod;\npublic class Svc {}\n",
+    );
+    const ctx = await contextWith([
+      { coordinates: "module:p:root", kind: "project", sourceDirs: [dir] },
+      DEMO_SOURCES,
+    ]);
+    const result = await findClass(ctx, "com.mod.Svc", { jvm: jvm(false) });
+    expect(result.hits[0]).toMatchObject({ origin: "project" });
+    const dep = await findClass(ctx, "com.example.Demo", { jvm: jvm(false) });
+    expect(dep.hits[0]).toMatchObject({ origin: "dependency" });
+  });
+
+  it("origin outranks manifest position within a tier: project first, then module, then dependencies", async () => {
+    // manifest order deliberately hostile: dependency FIRST, project LAST —
+    // the same fqn in the project and a dependency returns both, the
+    // project's own code above the library copy it shadows
+    const dir = freshRoot();
+    mkdirSync(join(dir, "com", "example"), { recursive: true });
+    writeFileSync(
+      join(dir, "com", "example", "Demo.java"),
+      "package com.example;\npublic class Demo {}\n",
+    );
+    const modDir = freshRoot();
+    mkdirSync(join(modDir, "com", "example"), { recursive: true });
+    writeFileSync(
+      join(modDir, "com", "example", "Demo.java"),
+      "package com.example;\npublic class Demo {}\n",
+    );
+    const ctx = await contextWith([
+      DEMO_SOURCES,
+      { coordinates: "module:p:sib", kind: "module", sourceDirs: [modDir] },
+      { coordinates: "module:p:root", kind: "project", sourceDirs: [dir] },
+    ]);
+    const result = await findClass(ctx, "com.example.Demo", { jvm: jvm(false) });
+    expect(result.hits.map((h) => h.origin)).toEqual(["project", "module", "dependency"]);
+  });
+});
+
 describe("findClass provenance promise", () => {
   it("a sources artifact promises source", async () => {
     const ctx = await contextWith([DEMO_SOURCES]);
@@ -327,7 +371,7 @@ describe("findClass provenance promise", () => {
       join(dir, "com", "mod", "Svc.java"),
       "package com.mod;\npublic class Svc {}\n",
     );
-    const ctx = await contextWith([{ coordinates: ":app", kind: "module", sourceDir: dir }]);
+    const ctx = await contextWith([{ coordinates: ":app", kind: "module", sourceDirs: [dir] }]);
     const result = await findClass(ctx, "com.mod.Svc", { jvm: jvm(false) });
     expect(result.hits[0]).toMatchObject({ fqn: "com.mod.Svc", provenance: "source" });
   });

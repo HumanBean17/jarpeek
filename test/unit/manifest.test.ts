@@ -38,7 +38,7 @@ function artifact(overrides: Partial<DependencyArtifact>): DependencyArtifact {
 }
 
 function manifestFor(dependencySetHash: string, artifacts: DependencyArtifact[]): Manifest {
-  return { version: 2, resolvedAt: new Date().toISOString(), dependencySetHash, artifacts };
+  return { version: 3, resolvedAt: new Date().toISOString(), dependencySetHash, artifacts };
 }
 
 function touchPlusOneSecond(path: string): void {
@@ -158,7 +158,7 @@ describe("readManifest / writeManifest", () => {
           sourcesJar: "/cache/a-1.0-sources.jar",
           noDecompile: true,
         }),
-        artifact({ coordinates: ":mod", kind: "module", sourceDir: join(root, "mod") }),
+        artifact({ coordinates: ":mod", kind: "module", sourceDirs: [join(root, "mod")] }),
       ]);
       await writeManifest(root, m);
 
@@ -205,6 +205,34 @@ describe("readManifest / writeManifest", () => {
     }
   });
 
+  it("a v2-shaped manifest reads as null (layout bumps force a re-resolve)", async () => {
+    const root = tmpProjectRoot();
+    try {
+      mkdirSync(join(root, ".jarpeek"));
+      const v2 = {
+        version: 2,
+        resolvedAt: new Date().toISOString(),
+        dependencySetHash: EMPTY_SHA256,
+        artifacts: [
+          {
+            coordinates: "com.example:old:1",
+            kind: "external",
+            binaryJar: "/cache/old-1.jar",
+          },
+          {
+            coordinates: "module:old-root",
+            kind: "module",
+            sourceDir: join(root, "src"),
+          },
+        ],
+      };
+      writeFileSync(join(root, ".jarpeek", "manifest.json"), JSON.stringify(v2));
+      expect(await readManifest(root)).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("the written JSON omits absent optional fields", async () => {
     const root = tmpProjectRoot();
     try {
@@ -219,7 +247,7 @@ describe("readManifest / writeManifest", () => {
       const artifacts = raw.artifacts as Array<Record<string, unknown>>;
       expect(artifacts[0]!.binaryJar).toBe(jar);
       expect(artifacts[0]!.sourcesJar).toBeUndefined();
-      expect(artifacts[0]!.sourceDir).toBeUndefined();
+      expect(artifacts[0]!.sourceDirs).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -277,13 +305,13 @@ describe("isStale", () => {
     }
   });
 
-  it("flags missing sourcesJar and sourceDir even when the hash matches", async () => {
+  it("flags missing sourcesJar and sourceDirs even when the hash matches", async () => {
     const root = tmpProjectRoot();
     try {
       const hash = await computeDependencySetHash(root, "auto", M2);
       const allPresent: Manifest = manifestFor(hash, [
         artifact({ sourcesJar: join(root, "a-sources.jar") }),
-        artifact({ coordinates: ":mod", kind: "module", sourceDir: join(root, "mod") }),
+        artifact({ coordinates: ":mod", kind: "module", sourceDirs: [join(root, "mod")] }),
       ]);
       mkdirSync(join(root, "mod"));
       writeFileSync(join(root, "a-sources.jar"), "jar");
@@ -291,9 +319,37 @@ describe("isStale", () => {
 
       const anyMissing: Manifest = manifestFor(hash, [
         artifact({ sourcesJar: join(root, "gone-sources.jar") }),
-        artifact({ coordinates: ":mod2", kind: "module", sourceDir: join(root, "gone-mod") }),
+        artifact({ coordinates: ":mod2", kind: "module", sourceDirs: [join(root, "gone-mod")] }),
       ]);
       expect(await isStale(root, anyMissing, "auto", M2)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("flags a sourceDirs artifact stale only when every root vanished", async () => {
+    const root = tmpProjectRoot();
+    try {
+      const main = join(root, "src", "main", "java");
+      const test = join(root, "src", "test", "java");
+      mkdirSync(join(main, "com"), { recursive: true });
+      const hash = await computeDependencySetHash(root, "auto", M2);
+
+      // a declared-but-absent test tree beside a live main root stays fresh
+      const partial: Manifest = manifestFor(hash, [
+        artifact({ coordinates: "module:p:root", kind: "project", sourceDirs: [main, test] }),
+      ]);
+      expect(await isStale(root, partial, "auto", M2)).toBe(false);
+
+      // every root gone means the module itself moved: stale
+      const allGone: Manifest = manifestFor(hash, [
+        artifact({
+          coordinates: "module:p:gone",
+          kind: "project",
+          sourceDirs: [join(root, "gone1"), join(root, "gone2")],
+        }),
+      ]);
+      expect(await isStale(root, allGone, "auto", M2)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -313,7 +369,7 @@ describe("isStale", () => {
       );
       const hash = await computeDependencySetHash(root, "auto", M2);
       const m: Manifest = manifestFor(hash, [
-        artifact({ coordinates: ":app", kind: "module", sourceDir }),
+        artifact({ coordinates: ":app", kind: "module", sourceDirs: [sourceDir] }),
       ]);
       expect(await isStale(root, m, "auto", M2)).toBe(false);
 

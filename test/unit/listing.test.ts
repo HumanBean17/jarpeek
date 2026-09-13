@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isIndexableEntryName, ListingService } from "../../src/core/listing.js";
+import { isIndexableEntryName, ListingService, sourceEntryPath } from "../../src/core/listing.js";
 import type { DependencyArtifact } from "../../src/core/types.js";
 import { listZipEntries } from "../../src/parse/zip.js";
 
@@ -165,7 +165,7 @@ describe("ListingService.listing", () => {
       writeFileSync(join(dir, "com/example/Demo.java"), "package com.example;\npublic class Demo {}\n");
       writeFileSync(join(dir, "build/gen/Generated.java"), "package gen;\npublic class Generated {}\n");
       const listing = await new ListingService().listing(
-        artifact({ coordinates: "test:module:1", sourceDir: dir }),
+        artifact({ coordinates: "test:module:1", sourceDirs: [dir] }),
       );
       expect(listing.source).toBe("sourceDir");
       expect(fqns(listing)).toEqual(["com.example.Demo"]);
@@ -176,13 +176,97 @@ describe("ListingService.listing", () => {
     }
   });
 
+  it("walks several sourceDirs as one listing with package-true fqns and resolvable entry paths", async () => {
+    const main = tempDir();
+    const test = tempDir();
+    try {
+      mkdirSync(join(main, "com/example"), { recursive: true });
+      mkdirSync(join(test, "com/example/test"), { recursive: true });
+      writeFileSync(join(main, "com/example/Demo.java"), "package com.example;\npublic class Demo {}\n");
+      writeFileSync(join(main, "com/example/Kt.kt"), "package com.example\nclass Kt\n");
+      writeFileSync(join(test, "com/example/test/DemoTest.java"), "package com.example.test;\npublic class DemoTest {}\n");
+      const listing = await new ListingService().listing(
+        artifact({ coordinates: "module:proj:root", kind: "project", sourceDirs: [main, test] }),
+      );
+      expect(listing.source).toBe("sourceDir");
+      expect(fqns(listing)).toEqual(["com.example.Demo", "com.example.Kt", "com.example.test.DemoTest"]);
+      expect(sourceEntryPath(listing, "com/example/Demo.java")).toBe(join(main, "com/example/Demo.java"));
+      expect(sourceEntryPath(listing, "com/example/test/DemoTest.java")).toBe(join(test, "com/example/test/DemoTest.java"));
+      expect(listing.entries).toEqual([]);
+    } finally {
+      rmSync(main, { recursive: true, force: true });
+      rmSync(test, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the first sourceDirs root on duplicate relpaths and skips vanished roots", async () => {
+    const first = tempDir();
+    const second = tempDir();
+    try {
+      mkdirSync(join(first, "a"), { recursive: true });
+      mkdirSync(join(second, "a"), { recursive: true });
+      writeFileSync(join(first, "a/Util.java"), "package a;\npublic class Util {}\n");
+      writeFileSync(join(second, "a/Util.java"), "package a;\npublic class Util {}\n");
+      writeFileSync(join(second, "a/Other.java"), "package a;\npublic class Other {}\n");
+      const listing = await new ListingService().listing(
+        artifact({
+          coordinates: "module:proj:root",
+          kind: "project",
+          sourceDirs: [first, second, join(second, "vanished")],
+        }),
+      );
+      expect(fqns(listing)).toEqual(["a.Other", "a.Util"]);
+      expect(sourceEntryPath(listing, "a/Util.java")).toBe(join(first, "a/Util.java"));
+      expect(listing.unreadable).toBeUndefined();
+    } finally {
+      rmSync(first, { recursive: true, force: true });
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  it("re-lists a sourceDirs artifact when a file lands inside an existing package (content-derived stamp)", async () => {
+    // the long-lived-MCP scenario: the agent writes a class seconds after
+    // the first listing. The root dir's own stat does not move (only the
+    // parent package dir's does), so only a content-derived stamp can see it
+    const main = tempDir();
+    try {
+      mkdirSync(join(main, "com"), { recursive: true });
+      writeFileSync(join(main, "com/A.java"), "package com;\npublic class A {}\n");
+      const service = new ListingService();
+      const art = artifact({ coordinates: "module:proj:root", kind: "project", sourceDirs: [main] });
+      const before = await service.listing(art);
+      expect(fqns(before)).toEqual(["com.A"]);
+      writeFileSync(join(main, "com/B.java"), "package com;\npublic class B {}\n");
+      const after = await service.listing(art);
+      expect(fqns(after)).toEqual(["com.A", "com.B"]);
+      expect(after.stamp).not.toBe(before.stamp);
+    } finally {
+      rmSync(main, { recursive: true, force: true });
+    }
+  });
+
+  it("an unchanged sourceDirs tree keeps a stable stamp (parse memo survives)", async () => {
+    const main = tempDir();
+    try {
+      mkdirSync(join(main, "com"), { recursive: true });
+      writeFileSync(join(main, "com/A.java"), "package com;\npublic class A {}\n");
+      const service = new ListingService();
+      const art = artifact({ coordinates: "module:proj:root", kind: "project", sourceDirs: [main] });
+      const first = await service.listing(art);
+      const second = await service.listing(art);
+      expect(second.stamp).toBe(first.stamp);
+    } finally {
+      rmSync(main, { recursive: true, force: true });
+    }
+  });
+
   it("prefers binaryJar over sourcesJar over sourceDir", async () => {
     const listing = await new ListingService().listing(
       artifact({
         coordinates: "test:prefer:1",
         binaryJar: DEMO_JAR,
         sourcesJar: SOURCES_JAR,
-        sourceDir: join(FIXTURES, "src", "java"),
+        sourceDirs: [join(FIXTURES, "src", "java")],
       }),
     );
     expect(listing.source).toBe("binary");
@@ -303,7 +387,7 @@ describe("ListingService.listing explicit backing", () => {
       const spec = artifact({
         coordinates: "test:backings:1",
         binaryJar: DEMO_JAR,
-        sourceDir: dir,
+        sourceDirs: [dir],
       });
       const fromDir = await service.listing(spec, { backing: "sourceDir" });
       expect(fromDir.source).toBe("sourceDir");

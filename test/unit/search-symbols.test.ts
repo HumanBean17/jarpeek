@@ -56,7 +56,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
   // the context's convergence will check staleness with
   const ctx = openContext(projectRoot, { onNotice: () => {} });
   await writeManifest(projectRoot, {
-    version: 2,
+    version: 3,
     resolvedAt: "",
     dependencySetHash: await computeDependencySetHash(projectRoot, "auto", ctx.roots.m2[0].path),
     artifacts,
@@ -66,7 +66,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
 
 /** Hand-built LocateDeps: a real ListingService over the given artifacts plus a manifest literal. */
 function deps(artifacts: DependencyArtifact[]): LocateDeps {
-  const manifest: Manifest = { version: 2, resolvedAt: "", dependencySetHash: "", artifacts };
+  const manifest: Manifest = { version: 3, resolvedAt: "", dependencySetHash: "", artifacts };
   return { listings: new ListingService(), manifest: async () => manifest };
 }
 
@@ -247,12 +247,26 @@ describe("searchSymbols scoped to one artifact", () => {
         "x".repeat(200) + ") {}\n}\n",
     );
     const ctx = await contextWith([
-      { coordinates: "test:big-sig:1", kind: "module", sourceDir: root },
+      { coordinates: "test:big-sig:1", kind: "module", sourceDirs: [root] },
     ]);
     const result = await searchSymbols(ctx, "bigSignatureMethod", { artifact: "test:big-sig:1" });
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]!.signature.length).toBe(121);
     expect(result.rows[0]!.signature.endsWith("…")).toBe(true);
+  });
+
+  it("refuses the project artifact with a pointed note (grep is the tool for your own repo)", async () => {
+    const root = freshRoot();
+    mkdirSync(join(root, "com/example"), { recursive: true });
+    writeFileSync(
+      join(root, "com/example/Demo.java"),
+      "package com.example;\npublic class Demo {\n  public int size() { return 1; }\n}\n",
+    );
+    const ctx = await contextWith([{ coordinates: "module:p:root", kind: "project", sourceDirs: [root] }]);
+    const result = await searchSymbols(ctx, "size", { artifact: "module:p:root" });
+    expect(result.rows).toEqual([]);
+    expect(result.degraded.join("\n")).toMatch(/project sources/);
+    expect(result.degraded.join("\n")).toMatch(/grep/);
   });
 
   it("unknown artifact answers rows [] with a did-you-mean degraded line", async () => {
@@ -330,7 +344,7 @@ describe("recordsForArtifact", () => {
       join(root, "com/example/Demo.java"),
       "package com.example;\npublic class Demo {\n  public int size() { return 1; }\n}\n",
     );
-    const artifact: DependencyArtifact = { coordinates: "test:module:1", kind: "module", sourceDir: root };
+    const artifact: DependencyArtifact = { coordinates: "test:module:1", kind: "module", sourceDirs: [root] };
     const result = await recordsForArtifact(deps([artifact]), artifact);
     expect(result.provenance).toBe("source");
     expect(result.records.some((r) => r.selector === "size" && r.kind === "method")).toBe(true);

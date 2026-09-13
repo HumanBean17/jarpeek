@@ -178,8 +178,8 @@ async function runQuery(
 
 function renderFindClassRows(hits: FindClassResult["hits"]): string {
   return renderTable([
-    ["FQN", "KIND", "ARTIFACT", "PROVENANCE"],
-    ...hits.map((hit) => [hit.fqn, hit.kind, hit.coordinates, hit.provenance]),
+    ["FQN", "ORIGIN", "KIND", "ARTIFACT", "PROVENANCE"],
+    ...hits.map((hit) => [hit.fqn, hit.origin, hit.kind, hit.coordinates, hit.provenance]),
   ]);
 }
 

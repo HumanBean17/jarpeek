@@ -3,25 +3,38 @@
 [![npm](https://img.shields.io/npm/v/jarpeek)](https://www.npmjs.com/package/jarpeek)
 [![CI](https://github.com/HumanBean17/jarpeek/actions/workflows/ci.yml/badge.svg)](https://github.com/HumanBean17/jarpeek/actions/workflows/ci.yml)
 
-Context-frugal navigation into JVM dependency sources, for AI agents.
+Context-frugal navigation into JVM sources — the project's own code and
+its dependencies — for AI agents.
 
 ## Why
 
 An agent working on a Gradle or Maven project that needs to know what
 `SomeLibraryClient.builder()` actually does has bad options: read a
 decompiled 3,000-line file whole (context gone), grep the binary jar
-(noise), or guess from a doc page (hallucination risk). jarpeek gives the
-agent the same navigation a human has in an IDE — find the class, see its
-members, read exactly the method body asked for — at a fraction of the
-token cost.
+(noise), or guess from a doc page (hallucination risk). Worse, before any
+of that it burns turns on a decision: is this class part of the project
+(grep the repo) or a dependency (which the repo cannot see)? jarpeek
+removes the decision — `find_class` answers "where does this class live"
+across **both** the project's own sources and its resolved dependencies
+in one call, every hit tagged with its origin — and then gives the agent
+the same navigation a human has in an IDE: see the members, read exactly
+the method body asked for, at a fraction of the token cost.
 
 ## How it works
 
 - **Lazy, no index.** The first query on a fresh project (or after the
   build files change) runs one bounded Gradle/Maven resolve and writes a
-  manifest of the on-disk jars. That is all the up-front work there is;
-  every later query reads the manifest and opens only the jar entries it
-  needs.
+  manifest of the on-disk jars — plus, through the build's own model, the
+  project's source roots (Gradle sourceSets; the Maven pom's declared
+  roots). That is all the up-front work there is; every later query reads
+  the manifest and opens only the entries it needs.
+- **The project is a first-class artifact.** The build's root module and
+  its sibling modules enter the manifest beside the dependencies, walked
+  live at query time — `find_class` returns both worlds with an `origin`
+  on every hit (`project`, `module`, `dependency`, `jdk` — `cache` when
+  resolution degrades to local machine caches), project code ranked
+  first within a match tier, and a miss certifies the class is nowhere
+  in the project *or* its resolved dependencies.
 - **One-file parses.** A class lookup parses just the winning artifact's
   entry for that class — one source entry or class file, never the jar
   around it.
@@ -29,7 +42,8 @@ token cost.
   package, imports, javadoc, members as code lines — with
   `--minimal`/`--full` presets and per-section toggles; `read-source`
   serves the whole file, `read-member` returns only the requested method
-  spans.
+  spans. All three serve project and module hits exactly as they serve
+  dependencies — one navigation grammar everywhere.
 - **Provenance on everything.** Every answer says whether it is `source`,
   `decompiled`, or `signature` — so the agent knows what it is reading.
 - **Misses are answers.** Unknown classes return suggestions and searched
@@ -75,12 +89,12 @@ nine tools:
 
 | Tool | Arguments | Answers with |
 | --- | --- | --- |
-| `find_class` | `query`, `limit?` | Matching classes by FQN, suffix, simple, or fuzzy name |
+| `find_class` | `query`, `limit?` | Matching classes by FQN, suffix, simple, or fuzzy name — project sources and dependencies alike, each hit with its `origin` |
 | `outline` | `fqn`, `kind?`, `visibility?`, `preset?`, `sections?` | The class skeleton's declaration rows — the frugal first look |
 | `read_member` | `fqn`, `selectors[]` | Source slices for the named members |
 | `read_source` | `fqn`, `mode?` (`full`\|`lines`\|`outline`), `from?`, `to?` | Source text for one class — full by default; prefer outline |
 | `read_resource` | `artifact`, `glob` | Non-class jar entries (config, services, manifests) |
-| `search_symbols` | `query`, `artifact` (required), `limit?`, `kind?` | Declarations by member name in one artifact |
+| `search_symbols` | `query`, `artifact` (required), `limit?`, `kind?` | Declarations by member name in one dependency artifact (the root project artifact is refused — grep your own sources; sibling modules remain searchable) |
 | `resolve` | — | Forced re-resolve; one summary line (count, duration, warnings), plus the warnings when any |
 | `status` | — | Manifest freshness (present, resolvedAt, stale, artifactCount) and JVM report |
 | `where` | `coordinates` | The artifact's recorded on-disk paths, each flagged exists or missing |
@@ -139,9 +153,10 @@ stays parseable. Unknown classes exit 0 with suggestions.
 Every answer carries one of three provenance values, computed for that
 answer rather than stored anywhere:
 
-- `source` — the artifact ships a sources jar (or module source dir). The
-  real published code — and the only provenance whose outlines carry
-  imports and javadoc (class files have neither).
+- `source` — the artifact ships a sources jar, or it is a project/module
+  source root on disk. The real published (or authored) code — and the
+  only provenance whose outlines carry imports and javadoc (class files
+  have neither).
 - `decompiled` — no sources jar; bytecode decompiled with the bundled CFR
   on the local JVM. Faithful in structure, but local names, generics, and
   control flow are the compiler's reconstruction. Treat fine detail
@@ -158,8 +173,8 @@ and JVM availability.
 Degradations are reported, never hidden, and the answer still arrives:
 each is a `warning: ...` line on stderr (a `degraded[]` field in JSON),
 aggregated under the three-line warning budget. Search results are scoped
-to the project's resolved dependency set, and `search_symbols` further to
-the one named artifact.
+to the project's own sources plus its resolved dependency set, and
+`search_symbols` further to the one named dependency artifact.
 
 ## Configuration
 
@@ -200,14 +215,18 @@ writes to disk; 0.1-era caches are unused and safe to delete (see the
 
 - No type hierarchy, find-usages, or call-graph navigation — declaration
   lookup and source reads only.
-- Member-name search is scoped to one artifact (`search_symbols` requires
-  its `artifact` argument).
+- Member-name search is scoped to one dependency artifact (`search_symbols`
+  requires its `artifact` argument and refuses the root project artifact —
+  grep is the tool for your own sources; sibling modules stay searchable).
 - JDK classes need `$JAVA_HOME/lib/src.zip` — there is no jimage
   fallback. Without it, JDK classes are unavailable.
 - Source-jar FQNs are derived from entry paths: a jar whose entries
   mismatch its declared packages can misreport a class's location.
-- No generated-source awareness (protobuf, Dagger): generated classes
-  appear only if they land in the resolved artifacts.
+- Generated sources surface when the build declares them in its own source
+  roots (Gradle sourceSets typically include `build/generated` trees);
+  dependency-side generated classes appear only if they land in the
+  resolved artifacts. Maven custom Kotlin source dirs not under
+  `src/{main,test}/kotlin` are a known miss.
 - No remote artifact search (Maven Central by coordinates): on a miss,
   jarpeek reports what it searched and stops rather than fetching.
 - Maven SNAPSHOT dependencies resolved to timestamped jars

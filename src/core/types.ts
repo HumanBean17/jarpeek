@@ -48,18 +48,29 @@ export interface Declaration {
 export interface DependencyArtifact {
   coordinates: string;
   configuration?: string;
-  kind: "external" | "module" | "jdk" | "cache-scan";
+  /**
+   * "project" is the build's own root module and "module" a sibling build
+   * module — both carry `sourceDirs` (package roots, walked live); external
+   * jars carry binary/sources paths, "jdk" the local src.zip, "cache-scan"
+   * a heuristic jar set.
+   */
+  kind: "external" | "module" | "project" | "jdk" | "cache-scan";
   binaryJar?: string;
   sourcesJar?: string;
-  sourceDir?: string;
+  sourceDirs?: string[];
   noDecompile?: boolean;
 }
+
+/** Where a hit's artifact sits relative to the queried project. */
+export type HitOrigin = "project" | "module" | "dependency" | "jdk" | "cache";
 
 export interface ClassHit {
   fqn: string;
   coordinates: string;
   /** Parsed as the last `:`-segment of coordinates; empty for bare `jdk:` artifacts. */
   version: string;
+  /** project | module | dependency | jdk | cache — the artifact's relation to the queried project. */
+  origin: HitOrigin;
   kind: DeclKind;
   provenance: Provenance;
 }

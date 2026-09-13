@@ -118,7 +118,7 @@ describe("miss answers", () => {
     const run = cli(suite.projectRoot, ["find-class", "ZzzzZzzNoMatch"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("searched:");
-    expect(run.stdout).toContain("not found in resolved artifacts");
+    expect(run.stdout).toContain("not found in the project's sources or its resolved dependencies");
   });
 });
 

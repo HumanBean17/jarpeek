@@ -4,6 +4,68 @@ Why jarpeek works the way it does: the 0.1 failure, the lazy redesign,
 and the contracts that came out of it. For what the tools do day to day,
 read the [README](../README.md).
 
+## The universal locator (the project is an artifact too)
+
+jarpeek's identity is "JVM class navigation", not "dependency
+navigation": `find_class` answers "where does this class live" across the
+project's **own sources and its dependencies** in one call, every hit
+carrying its `origin` (`project`, `module`, `dependency`, `jdk`, `cache`).
+The problem it removes is a decision agents were burning turns on — "is
+this class mine (grep the repo) or a dependency's (grep cannot see it)?"
+— and the steering contract that follows: *find_class first, always*.
+
+The mechanism is the same one dependencies use, extended by one question:
+resolvers always asked the build "what is on the classpath?", and a
+project's own sources are never on its own classpath — so the Gradle init
+script now also dumps every build project's sourceSets roots (root
+included, subsuming the old dependency-only module discovery), and the
+Maven resolver reads the pom model (`<sourceDirectory>` /
+`<testSourceDirectory>`, declared `<modules>` followed recursively,
+conventional Kotlin roots when they exist on disk). The root module
+enters the manifest as a `kind: "project"` artifact, sibling modules as
+`kind: "module"`, each on package roots (`sourceDirs`) walked live at
+query time — which also fixes module fqns, previously prefixed by their
+walk-relative path (`src.main.java.…`) because modules were walked from
+the whole project directory.
+
+Consequences held deliberately:
+
+- **Same failure domain.** The project half answers exactly when the
+  dependency half does — a broken build on a fresh project is a miss,
+  not a partial answer that reads as complete. (One exception by
+  structure: a Maven dependency-less project whose build ran clean
+  resolves to its own modules with an empty classpath — that is a
+  complete answer, not a degradation; an empty classpath from a FAILING
+  build stays a failure and keeps the cascade.)
+- **Cache-scan stays project-blind** — the explicit last resort has no
+  build tool to ask.
+- **`search_symbols` refuses the root project artifact** ("project
+  sources: grep") — the agent's file tools reach its own repo natively,
+  and scanning a whole project's declarations per query is the 0.1
+  failure in miniature. Sibling modules remain searchable (pre-existing
+  precedent).
+- **Shadowing is honest.** The same FQN in project and dependency
+  returns both hits, project first: match-quality tiers still lead, with
+  origin as the tiebreak inside a tier (project → module → dependency →
+  jdk → cache), so the code that shadows outranks the code shadowed —
+  and the library original stays visible for the debugging that needs it.
+- **Read parity is total.** outline/read-member/read-source serve
+  project hits through the same sourceDir machinery modules use — one
+  navigation grammar everywhere.
+- **Known misses.** Maven custom Kotlin source dirs outside
+  `src/{main,test}/kotlin`, and unresolvable `${...}` pom source dirs,
+  fall back to the conventional roots; Gradle projects whose sourceSets
+  the dump cannot read contribute nothing rather than failing the dump.
+  A build module whose declared roots are ALL absent on disk (the
+  standard source-less Maven aggregator root) records no artifact: an
+  all-absent artifact would wedge staleness into re-resolving every
+  query, since a successful resolve never clears it. Modules with at
+  least one live root keep their declared-but-absent roots — a test tree
+  that appears later needs no re-resolve.
+- Manifest layout v3 carries the new fields; every v2 manifest reads as
+  stale exactly once (the version check rejects it), so upgraders
+  re-resolve on their first query.
+
 ## The 0.1 lesson: the index was the problem
 
 jarpeek 0.1 served the same goal — context-frugal navigation — with an
@@ -21,8 +83,14 @@ failure.
   Gradle/Maven resolve and writes a manifest of the on-disk jars. That
   is all the up-front work there is: jarpeek never indexes.
 - **Listings in memory.** Every query reads the manifest and opens jars
-  through in-memory zip listings. The manifest is the only derived state
-  on disk.
+  through in-memory zip listings — cached per stamp, so a rebuilt jar
+  re-lists while an untouched one costs one stat. Source-root listings
+  are the exception that re-walks on every call: these are the trees an
+  agent edits mid-session, and a cached listing would miss a class added
+  seconds ago. Directory walks are the cheap part; the walk itself
+  derives the stamp (per-file stats in sorted relpath order), so an
+  unchanged tree keeps a stable stamp and the parse memo keyed on it
+  survives. The manifest is the only derived state on disk.
 - **One-file parses.** A class lookup parses just the winning artifact's
   entry for that class — one source entry or class file (outline adds
   its directly nested classes) — never the jar around it.
@@ -119,8 +187,10 @@ time and use the pre-scan locale).
 - **No index, ever.** The manifest is the only derived state jarpeek
   writes to disk.
 - **No global member-name search.** `search_symbols` is scoped to one
-  artifact and its `artifact` argument is required — scanning ~100,000
-  declarations per query is the 0.1 failure in miniature.
+  artifact and its `artifact` argument is required — and the project
+  artifact is refused outright (grep is the tool for the agent's own
+  repo) — because scanning ~100,000 declarations per query is the 0.1
+  failure in miniature.
 - **No remote artifact search.** Maven Central lookup by coordinates is
   a planned extension, not a feature: on a miss, jarpeek reports what it
   searched and stops rather than fetching.

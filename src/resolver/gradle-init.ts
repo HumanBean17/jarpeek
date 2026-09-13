@@ -11,7 +11,9 @@
  *   {"configurations":[{"name":"compileClasspath","dependencies":[
  *     {"coordinates":"g:a:v","kind":"external","path":"/abs/file.jar"},
  *     {"coordinates":":app","kind":"module","path":"/abs/project/dir"}]}],
- *    "sources":{"g:a:v":"/abs/sources.jar"}}
+ *    "sources":{"g:a:v":"/abs/sources.jar"},
+ *    "projects":[{"path":":","sourceDirs":["/abs/src/main/java"]},
+ *     {"path":":app","sourceDirs":["/abs/app/src/main/java"]}]}
  *   ###JARPEEK-END###
  *
  * Collection rules, mirrored by the parser in `gradle.ts`:
@@ -23,7 +25,10 @@
  *   components report the project directory;
  * - the sources pass resolves one detached configuration per external
  *   coordinate of the compile/runtime configurations with classifier
- *   "sources"; coordinates without a sources jar are omitted.
+ *   "sources"; coordinates without a sources jar are omitted;
+ * - the projects pass reports EVERY build project (root included) with its
+ *   sourceSets' source roots — resources excluded — so the build's own code
+ *   is searchable beside its dependencies.
  *
  * No Gradle distribution exists on the development machine: the script is
  * exercised end-to-end only by the gated e2e test, so it stays defensive
@@ -71,6 +76,37 @@ def configLabel = { String name ->
         return 'runtime'
     }
     return 'compile'
+}
+
+// One build project's source roots: every sourceSets entry's allSource roots
+// minus its resources roots (the walk filters extensions anyway, but resources
+// trees are noise to enumerate). Defensive per sourceSet: a non-JVM project or
+// an exotic plugin must cost its own entry, never the dump.
+def projectSourceDirs = { project ->
+    def dirs = [] as Set
+    try {
+        if (project.hasProperty('sourceSets')) {
+            project.sourceSets.each { sourceSet ->
+                try {
+                    def resources = [] as Set
+                    sourceSet.resources.srcDirs.each { dir ->
+                        resources.add(dir.absolutePath)
+                    }
+                    sourceSet.allSource.srcDirs.each { dir ->
+                        if (!resources.contains(dir.absolutePath)) {
+                            dirs.add(dir.absolutePath)
+                        }
+                    }
+                } catch (Exception ignored) {
+                    // one broken sourceSet contributes nothing
+                }
+            }
+        }
+    } catch (Exception ignored) {
+        // a project without the java plugin (or with an unreadable model) has
+        // no source roots to report
+    }
+    return dirs
 }
 
 // Resolved artifacts of a configuration. ArtifactCollection.resolvedArtifacts
@@ -161,8 +197,13 @@ gradle.projectsLoaded {
                 }
             }
 
+            def projectsOut = []
+            rootProject.allprojects.each { project ->
+                projectsOut.add([path: project.path, sourceDirs: projectSourceDirs(project)])
+            }
+
             println '###JARPEEK-BEGIN###'
-            println JsonOutput.toJson([configurations: configurationsOut, sources: sourcesOut])
+            println JsonOutput.toJson([configurations: configurationsOut, sources: sourcesOut, projects: projectsOut])
             println '###JARPEEK-END###'
         }
     }

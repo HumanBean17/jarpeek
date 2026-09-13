@@ -102,6 +102,19 @@ export async function searchSymbols(
     };
   }
 
+  // the project's own sources are the agent's home turf — grep and file
+  // tools reach them natively, and scanning a whole project's declarations
+  // per query is the 0.1 failure in miniature. The refusal names the tool
+  // for the job instead of pretending the artifact is unsearchable.
+  if (artifact.kind === "project") {
+    return {
+      rows: [],
+      degraded: [
+        "project sources are not symbol-searchable — use your file tools (grep) on the project sources; search_symbols scopes to dependency artifacts",
+      ],
+    };
+  }
+
   const { records, provenance, unreadable } = await recordsForArtifact(ctx, artifact);
   if (records.length === 0) {
     // nothing parsed (unreadable backing, or every entry failed): say so via

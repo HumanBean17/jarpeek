@@ -171,10 +171,12 @@ export async function readResource(
   return {
     artifact: artifact.coordinates,
     entries,
-    // computed, not stored: a sources backing (jar or dir) means real source
+    // computed, not stored: a sources backing (jar or dirs) means real source
     // exists; everything else is served from the binary jar's shape alone
     provenance:
-      artifact.sourcesJar !== undefined || artifact.sourceDir !== undefined ? "source" : "signature",
+      artifact.sourcesJar !== undefined || (artifact.sourceDirs?.length ?? 0) > 0
+        ? "source"
+        : "signature",
     ...(stale ? { stale: true } : {}),
     degraded: await mergedDegraded(ctx, stale ? ["stale index served"] : []),
   };

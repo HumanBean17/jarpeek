@@ -39,4 +39,20 @@ describe.skipIf(
       expect(existsSync(artifact.binaryJar!)).toBe(true);
     }
   });
+
+  it("reports the build's own root project as a kind:project artifact with its source root", { timeout: 300_000 }, async () => {
+    // the projects pass of the init script, through a real Gradle: the
+    // fixture's own src/main/java must arrive as a package root that exists
+    const resolution = await resolveGradle(FIXTURE_PROJECT, { timeoutMs: 240_000 });
+
+    expect(resolution.ok).toBe(true);
+    const project = resolution.artifacts.find((a) => a.kind === "project");
+    expect(project).toBeDefined();
+    expect(project!.sourceDirs).toContain(join(FIXTURE_PROJECT, "src", "main", "java"));
+    expect(project!.sourceDirs!.every((dir) => existsSync(dir) || dir.endsWith("src/test/java"))).toBe(
+      true,
+    );
+    // resources never join the roots
+    expect(project!.sourceDirs!.some((dir) => dir.endsWith("resources"))).toBe(false);
+  });
 });

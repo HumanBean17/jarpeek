@@ -29,18 +29,19 @@ const ALL_MISSING = "artifact files missing on disk; run resolve";
 /**
  * The artifact's recorded backings as path rows, sources first — the same
  * preference order the provenance ladder uses when it decides what to read.
+ * A sourceDirs artifact lists one row per package root, in recorded order.
  */
 function recordedPaths(artifact: {
   sourcesJar?: string;
-  sourceDir?: string;
+  sourceDirs?: string[];
   binaryJar?: string;
 }): WhereResult["paths"] {
   const rows: WhereResult["paths"] = [];
   if (artifact.sourcesJar !== undefined) {
     rows.push({ role: "sourcesJar", path: artifact.sourcesJar, exists: existsSync(artifact.sourcesJar) });
   }
-  if (artifact.sourceDir !== undefined) {
-    rows.push({ role: "sourceDir", path: artifact.sourceDir, exists: existsSync(artifact.sourceDir) });
+  for (const dir of artifact.sourceDirs ?? []) {
+    rows.push({ role: "sourceDir", path: dir, exists: existsSync(dir) });
   }
   if (artifact.binaryJar !== undefined) {
     rows.push({ role: "binaryJar", path: artifact.binaryJar, exists: existsSync(artifact.binaryJar) });

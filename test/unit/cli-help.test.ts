@@ -72,7 +72,7 @@ describe("help constants (en)", () => {
   it("the top level carries the frugal path, five examples, and the prime pointer", () => {
     const block = topLevelHelp(en);
     expect(block).toContain(
-      "the frugal path: find-class to locate the class, outline for its shape, read-member for exactly the member's code — read-source only when you need the whole file.",
+      "the frugal path: find-class to locate the class (it covers project sources and dependencies alike), outline for its shape, read-member for exactly the member's code — read-source only when you need the whole file.",
     );
     expect(block).toContain("jarpeek find-class StringJoiner --limit 5");
     expect(block).toContain("jarpeek outline java.util.StringJoiner --kind method");
@@ -214,7 +214,7 @@ describe("help output (--lang ru)", () => {
     expect(stdout).toContain("экономный путь:");
     expect(stdout).toContain("Примеры:");
     expect(stdout).toContain("полная шпаргалка для агентов: jarpeek prime --full");
-    expect(stdout).toContain("доступ к исходникам зависимостей");
+    expect(stdout).toContain("доступ к исходникам JVM");
     expect(stdout).not.toContain("the frugal path:");
     // invocation surface never translates
     expect(stdout).toContain("--lang");
