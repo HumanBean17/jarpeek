@@ -33,7 +33,8 @@ export type MissResult =
 /** Nothing to inject anymore: suggestions read the same listings, negatives read the manifest. */
 export interface HandleMissOptions {}
 
-const NEGATIVE_NOTE = "not found in resolved artifacts; remote artifact search is a planned extension";
+const NEGATIVE_NOTE =
+  "not found in the project's sources or its resolved dependencies; remote artifact search is a planned extension";
 const CACHE_SCAN_NOTE = "cache-scan: resolution degraded to local machine caches";
 
 /**

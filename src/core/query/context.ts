@@ -31,6 +31,7 @@ import type { DependencyArtifact } from "../types.js";
 import {
   computeDependencySetHash,
   isStale,
+  MANIFEST_VERSION,
   readManifest,
   writeManifest,
   type Manifest,
@@ -178,7 +179,7 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       for (const entry of resolution.degraded) addWarning(`${entry.from}: ${entry.reason}`);
       for (const warning of resolution.warnings) addWarning(warning);
       await writeManifest(projectRoot, {
-        version: 2,
+        version: MANIFEST_VERSION,
         resolvedAt: new Date().toISOString(),
         dependencySetHash: await computeDependencySetHash(projectRoot, buildTool, roots.m2[0].path),
         artifacts: resolution.artifacts,

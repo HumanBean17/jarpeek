@@ -115,7 +115,7 @@ describe("cache-scan guard (manifest present)", () => {
   it("serves the manifest stale with the exact warning instead of adopting the scan", async () => {
     const { projectRoot } = freshProject();
     await writeManifest(projectRoot, {
-      version: 2,
+      version: 3,
       resolvedAt: new Date().toISOString(),
       // a hash that no longer matches: the manifest is stale, so the next
       // query re-resolves — which is the only way the guard can engage
@@ -164,7 +164,7 @@ describe("zero-artifact manifest scoping", () => {
 
     // the manifest EXISTS and declares zero artifacts (a resolved-empty set)
     await writeManifest(projectRoot, {
-      version: 2,
+      version: 3,
       resolvedAt: new Date().toISOString(),
       dependencySetHash: await computeDependencySetHash(projectRoot, "auto", ctx.roots.m2[0].path),
       artifacts: [],

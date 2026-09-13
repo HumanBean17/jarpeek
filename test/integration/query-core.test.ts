@@ -13,7 +13,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openContext, type QueryContext } from "../../src/core/query/context.js";
+import { findClass } from "../../src/core/query/find-class.js";
 import { outline, LookupMissError } from "../../src/core/query/outline.js";
+import { searchSymbols } from "../../src/core/query/search-symbols.js";
+import { where } from "../../src/core/query/where.js";
 import { readMember } from "../../src/core/query/read-member.js";
 import { readSource } from "../../src/core/query/read-source.js";
 import { computeDependencySetHash, writeManifest } from "../../src/index/manifest.js";
@@ -137,7 +140,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
   // the manifest hashes under the context's own primary m2 root, so the
   // same convergence checks it back (fresh, non-stale)
   await writeManifest(projectRoot, {
-    version: 2,
+    version: 3,
     resolvedAt: "",
     dependencySetHash: await computeDependencySetHash(projectRoot, "auto", ctx.roots.m2[0].path),
     artifacts,
@@ -403,7 +406,7 @@ describe("readMember / readSource from listings", () => {
       "package com.mod;\n\npublic class Svc {\n  public int size() { return 1; }\n}\n",
     );
     const ctx2 = await contextWith([
-      { coordinates: ":app", kind: "module", sourceDir: dir },
+      { coordinates: ":app", kind: "module", sourceDirs: [dir] },
     ]);
     const full = await readSource(ctx2, "com.mod.Svc", { mode: "full" });
     expect(full.provenance).toBe("source");
@@ -495,7 +498,7 @@ describe("collisions (manifest order)", () => {
     );
     const ctx = await contextWith([
       { coordinates: "com.example:demo-lib:1.0.0", kind: "external", sourcesJar: DEMO_SOURCES_JAR },
-      { coordinates: "com.other:dup:1", kind: "external", sourceDir: dupDir },
+      { coordinates: "com.other:dup:1", kind: "external", sourceDirs: [dupDir] },
     ]);
 
     const result = await outline(ctx, "com.example.Demo");
@@ -527,5 +530,104 @@ describe("stale index served", () => {
     expect(result.coordinates).toBe("com.example:demo-lib:1.0.0");
     expect(result.rows.map((r) => r.selector)).toContain("run");
     expect(result.degraded.some((d) => d.includes("stale"))).toBe(true);
+  });
+});
+
+describe("universal locator (the build's own sources beside its dependencies)", () => {
+  /**
+   * A project-shaped fixture: the root project's own src/main and src/test
+   * trees as a kind "project" artifact — deliberately LAST in the manifest,
+   * after the dependency, so ordering assertions prove the origin tiebreak
+   * rather than manifest position. The project declares its own
+   * com.example.Demo (classpath shadowing) plus a unique com.proj.Util.
+   */
+  async function projectShape(): Promise<QueryContext> {
+    const projectRoot = freshRoot();
+    const main = join(projectRoot, "src", "main", "java");
+    const test = join(projectRoot, "src", "test", "java");
+    mkdirSync(join(main, "com", "proj"), { recursive: true });
+    mkdirSync(join(main, "com", "example"), { recursive: true });
+    mkdirSync(join(test, "com", "proj"), { recursive: true });
+    writeFileSync(
+      join(main, "com", "proj", "Util.java"),
+      [
+        "package com.proj;",
+        "",
+        "/** Project-owned utility. */",
+        "public class Util {",
+        "  public int scale(int x) {",
+        "    return x * 2;",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(main, "com", "example", "Demo.java"),
+      "package com.example;\npublic class Demo {}\n",
+    );
+    writeFileSync(
+      join(test, "com", "proj", "UtilTest.java"),
+      "package com.proj;\npublic class UtilTest {}\n",
+    );
+    return contextWith([
+      { coordinates: "com.example:demo-lib:1.0.0", kind: "external", sourcesJar: DEMO_SOURCES_JAR },
+      {
+        coordinates: "module:proj:root",
+        kind: "project",
+        sourceDirs: [main, test],
+      },
+    ]);
+  }
+
+  it("find_class answers 'in the project' with origin project and provenance source", async () => {
+    const ctx = await projectShape();
+    const result = await findClass(ctx, "com.proj.Util");
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]).toMatchObject({
+      fqn: "com.proj.Util",
+      origin: "project",
+      provenance: "source",
+    });
+  });
+
+  it("a project class shadowing a dependency returns both hits, the project's first", async () => {
+    const ctx = await projectShape();
+    const result = await findClass(ctx, "com.example.Demo");
+    expect(result.hits.map((h) => h.origin)).toEqual(["project", "dependency"]);
+  });
+
+  it("test sources are searchable through the same artifact", async () => {
+    const ctx = await projectShape();
+    const result = await findClass(ctx, "com.proj.UtilTest");
+    expect(result.hits).toHaveLength(1);
+    expect(result.hits[0]).toMatchObject({ origin: "project" });
+  });
+
+  it("full read parity: outline, read-member slices, and read-source serve the project file", async () => {
+    const ctx = await projectShape();
+    const skeleton = await outline(ctx, "com.proj.Util");
+    expect(skeleton.coordinates).toBe("module:proj:root");
+    expect(skeleton.rows.map((r) => r.selector)).toContain("scale");
+
+    const member = await readMember(ctx, "com.proj.Util", "#scale");
+    expect(member.members).toHaveLength(1);
+    expect(member.members[0]!.lines.join("\n")).toContain("x * 2");
+    expect(member.members[0]!.startLine).toBeGreaterThan(0);
+
+    const whole = await readSource(ctx, "com.proj.Util");
+    expect(whole.provenance).toBe("source");
+    expect(whole.content).toContain("Project-owned utility");
+  });
+
+  it("search_symbols refuses the project artifact; where lists its source roots", async () => {
+    const ctx = await projectShape();
+    const refused = await searchSymbols(ctx, "scale", { artifact: "module:proj:root" });
+    expect(refused.rows).toEqual([]);
+    expect(refused.degraded.join("\n")).toMatch(/project sources/);
+
+    const paths = await where(ctx, "module:proj:root");
+    expect(paths.paths.filter((p) => p.role === "sourceDir").every((p) => p.exists)).toBe(true);
+    expect(paths.paths).toHaveLength(2);
   });
 });

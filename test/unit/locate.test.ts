@@ -170,7 +170,7 @@ function artifact(
 
 /** Hand-built LocateDeps: a real ListingService over the given artifacts plus a manifest literal. */
 function deps(artifacts: DependencyArtifact[]): LocateDeps {
-  const manifest: Manifest = { version: 2, resolvedAt: "", dependencySetHash: "", artifacts };
+  const manifest: Manifest = { version: 3, resolvedAt: "", dependencySetHash: "", artifacts };
   return { listings: new ListingService(), manifest: async () => manifest };
 }
 
@@ -374,7 +374,7 @@ describe("locateClass", () => {
         "package com.example;\npublic class Demo {\n  public int size() { return 1; }\n}\n",
       );
       const result = await locateClass(
-        deps([artifact({ coordinates: "test:module:1", sourceDir: dir })]),
+        deps([artifact({ coordinates: "test:module:1", sourceDirs: [dir] })]),
         "com.example.Demo",
       );
       expect(result.winner.provenance).toBe("source");
@@ -470,7 +470,7 @@ describe("full-family retention (outline skeleton data)", () => {
         ].join("\n"),
       );
       const result = await locateClass(
-        deps([artifact({ coordinates: "test:deep:1", sourceDir: dir })]),
+        deps([artifact({ coordinates: "test:deep:1", sourceDirs: [dir] })]),
         "a.b.Outer",
       );
       const records = result.winner.records;
@@ -521,7 +521,7 @@ describe("full-family retention (outline skeleton data)", () => {
         ["package a.b;", "public class Same {", "    class Same { void inner() {} }", "}"].join("\n"),
       );
       const result = await locateClass(
-        deps([artifact({ coordinates: "test:same:1", sourceDir: dir })]),
+        deps([artifact({ coordinates: "test:same:1", sourceDirs: [dir] })]),
         "a.b.Same",
       );
       const own = result.winner.records.filter((r) => r.fqn === "a.b.Same" && r.kind === "class");

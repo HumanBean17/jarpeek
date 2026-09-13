@@ -42,7 +42,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
   writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
   const ctx = openContext(projectRoot, { onNotice: () => {} });
   await writeManifest(projectRoot, {
-    version: 2,
+    version: 3,
     resolvedAt: "",
     dependencySetHash: await computeDependencySetHash(projectRoot, "auto", ctx.roots.m2[0].path),
     artifacts,
@@ -80,7 +80,7 @@ describe("handleMiss negative", () => {
     expect(result.searchedArtifacts).toContain("com.example:demo-lib:1.0.0");
     expect(result.searchedArtifacts).toContain("com.example:nosources-lib:1.0.0");
     expect(result.note).toBe(
-      "not found in resolved artifacts; remote artifact search is a planned extension",
+      "not found in the project's sources or its resolved dependencies; remote artifact search is a planned extension",
     );
   });
 

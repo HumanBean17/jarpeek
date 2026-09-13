@@ -4,6 +4,7 @@
       "fqn": "com.example.Demo",
       "coordinates": "com.example:demo-lib:1.0.0",
       "version": "1.0.0",
+      "origin": "dependency",
       "kind": "class",
       "provenance": "source"
     },
@@ -11,6 +12,7 @@
       "fqn": "com.example.Demo",
       "coordinates": "com.example:demo-lib-bin:1.0.0",
       "version": "1.0.0",
+      "origin": "dependency",
       "kind": "class",
       "provenance": "<promise>"
     }

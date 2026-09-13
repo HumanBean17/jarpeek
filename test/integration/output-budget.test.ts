@@ -244,7 +244,7 @@ describe("more than two warnings collapse into one aggregate line", () => {
     // itself contributes `stale index served` and one unreadable artifact
     writeFailingGradlew(projectRoot, "kaboom");
     await writeManifest(projectRoot, {
-      version: 2,
+      version: 3,
       resolvedAt: new Date().toISOString(),
       dependencySetHash: "not-the-current-hash",
       artifacts: [

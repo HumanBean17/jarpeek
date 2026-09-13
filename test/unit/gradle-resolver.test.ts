@@ -110,7 +110,9 @@ describe("resolveGradle: parsing the sentinel-wrapped dump", () => {
 
     expect(resolution.ok).toBe(true);
     expect(resolution.reason).toBeUndefined();
-    expect(resolution.artifacts).toHaveLength(4); // annotationProcessor errored → nothing
+    // the fixture's project paths are fake (/home/dev/...) — the record-time
+    // existence filter skips them, so the sample maps to externals only
+    expect(resolution.artifacts).toHaveLength(3); // annotationProcessor errored → nothing
 
     const lookup = indexBy(resolution.artifacts);
 
@@ -134,15 +136,8 @@ describe("resolveGradle: parsing the sentinel-wrapped dump", () => {
     expect(junit.binaryJar).toBe(JUNIT_JAR);
     expect(junit.provenance).toBeUndefined();
 
-    // module coordinates are namespaced per project root: the bare project
-    // path (":app") would collide with another project's ":app" in the
-    // user-global index cache
-    const app = lookup(moduleCoordinates(projectRoot, ":app"));
-    expect(app.coordinates).toBe(`module:${moduleNamespace(projectRoot)}:app`);
-    expect(app.kind).toBe("module");
-    expect(app.sourceDir).toBe(APP_DIR);
-    expect(app.provenance).toBeUndefined();
-    expect(app.warnings).toBeUndefined();
+    // nothing recorded from the dump's projects (no root exists on disk)
+    expect(resolution.artifacts.map((a) => a.kind)).toEqual(["external", "external", "external"]);
 
     // invocation shape: bare gradle (no wrapper in scratch, probe passed),
     // pinned args, cwd, default timeout. win32 routes bare gradle through
@@ -156,6 +151,67 @@ describe("resolveGradle: parsing the sentinel-wrapped dump", () => {
     expect(effective.args).toEqual(INIT_ARGS(projectRoot));
     expect(calls[0].opts.cwd).toBe(projectRoot);
     expect(calls[0].opts.timeoutMs).toBe(180_000);
+  });
+
+  it("records projects whose roots exist on disk, ranking project before module before externals", async () => {
+    const projectRoot = scratch();
+    const rootSrc = join(projectRoot, "src/main/java");
+    const appSrc = join(projectRoot, "app/src/main/kotlin");
+    mkdirSync(rootSrc, { recursive: true });
+    mkdirSync(appSrc, { recursive: true });
+    const doc = {
+      configurations: [
+        {
+          name: "compileClasspath",
+          dependencies: [{ coordinates: "com.example:lib:1.0", kind: "external", path: "/c/lib-1.0.jar" }],
+        },
+      ],
+      projects: [
+        { path: ":", sourceDirs: [rootSrc] },
+        { path: ":app", sourceDirs: [appSrc] },
+        { path: ":ghost", sourceDirs: ["/nonexistent/ghost/src"] }, // never created: skipped
+        { path: ":empty", sourceDirs: [] }, // aggregator: skipped
+      ],
+    };
+    const { exec } = outputExec(`###JARPEEK-BEGIN###\n${JSON.stringify(doc)}\n###JARPEEK-END###\n`);
+
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolution.artifacts).toEqual([
+      { coordinates: moduleCoordinates(projectRoot, ":"), kind: "project", sourceDirs: [rootSrc] },
+      { coordinates: moduleCoordinates(projectRoot, ":app"), kind: "module", sourceDirs: [appSrc] },
+      {
+        coordinates: "com.example:lib:1.0",
+        configuration: "compile",
+        kind: "external",
+        binaryJar: "/c/lib-1.0.jar",
+      },
+    ]);
+    // module coordinates are namespaced per project root: the bare ":app"
+    // would collide with another project's ":app" in the user-global cache
+    expect(resolution.artifacts[0]!.coordinates).toBe(`module:${moduleNamespace(projectRoot)}:root`);
+  });
+
+  it("skips module dependencies when the dump carries no projects pass (no package roots to offer)", async () => {
+    // a configuration module entry names the whole PROJECT directory, not a
+    // package root — walking it would mis-list fqns locate cannot read, so
+    // without the projects pass it contributes nothing
+    const projectRoot = scratch();
+    const doc = {
+      configurations: [
+        {
+          name: "compileClasspath",
+          dependencies: [{ coordinates: ":app", kind: "module", path: APP_DIR }],
+        },
+      ],
+    };
+    const { exec } = outputExec(`###JARPEEK-BEGIN###\n${JSON.stringify(doc)}\n###JARPEEK-END###\n`);
+
+    const resolution = await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolution.artifacts).toEqual([]);
   });
 
   it("dedupes by coordinates with the first configuration winning, and maps kapt* to annotationProcessor", async () => {
@@ -683,5 +739,10 @@ describe("GRADLE_INIT_SCRIPT", () => {
     expect(GRADLE_INIT_SCRIPT).toContain("testRuntimeClasspath");
     expect(GRADLE_INIT_SCRIPT).toContain("kaptTest");
     expect(GRADLE_INIT_SCRIPT).toContain("failure.message ?:"); // null message → class name, not "null"
+    // the projects pass: every build project's source roots beside the classpath
+    expect(GRADLE_INIT_SCRIPT).toContain("projectSourceDirs");
+    expect(GRADLE_INIT_SCRIPT).toContain("rootProject.allprojects.each");
+    expect(GRADLE_INIT_SCRIPT).toContain("projectsOut");
+    expect(GRADLE_INIT_SCRIPT).toContain("sourceSet.resources.srcDirs"); // resources excluded from the roots
   });
 });

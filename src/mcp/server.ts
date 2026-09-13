@@ -80,17 +80,20 @@ export function createMcpServer(ctx: QueryContext): McpServer {
     { name: "jarpeek", version: VERSION },
     {
       instructions:
-        "Context-frugal navigation into JVM dependency sources: find_class to locate, " +
-        "outline to see members without source, then read_member/read_source for exactly " +
-        "the slice needed — read_source serves the whole file by default, so prefer " +
-        "outline and read_member first. Misses return suggestions, never errors.",
+        "Context-frugal navigation into JVM sources — the project's own code and its " +
+        "dependencies: call find_class first to locate a class (it covers both, and every " +
+        "hit carries its origin), outline to see members without source, then " +
+        "read_member/read_source for exactly the slice needed — read_source serves the " +
+        "whole file by default, so prefer outline and read_member first. Misses return " +
+        "suggestions, never errors.",
     },
   );
 
   server.registerTool(
     "find_class",
     {
-      description: "Find classes by FQN, suffix, simple name, or fuzzy name.",
+      description:
+        "Find classes by FQN, suffix, simple name, or fuzzy name — in the project's own sources or its dependencies; hits carry origin (project / module / dependency / jdk, or cache when resolution degrades to local machine caches).",
       inputSchema: { query: z.string(), limit: z.number().int().positive().optional() },
     },
     ({ query, limit }) => findClassTool(ctx, query, limit),
@@ -177,7 +180,7 @@ export function createMcpServer(ctx: QueryContext): McpServer {
     "search_symbols",
     {
       description:
-        "Find declarations by member name in ONE artifact (g:a:v coordinates or unique artifact id).",
+        "Find declarations by member name in ONE dependency artifact (g:a:v coordinates or unique artifact id). The root project artifact is refused — use file tools (grep) for your own sources; sibling modules remain searchable.",
       inputSchema: {
         query: z.string(),
         artifact: z.string(),
