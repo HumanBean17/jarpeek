@@ -54,6 +54,8 @@ describe("defaultPrimeContent(mcp)", () => {
 
   it("carries the rule", () => {
     expect(defaultPrimeContent("mcp")).toContain("find_class first");
+    // the rule's payload: one call covers both worlds
+    expect(defaultPrimeContent("mcp")).toMatch(/sources and dependencies/i);
   });
 
   it("lists all 9 tool names on one comma-separated line", () => {
@@ -95,6 +97,10 @@ describe("defaultPrimeContent(cli)", () => {
   it("teaches the lazy contracts", () => {
     // search-symbols is scoped: the artifact flag is part of the contract
     expect(text).toContain("search-symbols <query> --artifact <g:a:v>");
+    // ...and the root project artifact is refused in favor of the agent's own
+    // tools, while sibling modules stay searchable
+    expect(text).toMatch(/root project artifact is refused[^]*grep/i);
+    expect(text).toMatch(/sibling module[^]*searchable/i);
     // lazy resolution: first query (or stale manifest) resolves, never indexes
     expect(text).not.toMatch(/indexing/i);
     expect(text).not.toMatch(/first index/i);
@@ -118,7 +124,7 @@ describe("defaultPrimeContent(cli)", () => {
 
   it("bolds the rule", () => {
     expect(text).toMatch(
-      /\*\*before grepping the repo for an external class[^]*find-class first\.?\*\*/i,
+      /\*\*call find-class first[^]*project's own sources and\s+(its )?dependencies\.?\*\*/i,
     );
   });
 });

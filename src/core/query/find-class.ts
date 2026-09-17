@@ -18,9 +18,9 @@
  * injectable `opts.jvm` seam.
  */
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { ArtifactListing, ClassEntry } from "../listing.js";
-import type { ClassHit, DeclKind, DependencyArtifact, Provenance } from "../types.js";
+import { sourceEntryPath } from "../listing.js";
+import type { ClassHit, DeclKind, DependencyArtifact, HitOrigin, Provenance } from "../types.js";
 import { fuzzyScore } from "../fuzzy.js";
 import { recordsFromClassBytes, recordsFromSourceText } from "../../parse/records.js";
 import { readTextEntry, readZipEntry, type ZipEntry } from "../../parse/zip.js";
@@ -82,6 +82,33 @@ function versionOf(coordinates: string): string {
   return parts[parts.length - 1] ?? "";
 }
 
+/**
+ * The artifact's relation to the queried project, as hit output: the
+ * coordinates prefix already implies it, but a hit should SAY "this is your
+ * code" without the agent parsing namespaced module ids.
+ */
+const originOf = (artifact: DependencyArtifact): HitOrigin =>
+  artifact.kind === "external"
+    ? "dependency"
+    : artifact.kind === "cache-scan"
+      ? "cache"
+      : artifact.kind;
+
+/**
+ * Origin precedence within one match tier: project, then sibling module,
+ * then dependencies, then jdk/cache guesses. Match quality always wins first
+ * (an exact-FQN dependency hit outranks a fuzzy project hit); origin breaks
+ * ties, manifest position the remaining ones — so "where does this class
+ * live" answers with the code that shadows, not the code shadowed.
+ */
+const ORIGIN_RANK: Record<HitOrigin, number> = {
+  project: 0,
+  module: 1,
+  dependency: 2,
+  jdk: 3,
+  cache: 4,
+};
+
 /** One tier entry: which artifact's which listing entry. */
 interface Candidate {
   artifact: DependencyArtifact;
@@ -122,10 +149,15 @@ async function collectTiers(
   let seq = 0;
 
   const manifestRank = (c: Candidate): number => order.get(c.artifact.coordinates) ?? UNORDERED;
+  const originRank = (c: Candidate): number => ORIGIN_RANK[originOf(c.artifact)];
   const byRank = (
     a: { candidate: Candidate; score: number },
     b: { candidate: Candidate; score: number },
-  ): number => b.score - a.score || manifestRank(a.candidate) - manifestRank(b.candidate) || a.candidate.seq - b.candidate.seq;
+  ): number =>
+    b.score - a.score ||
+    originRank(a.candidate) - originRank(b.candidate) ||
+    manifestRank(a.candidate) - manifestRank(b.candidate) ||
+    a.candidate.seq - b.candidate.seq;
 
   for (const artifact of manifest?.artifacts ?? []) {
     const listing = await ctx.listings.listing(artifact);
@@ -171,7 +203,9 @@ async function collectTiers(
 
   fuzzy.sort(byRank);
   const byManifestPosition = (a: Candidate, b: Candidate): number =>
-    manifestRank(a) - manifestRank(b) || a.seq - b.seq;
+    originRank(a) - originRank(b) ||
+    manifestRank(a) - manifestRank(b) ||
+    a.seq - b.seq;
   return {
     tiers: [
       [...exact.values()].sort(byManifestPosition),
@@ -208,8 +242,10 @@ async function refinedKind(candidate: Candidate): Promise<DeclKind> {
       return records.find(want)?.kind ?? "class";
     }
     if (listing.source === "sourceDir") {
+      const file = sourceEntryPath(listing, entry.entry);
+      if (file === undefined) return "class";
       // readFileSync throws sync; the async wrapper keeps one try/catch honest
-      const text = await (async () => readFileSync(join(artifact.sourceDir!, entry.entry), "utf8"))();
+      const text = await (async () => readFileSync(file, "utf8"))();
       return recordsFromSourceText(text, entry.entry).records.find(want)?.kind ?? "class";
     }
     const zipEntry = zipEntryNamed(listing, entry.entry);
@@ -234,7 +270,7 @@ async function promisedProvenance(
   jvmAvailable: () => Promise<boolean>,
 ): Promise<Provenance> {
   const { artifact } = candidate;
-  if (artifact.sourcesJar !== undefined || artifact.sourceDir !== undefined) return "source";
+  if (artifact.sourcesJar !== undefined || (artifact.sourceDirs?.length ?? 0) > 0) return "source";
   if (artifact.binaryJar !== undefined && (await jvmAvailable())) return "decompiled";
   return "signature";
 }
@@ -297,6 +333,7 @@ export async function findClass(
         fqn,
         coordinates,
         version: versionOf(coordinates),
+        origin: originOf(candidate.artifact),
         kind: kinds.get(keyOf(candidate)) ?? "class",
         provenance: await provenances.get(keyOf(candidate))!,
       };

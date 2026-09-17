@@ -60,7 +60,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
     },
   });
   await writeManifest(root, {
-    version: 2,
+    version: 3,
     resolvedAt: "2026-08-17T00:00:00.000Z",
     dependencySetHash: await computeDependencySetHash(root, "auto", ctx.roots.m2[0].path),
     artifacts,
@@ -162,7 +162,7 @@ describe("where existence flags", () => {
     mkdirSync(src, { recursive: true });
     writeFileSync(join(src, "A.java"), "class A {}\n");
     const ctx = await contextWith([
-      { coordinates: "com.example:module:1.0", kind: "module", sourceDir: src },
+      { coordinates: "com.example:module:1.0", kind: "module", sourceDirs: [src] },
     ]);
     const result = await where(ctx, "module");
     expect(result.paths).toEqual([{ role: "sourceDir", path: src, exists: true }]);
@@ -179,7 +179,7 @@ describe("where existence flags", () => {
       {
         coordinates: "com.example:mixed:1.0",
         kind: "module",
-        sourceDir: src,
+        sourceDirs: [src],
         binaryJar: NOSOURCES_JAR,
       },
     ]);

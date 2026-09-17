@@ -12,6 +12,7 @@
  */
 import {
   computeDependencySetHash,
+  MANIFEST_VERSION,
   writeManifest,
 } from "../../index/manifest.js";
 import { resolveDependencies } from "../../resolver/index.js";
@@ -26,12 +27,12 @@ export interface ResolveNowResult {
   viaCacheScan: boolean;
 }
 
-/** Re-resolve and rewrite the v2 manifest unconditionally. */
+/** Re-resolve and rewrite the manifest unconditionally. */
 export async function resolveNow(ctx: QueryContext): Promise<ResolveNowResult> {
   const startedAt = Date.now();
   const resolution = await resolveDependencies(ctx.projectRoot, ctx.resolvers);
   await writeManifest(ctx.projectRoot, {
-    version: 2,
+    version: MANIFEST_VERSION,
     resolvedAt: new Date().toISOString(),
     dependencySetHash: await computeDependencySetHash(ctx.projectRoot, ctx.buildTool, ctx.roots.m2[0].path),
     artifacts: resolution.artifacts,

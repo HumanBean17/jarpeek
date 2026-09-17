@@ -29,7 +29,7 @@
  */
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, relative } from "node:path";
+import { delimiter, join, relative, resolve } from "node:path";
 import type { DependencyArtifact } from "../core/types.js";
 import { moduleCoordinates } from "./module-coordinate.js";
 import { effectiveM2Roots } from "./roots.js";
@@ -51,6 +51,13 @@ export interface MavenResolution {
    * dependencies are missing. Names the failed module directories.
    */
   partial?: string;
+  /**
+   * Internal to the resolver pair: the ok answer came from the build's own
+   * modules with NO classpath content at all. Legitimate (a dependency-less
+   * project) only when mvn exited 0 — `resolveMaven` demotes a contentless
+   * ok with a non-zero exit back to an attempt failure (broken build).
+   */
+  contentless?: boolean;
   /**
    * Non-fatal observations the caller should surface as warnings — today
    * only `maven: m2-anchor-derived:<path>`: the anchor came from mvn's own
@@ -173,6 +180,89 @@ function splitClasspath(content: string): string[] {
 /** `/`-separated form of a path, for layout parsing on either platform. */
 function toForwardSlashes(p: string): string {
   return p.replace(/\\/g, "/");
+}
+
+/**
+ * The `<module>` names a pom declares, in declaration order. The tags only
+ * ever appear inside `<modules>`, so a plain scan is the pom-faithful read
+ * without a full XML parse; comments are stripped first so a commented-out
+ * declaration cannot masquerade as a live one.
+ */
+function declaredModuleNames(pom: string): string[] {
+  const names: string[] = [];
+  for (const match of pom.replace(/<!--[\s\S]*?-->/g, "").matchAll(/<module>\s*([^<]+?)\s*<\/module>/g)) {
+    names.push(match[1]!);
+  }
+  return names;
+}
+
+/**
+ * The reactor's module directories from the pom model: the `<modules>` each
+ * pom declares, followed recursively (bounded like `moduleDirs`), cycles
+ * cut by resolved-path identity. This is the DECLARED reactor — a stray
+ * pom-bearing directory the root never declared stays out until it shows up
+ * on a classpath.
+ */
+function declaredModuleDirs(projectRoot: string): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>([resolve(projectRoot)]);
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 3) return;
+    let pom: string;
+    try {
+      pom = readFileSync(join(dir, "pom.xml"), "utf8");
+    } catch {
+      return;
+    }
+    for (const name of declaredModuleNames(pom)) {
+      const child = resolve(dir, name);
+      if (seen.has(child) || !existsSync(join(child, "pom.xml"))) continue;
+      seen.add(child);
+      found.push(child);
+      walk(child, depth + 1);
+    }
+  };
+  walk(projectRoot, 1);
+  return found;
+}
+
+/**
+ * One module's source roots from its pom: the explicit
+ * `<build><sourceDirectory>` / `<testSourceDirectory>` when present (with
+ * `${project.basedir}`/`${basedir}` interpolated — the common custom-layout
+ * spellings; anything else `${...}` falls back to the default), else the
+ * conventional `src/{main,test}/java`; the Kotlin plugin's conventional
+ * roots join when they exist on disk (they are plugin convention, not pom
+ * declarations). Roots are recorded as declared — an absent tree simply
+ * contributes no entries when listed. Comments are stripped so a
+ * commented-out `<sourceDirectory>` cannot override the live one.
+ */
+function pomSourceRoots(moduleDir: string): string[] {
+  let source: string | undefined;
+  let test: string | undefined;
+  try {
+    const pom = readFileSync(join(moduleDir, "pom.xml"), "utf8").replace(/<!--[\s\S]*?-->/g, "");
+    source = /<sourceDirectory>([^<]+)<\/sourceDirectory>/.exec(pom)?.[1]?.trim();
+    test = /<testSourceDirectory>([^<]+)<\/testSourceDirectory>/.exec(pom)?.[1]?.trim();
+  } catch {
+    // unreadable pom: the conventional defaults stand
+  }
+  const interpolate = (value: string): string | undefined => {
+    if (!value.includes("${")) return resolve(moduleDir, value);
+    const expanded = value
+      .replaceAll("${project.basedir}", moduleDir)
+      .replaceAll("${basedir}", moduleDir);
+    return expanded.includes("${") ? undefined : resolve(expanded);
+  };
+  const roots = new Set<string>([
+    source !== undefined ? interpolate(source) ?? join(moduleDir, "src/main/java") : join(moduleDir, "src/main/java"),
+    test !== undefined ? interpolate(test) ?? join(moduleDir, "src/test/java") : join(moduleDir, "src/test/java"),
+  ]);
+  for (const rel of ["src/main/kotlin", "src/test/kotlin"]) {
+    const dir = join(moduleDir, rel);
+    if (existsSync(dir)) roots.add(dir);
+  }
+  return [...roots];
 }
 
 interface M2Coordinates {
@@ -322,20 +412,26 @@ function voteDerivedAnchor(entries: string[]): string | undefined {
 
 /**
  * Parse the collected build-classpath outputs into artifacts, deduplicated by
- * coordinates with the first module in discovery order winning. Each entry is
- * matched against EVERY anchor in `m2Dirs` (the roots convergence's candidate
- * list — env, configs, settings.xml, default) with the first match winning.
- * A sibling reactor module appears as its `<module>/target/classes` output —
- * mapped to a `kind: "module"` artifact on the module directory itself, so
- * its sources are indexed in place exactly like a Gradle module's. An output
- * that is missing or empty contributes nothing; only when every output was
- * empty is the resolution a `no-classpath` failure (the root POM may
- * legitimately be a dep-less aggregator whose submodules carry everything).
+ * coordinates with the first module in discovery order winning. The build's
+ * own modules come first, from the pom model: the root module as kind
+ * "project" and every DECLARED reactor module as kind "module", each on its
+ * pom-declared source roots — so the project's own code is searchable beside
+ * its dependencies whether or not a classpath ever mentions it. Classpath
+ * entries are then matched against EVERY anchor in `m2Dirs` (the roots
+ * convergence's candidate list — env, configs, settings.xml, default) with
+ * the first match winning. A sibling reactor module appears as its
+ * `<module>/target/classes` output — mapped to the same namespaced module
+ * coordinates, on its pom roots. An output that is missing or empty
+ * contributes nothing; with no classpath content at all the build's own
+ * modules still answer (a dependency-less project resolves to itself), and
+ * only a pom-less root with nothing written is a `no-classpath` failure.
  * Entries that carried content but matched no anchor and no module trigger
  * anchor DERIVATION: mvn's own output votes on the root it used (quorum 2),
  * the winner joins the anchor list, and the resolution carries a
  * `m2-anchor-derived` warning. Only when derivation also fails does the
- * resolution report `classpath-not-in-m2-layout`.
+ * resolution report `classpath-not-in-m2-layout` — dependencies existed but
+ * could not be anchored, which stays loud rather than serving a project-only
+ * answer that reads as complete.
  */
 function parseOutputs(outputs: string[], m2Dirs: string[], projectRoot: string, modules: string[]): MavenResolution {
   const entries: string[] = [];
@@ -350,6 +446,34 @@ function parseOutputs(outputs: string[], m2Dirs: string[], projectRoot: string, 
     if (content.trim().length === 0) continue;
     sawContent = true;
     entries.push(...splitClasspath(content));
+  }
+
+  /** The build's own modules from the pom model, root project first. */
+  const buildModules: DependencyArtifact[] = [];
+  if (existsSync(join(projectRoot, "pom.xml"))) {
+    // record-time existence filter: a module whose declared roots are ALL
+    // absent (a source-less aggregator — the standard multi-module root
+    // shape) would wedge isStale into re-resolving every query, since a
+    // successful resolve never clears it. Modules with at least one live
+    // root keep their declared-but-absent roots (a test tree that appears
+    // later needs no re-resolve)
+    const pushModule = (kind: "project" | "module", label: string, moduleDir: string): void => {
+      const sourceDirs = pomSourceRoots(moduleDir);
+      if (!sourceDirs.some((dir) => existsSync(dir))) return;
+      buildModules.push({
+        coordinates: moduleCoordinates(projectRoot, label),
+        kind,
+        sourceDirs,
+      });
+    };
+    pushModule("project", "", projectRoot);
+    for (const moduleDir of declaredModuleDirs(projectRoot)) {
+      pushModule(
+        "module",
+        relative(projectRoot, moduleDir).replaceAll("\\", "/"),
+        moduleDir,
+      );
+    }
   }
 
   /** One anchored mapping pass: first matching anchor wins per entry. */
@@ -374,12 +498,18 @@ function parseOutputs(outputs: string[], m2Dirs: string[], projectRoot: string, 
             relative(projectRoot, moduleDir).replaceAll("\\", "/"),
           );
           if (!byCoordinates.has(coordinates)) {
-            byCoordinates.set(coordinates, {
-              coordinates,
-              configuration: "compile+runtime+test",
-              kind: "module",
-              sourceDir: moduleDir,
-            });
+            const sourceDirs = pomSourceRoots(moduleDir);
+            // same record-time existence rule as the build modules: a
+            // compiled-only sibling (no source tree on disk) has nothing
+            // sourceDirs-shaped to serve
+            if (sourceDirs.some((dir) => existsSync(dir))) {
+              byCoordinates.set(coordinates, {
+                coordinates,
+                configuration: "compile+runtime+test",
+                kind: "module",
+                sourceDirs,
+              });
+            }
           }
         }
         continue;
@@ -411,13 +541,25 @@ function parseOutputs(outputs: string[], m2Dirs: string[], projectRoot: string, 
       derivedWarning = `maven: m2-anchor-derived:${derived}`;
     }
   }
-  if (!sawContent) return { ok: false, artifacts: [], reason: "no-classpath" };
+  if (!sawContent) {
+    // no dependencies at all: the build's own modules are a complete answer
+    // — flagged contentless so resolveMaven can keep a non-zero exit a
+    // failure (a broken build is not a dependency-less project)
+    if (buildModules.length > 0) return { ok: true, artifacts: buildModules, contentless: true };
+    return { ok: false, artifacts: [], reason: "no-classpath" };
+  }
   if (byCoordinates.size === 0) {
     return { ok: false, artifacts: [], reason: "mvn-failed:classpath-not-in-m2-layout" };
   }
+  // build modules first: origin outranks manifest position downstream, and
+  // the project's own code lists first in status output
+  const merged = new Map(buildModules.map((artifact) => [artifact.coordinates, artifact]));
+  for (const [coordinates, artifact] of byCoordinates) {
+    if (!merged.has(coordinates)) merged.set(coordinates, artifact);
+  }
   return {
     ok: true,
-    artifacts: [...byCoordinates.values()],
+    artifacts: [...merged.values()],
     ...(derivedWarning !== undefined ? { warnings: [derivedWarning] } : {}),
   };
 }
@@ -546,6 +688,14 @@ export async function resolveMaven(
           const solo = parsed.reason ?? "no-classpath";
           failures.push({ via: candidate.via, solo, detail: parseFailureDetail(solo) });
         }
+        continue;
+      }
+      if (parsed.contentless === true && result.code !== 0) {
+        // no classpath content AND a failing build: the build-modules-only
+        // answer would read as complete while the build cannot even run —
+        // keep the broken build in its old failure domain (cascade, miss)
+        const detail = failureDetail(result);
+        failures.push({ via: candidate.via, solo: `mvn-failed:${detail}`, detail });
         continue;
       }
 

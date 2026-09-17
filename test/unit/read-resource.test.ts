@@ -41,7 +41,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContex
   // the context's convergence will check staleness with
   const ctx = openContext(root, { onNotice: () => {} });
   await writeManifest(root, {
-    version: 2,
+    version: 3,
     resolvedAt: "2026-08-17T00:00:00.000Z",
     dependencySetHash: await computeDependencySetHash(root, "auto", ctx.roots.m2[0].path),
     artifacts,
@@ -89,7 +89,7 @@ describe("readResource provenance is computed", () => {
         coordinates: "com.example:module:1.0",
         kind: "module",
         binaryJar: DEMO_JAR,
-        sourceDir: dir,
+        sourceDirs: [dir],
       },
     ]);
     const mod = await readResource(modCtx, "module", "config/*");

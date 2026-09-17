@@ -78,7 +78,7 @@ describe("failed-bootstrap backoff", () => {
   it("a manifest present + failing resolver serves it stale", async () => {
     const { projectRoot } = freshProject();
     await writeManifest(projectRoot, {
-      version: 2,
+      version: 3,
       resolvedAt: new Date().toISOString(),
       dependencySetHash: "stale-hash",
       artifacts: fixtureArtifacts,
@@ -117,7 +117,7 @@ describe("cache-scan guard", () => {
   it("a real manifest present: served stale with the exact warning, never overwritten", async () => {
     const { projectRoot } = freshProject();
     await writeManifest(projectRoot, {
-      version: 2,
+      version: 3,
       resolvedAt: new Date().toISOString(),
       dependencySetHash: "not-the-current-hash",
       artifacts: fixtureArtifacts,
@@ -171,7 +171,7 @@ describe("cache-scan guard", () => {
 });
 
 describe("successful resolve-only bootstrap", () => {
-  it("writes the v2 manifest and nothing else; onNotice fires exactly once", async () => {
+  it("writes the manifest and nothing else; onNotice fires exactly once", async () => {
     const { projectRoot } = freshProject();
     const notices: string[] = [];
     const ctx = openContext(projectRoot, {
@@ -186,7 +186,7 @@ describe("successful resolve-only bootstrap", () => {
     // the resolve-only bootstrap's whole footprint: manifest.json, nothing else
     expect(readdirSync(join(projectRoot, ".jarpeek"))).toEqual(["manifest.json"]);
     const manifest = await ctx.manifest();
-    expect(manifest?.version).toBe(2);
+    expect(manifest?.version).toBe(3);
     expect(manifest?.artifacts.map((a) => a.coordinates)).toEqual(["com.example:demo-lib:1.0.0"]);
     // the fresh manifest is served as-is on the next query
     expect(notices).toEqual(["resolving dependencies (first run — may download dependencies and sources)"]);
@@ -233,7 +233,7 @@ describe("fresh-project query end-to-end", () => {
     expect(notices).toEqual(["resolving dependencies (first run — may download dependencies and sources)"]);
 
     const manifest = await ctx.manifest();
-    expect(manifest?.version).toBe(2);
+    expect(manifest?.version).toBe(3);
     expect(manifest?.artifacts[0]?.coordinates).toBe("com.example:demo-lib:1.0.0");
   });
 });

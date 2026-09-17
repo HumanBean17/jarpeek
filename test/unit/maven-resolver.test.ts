@@ -12,6 +12,13 @@ import {
 } from "../../src/util/exec.js";
 import { mvnOnPathDefault, resolveMaven } from "../../src/resolver/maven.js";
 import { moduleCoordinates } from "../../src/resolver/module-coordinate.js";
+import { openContext } from "../../src/core/query/context.js";
+import {
+  computeDependencySetHash,
+  isStale,
+  readManifest,
+  writeManifest,
+} from "../../src/index/manifest.js";
 
 /** Always-true PATH probe; installed by tests that reach the bare-mvn path. */
 const PROBE_FOUND = () => true;
@@ -779,13 +786,23 @@ describe("resolveMaven: build-tool strategy", () => {
 });
 
 describe("resolveMaven: multi-module", () => {
-  /** Scratch multi-module layout: root pom + mod/pom.xml, cleaned by afterEach. */
+  /**
+   * Scratch multi-module layout: root pom + mod/pom.xml, cleaned by
+   * afterEach. The root carries a real source tree so the project artifact
+   * records; mod is NOT declared in the root pom (the cp-file walk finds it,
+   * the pom model does not).
+   */
   function multiModule(): { projectRoot: string; mod: string } {
     const projectRoot = scratch();
     const mod = join(projectRoot, "mod");
     mkdirSync(mod);
     writeFileSync(join(projectRoot, "pom.xml"), "<project/>");
     writeFileSync(join(mod, "pom.xml"), "<project/>");
+    mkdirSync(join(projectRoot, "src/main/java"), { recursive: true });
+    writeFileSync(
+      join(projectRoot, "src/main/java/Root.java"),
+      "public class Root {}\n",
+    );
     return { projectRoot, mod };
   }
 
@@ -808,8 +825,8 @@ describe("resolveMaven: multi-module", () => {
     expect(buildClasspathCalls).toHaveLength(1);
     expect(buildClasspathCalls[0].opts.cwd).toBe(projectRoot);
     expect(buildClasspathCalls[0].args).toContain("-fae");
-    // root's 2 m2 entries + the module's 1, all distinct coordinates
-    expect(resolution.artifacts).toHaveLength(3);
+    // root's 2 m2 entries + the module's 1 + the root project artifact
+    expect(resolution.artifacts).toHaveLength(4);
     const lookup = indexBy(resolution.artifacts);
     expect(lookup(SPRING_TX).sourcesJar).toBeDefined(); // sources sibling survived the merge
     expect(lookup(JUNIT)).toBeDefined();
@@ -832,8 +849,8 @@ describe("resolveMaven: multi-module", () => {
     const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
 
     expect(resolution.ok).toBe(true);
-    // spring + junit once, not three entries
-    expect(resolution.artifacts).toHaveLength(2);
+    // spring + junit once, not three entries, plus the root project artifact
+    expect(resolution.artifacts).toHaveLength(3);
     expect(resolution.artifacts.filter((a) => a.coordinates === JUNIT)).toHaveLength(1);
   });
 
@@ -876,7 +893,7 @@ describe("resolveMaven: multi-module", () => {
     const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
 
     expect(resolution.ok).toBe(true);
-    expect(resolution.artifacts).toHaveLength(2);
+    expect(resolution.artifacts).toHaveLength(3); // spring-tx + junit + the root project
   });
 
   it("degrades to partial when a module fails while the others resolved (exit 1)", async () => {
@@ -890,7 +907,7 @@ describe("resolveMaven: multi-module", () => {
 
     // what resolved is trustworthy; the failed module is named, not fatal
     expect(resolution.ok).toBe(true);
-    expect(resolution.artifacts).toHaveLength(2); // root's spring-tx + junit
+    expect(resolution.artifacts).toHaveLength(3); // root's spring-tx + junit + the root project
     expect(resolution.partial).toBe("modules failed to resolve: mod");
     expect(existsSync(join(mod, "target", "jarpeek-classpath.txt"))).toBe(false);
   });
@@ -905,12 +922,20 @@ describe("resolveMaven: multi-module", () => {
 
     const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
 
-    expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-classpath" });
+    // no classpath content survives: the answer is the root project alone
+    // (mod is undeclared and produced nothing) — and the stale entry is gone
+    // before parsing either way
+    expect(resolution.ok).toBe(true);
+    expect(resolution.artifacts).toHaveLength(1);
+    expect(resolution.artifacts[0]!.kind).toBe("project");
     expect(existsSync(stale)).toBe(false); // removed before the run, not parsed
   });
 
-  it("maps a sibling's target/classes entry to a kind:module artifact on the module directory", async () => {
+  it("maps a sibling's target/classes entry to a kind:module artifact on its pom roots", async () => {
     const { projectRoot, mod } = multiModule();
+    // the sibling needs a source tree for the record-time existence filter
+    mkdirSync(join(mod, "src/main/java"), { recursive: true });
+    writeFileSync(join(mod, "src/main/java/Mod.java"), "public class Mod {}\n");
     const m2 = join(projectRoot, "m2");
     const { content: rootCp } = materialize(m2, CP_UNIX, []);
     const jar = m2Jar(m2, "com", "example", "lib", "2.0", "lib-2.0.jar");
@@ -929,10 +954,252 @@ describe("resolveMaven: multi-module", () => {
     const lookup = indexBy(resolution.artifacts);
     const module = lookup(moduleCoordinates(projectRoot, "mod"));
     expect(module.kind).toBe("module");
-    expect(module.sourceDir).toBe(mod); // indexed in place, like a Gradle module
+    // pom model: the module's declared roots, not the whole module directory
+    expect(module.sourceDirs).toEqual([
+      join(mod, "src/main/java"),
+      join(mod, "src/test/java"),
+    ]);
     expect(module.provenance).toBeUndefined();
     expect(module.warnings).toBeUndefined();
     expect(lookup(LIB)).toBeDefined(); // the m2 jar alongside it survives
+  });
+
+  it("a source-less aggregator root records no project artifact — and nothing that can wedge staleness", async () => {
+    // the standard multi-module shape: an aggregator root pom with declared
+    // modules and no source tree of its own. Recording it with conventional
+    // (absent) roots made every freshly-resolved manifest stale — a
+    // re-resolve-per-query loop, since a successful resolve never clears
+    const projectRoot = scratch();
+    const mod = join(projectRoot, "mod");
+    mkdirSync(mod);
+    writeFileSync(
+      join(projectRoot, "pom.xml"),
+      "<project><modules><module>mod</module></modules></project>",
+    );
+    writeFileSync(join(mod, "pom.xml"), "<project/>");
+    mkdirSync(join(mod, "src/main/java"), { recursive: true });
+    writeFileSync(join(mod, "src/main/java/Mod.java"), "public class Mod {}\n");
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: rootCp }]);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolution.artifacts.filter((a) => a.kind === "project")).toEqual([]);
+    // every recorded sourceDirs-bearing artifact has at least one live root
+    for (const artifact of resolution.artifacts) {
+      if (artifact.sourceDirs !== undefined) {
+        expect(artifact.sourceDirs.some((dir) => existsSync(dir))).toBe(true);
+      }
+    }
+    // cross-seam: the manifest this resolution writes must hash FRESH
+    const ctx = openContext(projectRoot, { onNotice: () => {} });
+    await writeManifest(projectRoot, {
+      version: 3,
+      resolvedAt: new Date().toISOString(),
+      dependencySetHash: await computeDependencySetHash(projectRoot, "auto", ctx.roots.m2[0].path),
+      artifacts: resolution.artifacts,
+    });
+    const manifest = (await readManifest(projectRoot))!;
+    expect(await isStale(projectRoot, manifest, "auto", ctx.roots.m2[0].path)).toBe(false);
+  });
+
+  it("an unresolvable ${...} sourceDirectory falls back to the conventional root", async () => {
+    const projectRoot = scratch();
+    writeFileSync(
+      join(projectRoot, "pom.xml"),
+      "<project><build><sourceDirectory>${maven.custom}/src</sourceDirectory></build></project>",
+    );
+    mkdirSync(join(projectRoot, "src/main/java"), { recursive: true });
+    writeFileSync(join(projectRoot, "src/main/java/Root.java"), "public class Root {}\n");
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: rootCp }]);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    const rootArtifact = resolution.artifacts.find((a) => a.kind === "project")!;
+    expect(rootArtifact.sourceDirs).toEqual([
+      join(projectRoot, "src/main/java"),
+      join(projectRoot, "src/test/java"),
+    ]);
+  });
+
+  it("${project.basedir} interpolates to the module directory", async () => {
+    const projectRoot = scratch();
+    mkdirSync(join(projectRoot, "custom-src"), { recursive: true });
+    writeFileSync(
+      join(projectRoot, "pom.xml"),
+      "<project><build><sourceDirectory>${project.basedir}/custom-src</sourceDirectory></build></project>",
+    );
+    mkdirSync(join(projectRoot, "src/main/java"), { recursive: true });
+    writeFileSync(join(projectRoot, "src/main/java/Root.java"), "public class Root {}\n");
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: rootCp }]);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    const rootArtifact = resolution.artifacts.find((a) => a.kind === "project")!;
+    expect(rootArtifact.sourceDirs[0]).toBe(join(projectRoot, "custom-src"));
+  });
+
+  it("a commented-out sourceDirectory cannot override the live one", async () => {
+    const projectRoot = scratch();
+    writeFileSync(
+      join(projectRoot, "pom.xml"),
+      "<project><build><!-- <sourceDirectory>src/wrong</sourceDirectory> --></build></project>",
+    );
+    mkdirSync(join(projectRoot, "src/main/java"), { recursive: true });
+    writeFileSync(join(projectRoot, "src/main/java/Root.java"), "public class Root {}\n");
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: rootCp }]);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    const rootArtifact = resolution.artifacts.find((a) => a.kind === "project")!;
+    expect(rootArtifact.sourceDirs[0]).toBe(join(projectRoot, "src/main/java"));
+  });
+
+  it("declared modules recurse: a module's own <modules> are captured too", async () => {
+    const projectRoot = scratch();
+    const a = join(projectRoot, "a");
+    const a1 = join(projectRoot, "a", "a1");
+    mkdirSync(a1, { recursive: true });
+    writeFileSync(
+      join(projectRoot, "pom.xml"),
+      "<project><modules><module>a</module></modules></project>",
+    );
+    writeFileSync(join(a, "pom.xml"), "<project><modules><module>a1</module></modules></project>");
+    writeFileSync(join(a1, "pom.xml"), "<project/>");
+    mkdirSync(join(projectRoot, "src/main/java"), { recursive: true });
+    mkdirSync(join(a, "src/main/java"), { recursive: true });
+    mkdirSync(join(a1, "src/main/java"), { recursive: true });
+    writeFileSync(join(a, "src/main/java/A.java"), "public class A {}\n");
+    writeFileSync(join(a1, "src/main/java/A1.java"), "public class A1 {}\n");
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: rootCp }]);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    const lookup = indexBy(resolution.artifacts);
+    expect(lookup(moduleCoordinates(projectRoot, "a")).kind).toBe("module");
+    expect(lookup(moduleCoordinates(projectRoot, "a/a1")).kind).toBe("module");
+  });
+});
+
+describe("resolveMaven: the build's own modules (pom model)", () => {
+  /**
+   * Root pom with custom source roots + a declared module, on scratch. The
+   * declared trees exist on disk (the record-time existence filter keeps
+   * modules with at least one live root).
+   */
+  function pomProject(): { projectRoot: string; mod: string } {
+    const projectRoot = scratch();
+    const mod = join(projectRoot, "mod");
+    mkdirSync(mod);
+    writeFileSync(
+      join(projectRoot, "pom.xml"),
+      "<project><modules><module>mod</module></modules>" +
+        "<build><sourceDirectory>src/java</sourceDirectory></build></project>",
+    );
+    writeFileSync(join(mod, "pom.xml"), "<project/>");
+    mkdirSync(join(projectRoot, "src/java"), { recursive: true });
+    writeFileSync(join(projectRoot, "src/java/Root.java"), "public class Root {}\n");
+    mkdirSync(join(mod, "src/main/java"), { recursive: true });
+    writeFileSync(join(mod, "src/main/java/Mod.java"), "public class Mod {}\n");
+    return { projectRoot, mod };
+  }
+
+  it("adds the root module as a project artifact carrying the pom's declared source roots", async () => {
+    const { projectRoot } = pomProject();
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: rootCp }]);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    const rootArtifact = resolution.artifacts.find((a) => a.kind === "project");
+    expect(rootArtifact).toBeDefined();
+    expect(rootArtifact!.coordinates).toBe(moduleCoordinates(projectRoot, ""));
+    // explicit sourceDirectory wins; testSourceDirectory falls to the default
+    expect(rootArtifact!.sourceDirs).toEqual([
+      join(projectRoot, "src/java"),
+      join(projectRoot, "src/test/java"),
+    ]);
+    // the project's own code precedes every dependency in manifest order
+    expect(resolution.artifacts[0]).toBe(rootArtifact);
+  });
+
+  it("adds kotlin convention roots only when they exist", async () => {
+    const { projectRoot } = pomProject();
+    mkdirSync(join(projectRoot, "src/main/kotlin"), { recursive: true });
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: rootCp }]);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    const rootArtifact = resolution.artifacts.find((a) => a.kind === "project")!;
+    expect(rootArtifact.sourceDirs).toEqual([
+      join(projectRoot, "src/java"),
+      join(projectRoot, "src/test/java"),
+      join(projectRoot, "src/main/kotlin"),
+    ]);
+  });
+
+  it("declared reactor modules become module artifacts whether or not they appear on a classpath", async () => {
+    const { projectRoot, mod } = pomProject();
+    const m2 = join(projectRoot, "m2");
+    // only the root's own classpath; mod never appears as a dependency
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: rootCp }]);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    const module = resolution.artifacts.find((a) => a.kind === "module");
+    expect(module).toBeDefined();
+    expect(module!.coordinates).toBe(moduleCoordinates(projectRoot, "mod"));
+    expect(module!.sourceDirs).toEqual([join(mod, "src/main/java"), join(mod, "src/test/java")]);
+  });
+
+  it("a dependency-less project still resolves to its own sources instead of no-classpath", async () => {
+    const { projectRoot } = pomProject();
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: "" }]);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolution.artifacts.filter((a) => a.kind === "project")).toHaveLength(1);
+    expect(resolution.artifacts.some((a) => a.kind === "module")).toBe(true);
+  });
+
+  it("an empty classpath from a FAILING build stays a failure (the broken-build domain)", async () => {
+    const { projectRoot } = pomProject();
+    // exit 1 and nothing written: a broken build, not a dependency-less
+    // project — the modules-only answer must not pass for complete
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: "" }], { exit: 1 });
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
+
+    expect(resolution.ok).toBe(false);
+    expect(resolution.reason).toMatch(/^mvn-failed:/);
+    expect(resolution.artifacts).toEqual([]);
+  });
+
+  it("a pom-less root keeps the no-classpath failure (nothing trustworthy to serve)", async () => {
+    const projectRoot = scratch();
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: "" }]);
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND });
+
+    expect(resolution).toEqual({ ok: false, artifacts: [], reason: "no-classpath" });
   });
 });
 

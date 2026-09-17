@@ -13,11 +13,15 @@ import { join } from "node:path";
 import type { BuildToolStrategy } from "../resolver/strategy.js";
 import type { DependencyArtifact } from "../core/types.js";
 
-/** Layout version of `.jarpeek/manifest.json`; bumps force a full re-resolve. */
-const MANIFEST_VERSION = 2;
+/**
+ * Layout version of `.jarpeek/manifest.json`; bumps force a full re-resolve.
+ * v3 added the build's own projects (kind "project" root artifact, sourceDirs
+ * package roots) — every v2 manifest on disk hashes stale exactly once.
+ */
+export const MANIFEST_VERSION = 3;
 
 export interface Manifest {
-  version: 2;
+  version: 3;
   resolvedAt: string;
   dependencySetHash: string;
   artifacts: DependencyArtifact[];
@@ -128,9 +132,18 @@ export async function isStale(
   }
   for (const artifact of m.artifacts) {
     if (
-      [artifact.binaryJar, artifact.sourcesJar, artifact.sourceDir].some(
+      [artifact.binaryJar, artifact.sourcesJar].some(
         (path) => path !== undefined && !existsSync(path),
       )
+    ) {
+      return true;
+    }
+    // sourceDirs: a declared-but-absent root is normal (a test tree a module
+    // does not have); EVERY root gone means the module itself moved
+    if (
+      artifact.sourceDirs !== undefined &&
+      artifact.sourceDirs.length > 0 &&
+      !artifact.sourceDirs.some((path) => existsSync(path))
     ) {
       return true;
     }

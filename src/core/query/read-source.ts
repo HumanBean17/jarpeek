@@ -13,7 +13,6 @@
  * LookupMissError like outline does.
  */
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { Declaration, DependencyArtifact, Provenance } from "../types.js";
 import type { DecompileResult } from "../../decompile/cfr.js";
 import { listZipEntries, readTextEntry } from "../../parse/zip.js";
@@ -123,10 +122,11 @@ export async function resolveContent(ctx: QueryContext, fqn: string): Promise<Re
     ...extra,
   });
 
-  // 1. module sourceDir: the located entry is the sourceDir-relative path
-  if (meta.sourceDir) {
+  // 1. module/project sourceDirs: the winner carries the absolute path the
+  // listing resolved its relpath against (which root owned the file)
+  if (winner.file !== undefined) {
     try {
-      return resolved(winner.entry, "source", readFileSync(join(meta.sourceDir, winner.entry), "utf8"));
+      return resolved(winner.entry, "source", readFileSync(winner.file, "utf8"));
     } catch {
       // unreadable path — fall through to the next source
     }

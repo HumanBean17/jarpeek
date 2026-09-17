@@ -48,7 +48,7 @@ async function contextWith(artifacts: DependencyArtifact[]): Promise<{ ctx: Quer
   writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
   const ctx = openContext(root, { onNotice: () => {} });
   await writeManifest(root, {
-    version: 2,
+    version: 3,
     resolvedAt: "2026-08-17T00:00:00.000Z",
     dependencySetHash: await computeDependencySetHash(root, "auto", ctx.roots.m2[0].path),
     artifacts,
