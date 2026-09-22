@@ -1,6 +1,6 @@
 {
   "name": "jarpeek",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Context-frugal navigation into JVM dependency sources, for AI agents",
   "license": "MIT",
   "repository": {
