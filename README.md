@@ -82,7 +82,7 @@ nine tools:
 | `read_resource` | `artifact`, `glob` | Non-class jar entries (config, services, manifests) |
 | `search_symbols` | `query`, `artifact` (required), `limit?`, `kind?` | Declarations by member name in one artifact |
 | `resolve` | — | Forced re-resolve; one summary line (count, duration, warnings), plus the warnings when any |
-| `status` | — | Manifest freshness (present, resolvedAt, stale, artifactCount) and JVM report |
+| `status` | — | Manifest freshness (present, resolvedAt, stale, incomplete, artifactCount) and JVM report |
 | `where` | `coordinates` | The artifact's recorded on-disk paths, each flagged exists or missing |
 
 Artifact arguments take full `g:a:v` coordinates or a unique artifact id
@@ -102,8 +102,12 @@ A resolve that fails never fails the query: with a manifest on disk it is
 served flagged `stale` with a warning; without one the query answers as a
 miss, and re-resolution backs off for 60 seconds so a broken build is not
 re-run per query. `jarpeek resolve` re-runs the cascade on demand and
-reports the failure. The full cascade and degradation rules are in the
-[design notes](docs/design.md).
+reports the failure. A Maven reactor where only some modules resolve keeps
+what resolved but the manifest is flagged `incomplete` (with the failed
+modules and the Maven error) — visible in `status`, and a `find_class`
+negative over it carries `incomplete: true`, so it never reads as a
+definitive "not in any dependency". The full cascade and degradation rules
+are in the [design notes](docs/design.md).
 
 ### CLI
 

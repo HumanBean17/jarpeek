@@ -144,5 +144,31 @@ describe("handleMiss negative", () => {
     expect(result.found).toBe(false);
     if (result.found) throw new Error("unreachable");
     expect(result.degraded).toEqual([]);
+    expect(result.incomplete).toBe(false);
+  });
+
+  it("a negative over an incomplete manifest is flagged and distinguishable from a genuine one (GH#18)", async () => {
+    // the issue's exact scenario: a LATER invocation, fresh process, serving
+    // a fresh-but-partial manifest — the negative must not read as definitive
+    const projectRoot = freshRoot();
+    writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+    const ctx = openContext(projectRoot, { onNotice: () => {} });
+    const reason = "modules failed to resolve: mod ([ERROR] sibling was not found)";
+    await writeManifest(projectRoot, {
+      version: 2,
+      resolvedAt: "",
+      dependencySetHash: await computeDependencySetHash(projectRoot, "auto", ctx.roots.m2[0].path),
+      artifacts: [DEMO_SOURCES],
+      incomplete: [{ from: "maven", reason }],
+    });
+
+    // a brand-new context over the same project — the persisted state, not
+    // any in-process warning, must reach the miss answer
+    const serving = openContext(projectRoot, { onNotice: () => {} });
+    const result = await handleMiss(serving, new LookupMissError("com.example.Nowhere"));
+    expect(result.found).toBe(false);
+    if (result.found) throw new Error("unreachable");
+    expect(result.incomplete).toBe(true);
+    expect(result.degraded).toContain(`maven: ${reason}`);
   });
 });

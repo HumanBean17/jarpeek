@@ -180,6 +180,62 @@ describe("readManifest / writeManifest", () => {
     }
   });
 
+  it("round-trips a partial resolution's incomplete entries (GH#18)", async () => {
+    const root = tmpProjectRoot();
+    try {
+      const m: Manifest = {
+        ...manifestFor("deadbeef", [artifact({ coordinates: "g:a:1.0" })]),
+        incomplete: [
+          { from: "maven", reason: "modules failed to resolve: mod ([ERROR] sibling not found)" },
+        ],
+      };
+      await writeManifest(root, m);
+      expect(await readManifest(root)).toEqual(m);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a malformed incomplete field reads as null (corrupt means absent)", async () => {
+    const root = tmpProjectRoot();
+    try {
+      mkdirSync(join(root, ".jarpeek"));
+      const base = {
+        version: 2,
+        resolvedAt: new Date().toISOString(),
+        dependencySetHash: EMPTY_SHA256,
+        artifacts: [artifact({})],
+      };
+      writeFileSync(
+        join(root, ".jarpeek", "manifest.json"),
+        JSON.stringify({ ...base, incomplete: [{ from: "maven" }] }), // reason missing
+      );
+      expect(await readManifest(root)).toBeNull();
+
+      writeFileSync(
+        join(root, ".jarpeek", "manifest.json"),
+        JSON.stringify({ ...base, incomplete: "modules failed" }), // not a list
+      );
+      expect(await readManifest(root)).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a pre-incomplete-field v2 manifest parses as complete (additive, no forced re-resolve)", async () => {
+    const root = tmpProjectRoot();
+    try {
+      mkdirSync(join(root, ".jarpeek"));
+      const legacy = manifestFor("deadbeef", [artifact({})]);
+      writeFileSync(join(root, ".jarpeek", "manifest.json"), JSON.stringify(legacy));
+      const read = await readManifest(root);
+      expect(read).toEqual(legacy);
+      expect(read?.incomplete).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("a v1-shaped manifest reads as null (layout bumps force a re-resolve)", async () => {
     const root = tmpProjectRoot();
     try {

@@ -888,11 +888,61 @@ describe("resolveMaven: multi-module", () => {
 
     const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
 
-    // what resolved is trustworthy; the failed module is named, not fatal
+    // what resolved is trustworthy; the failed module is named, not fatal —
+    // and the mvn failure detail travels with the module list (GH#18)
     expect(resolution.ok).toBe(true);
     expect(resolution.artifacts).toHaveLength(2); // root's spring-tx + junit
-    expect(resolution.partial).toBe("modules failed to resolve: mod");
+    expect(resolution.partial).toBe("modules failed to resolve: mod (reactor partially failed)");
     expect(existsSync(join(mod, "target", "jarpeek-classpath.txt"))).toBe(false);
+  });
+
+  it("a partial resolution caused by a cached negative lookup recommends -U (GH#18)", async () => {
+    const { projectRoot } = multiModule();
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    // a real reactor's failure output: the cause lines first, then reams of
+    // help boilerplate — batch-mode mvn writes it all to STDOUT, [ERROR]
+    // prefix on every line. The diagnosis must keep the cause from the
+    // head, and the advice must fire regardless of where the marker line
+    // survived the clip
+    const cachedFailure = [
+      "[ERROR] The following artifacts could not be resolved: com.example:sib:1.0-SNAPSHOT:",
+      "[ERROR]   com.example:sib:1.0-SNAPSHOT was not found in corp-repo during a previous attempt.",
+      "[ERROR]   This failure was cached in the local repository and resolution is not",
+      "[ERROR]   reattempted until the update interval of corp-repo has elapsed or updates are forced",
+      ...Array.from({ length: 12 }, (_, i) => `[ERROR] help boilerplate line ${i} padding padding padding`),
+      "[ERROR]   mvn <args> -rf :mod",
+    ].join("\n");
+    const { exec } = stubExec(async (_cmd, args) => {
+      if (args.includes("dependency:sources")) return { stdout: "", stderr: "", code: 0 };
+      const file = join(projectRoot, "target", "jarpeek-classpath.txt");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, rootCp, "utf8");
+      return { stdout: cachedFailure, stderr: "", code: 1 };
+    });
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolution.partial).toContain("modules failed to resolve: mod");
+    expect(resolution.partial).toContain("was cached in the local repository");
+    expect(resolution.partial).toContain("run mvn -U once, then jarpeek resolve");
+    // the reason is single-line: it rides the line-budgeted warning channel
+    expect(resolution.partial).not.toContain("\n");
+  });
+
+  it("a partial resolution from an ordinary failure carries the diagnosis without -U advice", async () => {
+    const { projectRoot } = multiModule();
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const { exec } = reactorCpExec([{ dir: projectRoot, content: rootCp }], { exit: 1 });
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolution.partial).toContain("reactor partially failed");
+    expect(resolution.partial).not.toContain("mvn -U");
+    expect(resolution.partial).not.toContain("\n");
   });
 
   it("never ingests a stale output file left by a crashed previous run", async () => {

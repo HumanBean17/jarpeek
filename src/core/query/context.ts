@@ -68,9 +68,11 @@ export interface QueryContext {
   manifest(): Promise<Manifest | null>;
   artifacts(): Promise<DependencyArtifact[]>;
   /**
-   * Warnings of the last bootstrap (cache-scan, stale-served, ...): the
-   * channel documents what the process currently serving answers degraded
-   * on, not the accumulation of every bootstrap it ever ran.
+   * Warnings of the last bootstrap (cache-scan, stale-served, ...) merged
+   * with the incompleteness the served manifest itself records: the channel
+   * documents what the process currently serving answers degraded on — not
+   * the accumulation of every bootstrap it ever ran — and a manifest born
+   * partial stays partial for every later invocation too.
    */
   bootstrapWarnings(): Promise<string[]>;
 }
@@ -182,6 +184,11 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
         resolvedAt: new Date().toISOString(),
         dependencySetHash: await computeDependencySetHash(projectRoot, buildTool, roots.m2[0].path),
         artifacts: resolution.artifacts,
+        // a partial resolution's manifest must never read as exhaustive:
+        // its degraded entries persist with it, so a LATER invocation (a
+        // fresh process serving this fresh manifest) can still tell a
+        // genuine negative from one computed over an unknown-truncated set
+        ...(resolution.degraded.length > 0 ? { incomplete: resolution.degraded } : {}),
       });
       failedAt = undefined;
       return { bootstrapped: true, stale: wasStale };
@@ -241,6 +248,14 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       const manifest = await readManifest(projectRoot);
       return manifest === null ? [] : manifest.artifacts;
     },
-    bootstrapWarnings: async () => [...warnings],
+    // the serving process's degradation state: this bootstrap's warnings,
+    // pre-seeded with whatever incompleteness the manifest itself records —
+    // without that, a fresh process serving a fresh-but-partial manifest
+    // would answer as if the set were exhaustive (GH#18)
+    async bootstrapWarnings(): Promise<string[]> {
+      const manifest = await readManifest(projectRoot);
+      const persisted = (manifest?.incomplete ?? []).map((entry) => `${entry.from}: ${entry.reason}`);
+      return [...new Set([...warnings, ...persisted])];
+    },
   };
 }

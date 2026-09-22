@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openContext, type QueryContext } from "../../src/core/query/context.js";
-import { computeDependencySetHash, writeManifest } from "../../src/index/manifest.js";
+import { computeDependencySetHash, readManifest, writeManifest } from "../../src/index/manifest.js";
 import type { DependencyArtifact } from "../../src/core/types.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
@@ -108,6 +108,93 @@ describe("warning channel lifecycle", () => {
     await second.ensureReady();
     expect(calls).toBe(1); // served fresh: no resolver ran
     expect(await second.bootstrapWarnings()).toEqual([]);
+  });
+});
+
+describe("partial-resolution persistence (GH#18)", () => {
+  /** A Maven-detected project (partial resolution is the Maven reactor's failure mode). */
+  function pomProject(): { projectRoot: string } {
+    const { projectRoot } = freshProject();
+    rmSync(join(projectRoot, "build.gradle"));
+    writeFileSync(join(projectRoot, "pom.xml"), "<project/>");
+    return { projectRoot };
+  }
+
+  it("a partial bootstrap persists its degraded state — a fresh process serving the fresh manifest still reports it", async () => {
+    const { projectRoot } = pomProject();
+    const artifacts: DependencyArtifact[] = [
+      {
+        coordinates: "com.example:partial-lib:1.0",
+        kind: "external",
+        sourcesJar: DEMO_SOURCES_JAR,
+      },
+    ];
+    let calls = 0;
+    const resolvers = {
+      maven: async () => {
+        calls++;
+        return {
+          ok: true,
+          artifacts,
+          partial: "modules failed to resolve: mod ([ERROR] sibling was not found)",
+        };
+      },
+      includeJdk: false,
+    };
+    const first = openContext(projectRoot, { resolvers });
+    await first.ensureReady();
+    expect(calls).toBe(1);
+
+    // the manifest the partial bootstrap wrote records the truncation —
+    // without this, the incomplete set is indistinguishable from a complete
+    // one on disk
+    const written = await readManifest(projectRoot);
+    expect(written?.incomplete).toEqual([
+      { from: "maven", reason: "modules failed to resolve: mod ([ERROR] sibling was not found)" },
+    ]);
+
+    // the exact false-negative machine from the issue: a later invocation,
+    // fresh process, manifest hashes fresh → served without bootstrapping —
+    // and the persisted incompleteness still reaches the warning channel
+    const second = openContext(projectRoot, { resolvers });
+    const served = await second.ensureReady();
+    expect(served).toEqual({ bootstrapped: false, stale: false });
+    expect(calls).toBe(1); // never re-resolved: serving, not retrying
+    expect(await second.bootstrapWarnings()).toContain(
+      "maven: modules failed to resolve: mod ([ERROR] sibling was not found)",
+    );
+  });
+
+  it("a clean re-resolve clears the persisted incompleteness", async () => {
+    const { projectRoot } = pomProject();
+    const artifacts: DependencyArtifact[] = [
+      {
+        coordinates: "com.example:partial-lib:1.0",
+        kind: "external",
+        sourcesJar: DEMO_SOURCES_JAR,
+      },
+    ];
+    let partial = true;
+    const resolvers = {
+      maven: async () =>
+        partial
+          ? { ok: true, artifacts, partial: "modules failed to resolve: mod ([ERROR] broken)" }
+          : { ok: true, artifacts },
+      includeJdk: false,
+    };
+    await openContext(projectRoot, { resolvers }).ensureReady();
+    expect((await readManifest(projectRoot))?.incomplete).toBeDefined();
+
+    // the build heals and the manifest goes stale: the next bootstrap writes
+    // a complete manifest, and the persisted flag must not survive it
+    partial = false;
+    const pom = join(projectRoot, "pom.xml");
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(pom, future, future);
+    const healed = openContext(projectRoot, { resolvers });
+    await healed.ensureReady();
+    expect(await healed.bootstrapWarnings()).toEqual([]);
+    expect((await readManifest(projectRoot))?.incomplete).toBeUndefined();
   });
 });
 
