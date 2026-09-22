@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { BuildToolStrategy } from "../resolver/strategy.js";
+import type { DegradedEntry } from "../resolver/index.js";
 import type { DependencyArtifact } from "../core/types.js";
 
 /** Layout version of `.jarpeek/manifest.json`; bumps force a full re-resolve. */
@@ -21,6 +22,18 @@ export interface Manifest {
   resolvedAt: string;
   dependencySetHash: string;
   artifacts: DependencyArtifact[];
+  /**
+   * Present when the resolution that wrote this manifest was partial — the
+   * artifact list is trustworthy for what it contains but NOT exhaustive, so
+   * a negative computed over it is not definitive. Carries the truncating
+   * degraded entries (the Maven partial reason with failed modules and
+   * cause, or the failures behind a cache-scan resolution); degraded
+   * entries that do not truncate the winning set (a failed cascade
+   * sibling) stay warnings and never land here. Absent means the
+   * resolution's answer was complete. Additive v2 field: manifests written
+   * before it existed parse as complete.
+   */
+  incomplete?: DegradedEntry[];
 }
 
 /**
@@ -58,7 +71,8 @@ export async function readManifest(projectRoot: string): Promise<Manifest | null
       parsed?.version !== MANIFEST_VERSION ||
       typeof parsed.resolvedAt !== "string" ||
       typeof parsed.dependencySetHash !== "string" ||
-      !Array.isArray(parsed.artifacts)
+      !Array.isArray(parsed.artifacts) ||
+      !validIncomplete(parsed.incomplete)
     ) {
       return null;
     }
@@ -66,6 +80,18 @@ export async function readManifest(projectRoot: string): Promise<Manifest | null
   } catch {
     return null;
   }
+}
+
+/** An `incomplete` field is optional but, when present, must be a well-formed degraded-entry list. */
+function validIncomplete(incomplete: Manifest["incomplete"]): boolean {
+  if (incomplete === undefined) return true;
+  return (
+    Array.isArray(incomplete) &&
+    incomplete.every(
+      (entry) =>
+        (entry?.from === "gradle" || entry?.from === "maven") && typeof entry.reason === "string",
+    )
+  );
 }
 
 /** Write the manifest via tmp + rename so readers only see whole files. */

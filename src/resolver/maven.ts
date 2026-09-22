@@ -37,9 +37,21 @@ import type { BuildToolStrategy } from "./strategy.js";
 import { runWithTimeout, SpawnError, TimeoutError, type RunResult } from "../util/exec.js";
 
 const DEFAULT_TIMEOUT_MS = 300_000;
-const STDERR_TAIL_CHARS = 500;
+/** Max characters of mvn output a failure reason keeps (tail for `failureDetail`, head for `failureDiagnosis`). */
+const DETAIL_MAX_CHARS = 500;
 /** Per-module classpath output, relative to each module's basedir (forward slashes: the mojo normalizes). */
 const CP_FILE_REL = "target/jarpeek-classpath.txt";
+
+/**
+ * Maven's cached-negative-lookup marker: a dependency that failed resolution
+ * during a previous attempt stays failed until the repository's update
+ * interval elapses or updates are forced — the one partial-failure cause
+ * whose fix is a flag, not a build change.
+ */
+const CACHED_LOOKUP_FAILURE = /was cached in the local repository|resolution is not reattempted/i;
+/** Advice appended to a partial resolution whose cause was a cached lookup: un-cache, then re-resolve. */
+const CACHED_LOOKUP_ADVICE =
+  " — Maven cached a failed lookup; run mvn -U once, then jarpeek resolve";
 
 export interface MavenResolution {
   ok: boolean;
@@ -48,7 +60,11 @@ export interface MavenResolution {
   /**
    * Set when the run partially failed: some modules resolved (artifacts is
    * trustworthy) but at least one module's resolution failed, so its unique
-   * dependencies are missing. Names the failed module directories.
+   * dependencies are missing. Names the failed module directories followed
+   * by the mvn failure detail in parens (plus `-U` advice when the run's
+   * output names a cached negative lookup) — the caller persists this
+   * reason with the manifest, so it must carry the cause, not just the
+   * module list.
    */
   partial?: string;
   /**
@@ -131,7 +147,7 @@ export function mvnOnPathDefault(): boolean {
 
 function stderrTail(stderr: string): string {
   const trimmed = stderr.trim();
-  return trimmed.length <= STDERR_TAIL_CHARS ? trimmed : trimmed.slice(-STDERR_TAIL_CHARS);
+  return trimmed.length <= DETAIL_MAX_CHARS ? trimmed : trimmed.slice(-DETAIL_MAX_CHARS);
 }
 
 /**
@@ -147,6 +163,34 @@ function failureDetail(result: RunResult): string {
   const out = stderrTail(result.stdout);
   if (out.length > 0) return out;
   return result.code === null ? "(killed)" : `exit ${result.code} (no output)`;
+}
+
+/**
+ * The mvn diagnosis for a partial resolution, cause-first and single-line:
+ * Maven prints what failed (module, goal, unresolved artifacts) in the
+ * LEADING `[ERROR]` lines and the how-to-get-help boilerplate after them,
+ * so the head of the error lines names the cause where `failureDetail`'s
+ * 500-char tail can be pure boilerplate. Batch mode writes those lines to
+ * STDOUT — stderr carries launcher-level failures (a wrapper script that
+ * cannot find its mvn) — so stdout is scanned first. Flattened to one line
+ * because the partial reason rides the warning channel, whose stderr
+ * budget is counted in physical lines, and persists into the manifest.
+ * Falls back to `failureDetail` (flattened) when no `[ERROR]` line exists
+ * in either stream — a killed run, a truly silent failure.
+ */
+function failureDiagnosis(result: RunResult): string {
+  const errorLinesOf = (stream: string): string[] =>
+    stream
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("[ERROR]"))
+      .map((line) => line.slice("[ERROR]".length).trim())
+      .filter((line) => line.length > 0);
+  let errors = errorLinesOf(result.stdout);
+  if (errors.length === 0) errors = errorLinesOf(result.stderr);
+  const flat = (errors.length > 0 ? errors.join("; ") : failureDetail(result))
+    .replace(/\s+/g, " ")
+    .trim();
+  return flat.length <= DETAIL_MAX_CHARS ? flat : flat.slice(0, DETAIL_MAX_CHARS);
 }
 
 /** A windows drive-letter root: `C:\` or `C:/`. */
@@ -568,7 +612,17 @@ export async function resolveMaven(
           .filter((dir) => !existsSync(cpFile(dir)))
           .map((dir) => (dir === projectRoot ? "." : relative(projectRoot, dir)))
           .join(", ");
-        return { ...parsed, partial: `modules failed to resolve: ${failed}` };
+        // the module names alone say WHICH resolution is hollow, not why —
+        // the diagnosis (cause-first, single-line) travels with the partial
+        // answer, plus the -U advice when the cause was a cached negative
+        // lookup (the failure a plain re-resolve will not clear). The
+        // cached-lookup marker is matched on the FULL output, not the
+        // diagnosis text: detection must not depend on where the cause line
+        // survived the clip.
+        const detail = failureDiagnosis(result);
+        const advice =
+          CACHED_LOOKUP_FAILURE.test(`${result.stderr}\n${result.stdout}`) ? CACHED_LOOKUP_ADVICE : "";
+        return { ...parsed, partial: `modules failed to resolve: ${failed} (${detail})${advice}` };
       }
       return parsed;
     }

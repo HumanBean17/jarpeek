@@ -64,6 +64,7 @@ export function renderStatus(result: {
     present: boolean;
     resolvedAt?: string;
     stale: boolean;
+    incomplete: boolean;
     artifactCount: number;
     dependencySetHash?: string;
   };
@@ -76,6 +77,7 @@ export function renderStatus(result: {
     ["manifest.present", String(result.manifest.present)],
     ["manifest.resolvedAt", result.manifest.resolvedAt ?? ""],
     ["manifest.stale", String(result.manifest.stale)],
+    ["manifest.incomplete", String(result.manifest.incomplete)],
     ["manifest.artifactCount", String(result.manifest.artifactCount)],
     ["manifest.dependencySetHash", result.manifest.dependencySetHash ?? ""],
     ["resolver.m2Root", `${result.resolver.m2Root.path} (${result.resolver.m2Root.source})`],

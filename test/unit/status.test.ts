@@ -76,6 +76,7 @@ describe("status without the index", () => {
     expect(result.manifest.artifactCount).toBe(2);
     expect(result.manifest.resolvedAt).toBe("2026-08-17T00:00:00.000Z");
     expect(result.manifest.stale).toBe(false);
+    expect(result.manifest.incomplete).toBe(false);
     expect(typeof result.manifest.dependencySetHash).toBe("string");
     expect(result.jvm).toEqual(JVM);
     expect(result.degraded).toEqual([]);
@@ -117,9 +118,43 @@ describe("status on a manifest-less project", () => {
     expect(result.manifest.present).toBe(false);
     expect(result.manifest.artifactCount).toBe(0);
     expect(result.manifest.stale).toBe(false);
+    expect(result.manifest.incomplete).toBe(false);
     expect(result.manifest.resolvedAt).toBeUndefined();
     expect(result.jvm).toEqual({ available: false });
     expect(result.degraded).toEqual([]);
+  });
+});
+
+describe("status on an incomplete manifest (GH#18)", () => {
+  it("flags manifest.incomplete and surfaces the partial reason in degraded — fresh process, no bootstrap", async () => {
+    const root = freshRoot();
+    writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
+    const ctx = openContext(root, { onNotice: () => {} });
+    const reason = "modules failed to resolve: mod ([ERROR] sibling was not found)";
+    await writeManifest(root, {
+      version: 2,
+      resolvedAt: "2026-08-17T00:00:00.000Z",
+      dependencySetHash: await computeDependencySetHash(root, "auto", ctx.roots.m2[0].path),
+      artifacts: [
+        { coordinates: "com.example:demo-lib:1.0.0", kind: "external", sourcesJar: DEMO_SOURCES_JAR },
+      ],
+      incomplete: [{ from: "maven", reason }],
+    });
+
+    // the exact later-invocation scenario from the issue: a fresh context
+    // serving a fresh manifest must still report the truncation
+    const serving = openContext(root, { onNotice: () => {} });
+    const result = await status(serving, { jvm: () => Promise.resolve(JVM) });
+
+    expect(result.manifest.present).toBe(true);
+    expect(result.manifest.stale).toBe(false);
+    expect(result.manifest.incomplete).toBe(true);
+    expect(result.degraded).toContain(`maven: ${reason}`);
+    const table = renderStatus(result);
+    expect(table).toContain("manifest.incomplete");
+    // pin the CELL, not just any "true" in the table (present/stale also
+    // render true in other rows)
+    expect(table).toMatch(/manifest\.incomplete {2,}true/);
   });
 });
 

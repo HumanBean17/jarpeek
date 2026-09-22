@@ -19,6 +19,8 @@ export interface StatusResult {
     present: boolean;
     resolvedAt?: string;
     stale: boolean;
+    /** True when the manifest records a partial resolution — a negative over it is not definitive (GH#18). */
+    incomplete: boolean;
     artifactCount: number;
     dependencySetHash?: string;
   };
@@ -50,6 +52,7 @@ export async function status(ctx: QueryContext, opts: StatusOptions = {}): Promi
       present: manifest !== null,
       ...(manifest !== null ? { resolvedAt: manifest.resolvedAt, dependencySetHash: manifest.dependencySetHash } : {}),
       stale,
+      incomplete: (manifest?.incomplete?.length ?? 0) > 0,
       artifactCount: manifest?.artifacts.length ?? 0,
     },
     jvm: await (opts.jvm ?? probeJvmOnce)(),

@@ -22,6 +22,13 @@ export type MissResult =
       searchedArtifacts: string[];
       note: string;
       /**
+       * True when the manifest this negative was computed over records a
+       * partial resolution (GH#18): the searched set is unknown-truncated,
+       * so the negative is NOT definitive — the class may exist in a failed
+       * or skipped module's dependencies. The cause rides `degraded`.
+       */
+      incomplete: boolean;
+      /**
        * Why the answer may be hollow — a failed auto-resolve above all: spec
        * decision #1 says a failed resolve answers as a miss carrying its
        * reason, so the negative pulls the same bootstrap-warnings channel the
@@ -63,5 +70,12 @@ export async function handleMiss(
   if (degraded.includes("degraded-to-cache-scan")) {
     searchedArtifacts.push(CACHE_SCAN_NOTE);
   }
-  return { found: false, via: "negative", searchedArtifacts, note: NEGATIVE_NOTE, degraded };
+  return {
+    found: false,
+    via: "negative",
+    searchedArtifacts,
+    note: NEGATIVE_NOTE,
+    incomplete: (manifest?.incomplete?.length ?? 0) > 0,
+    degraded,
+  };
 }

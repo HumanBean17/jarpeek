@@ -5,6 +5,7 @@
     "resolvedAt": "<resolvedAt>",
     "dependencySetHash": "<hash>",
     "stale": false,
+    "incomplete": false,
     "artifactCount": 3
   },
   "jvm": {

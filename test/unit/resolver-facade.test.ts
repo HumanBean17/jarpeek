@@ -174,6 +174,9 @@ describe("resolveDependencies", () => {
 
     expect(out.artifacts.map((a) => a.coordinates)).toEqual(["com.example:beta:2.0"]);
     expect(out.degraded).toEqual([{ from: "gradle", reason: "timeout" }]);
+    // the maven answer was COMPLETE: a failed cascade sibling is a warning,
+    // not truncation — the manifest must not be flagged incomplete (GH#18)
+    expect(out.incomplete).toEqual([]);
     expect(f.calls.cacheScan).toBe(0);
     expect(out.warnings).toEqual([]);
   });
@@ -193,6 +196,11 @@ describe("resolveDependencies", () => {
 
     expect(out.artifacts.map((a) => a.coordinates)).toEqual(["com.example:beta:2.0"]);
     expect(out.degraded).toEqual([{ from: "maven", reason: "modules failed to resolve: chat-app" }]);
+    // the truncation itself is named separately: this is what the manifest
+    // persists as `incomplete`
+    expect(out.incomplete).toEqual([
+      { from: "maven", reason: "modules failed to resolve: chat-app" },
+    ]);
     expect(out.viaCacheScan).toBe(false); // partial answers, it does not degrade to scan
     expect(f.calls.cacheScan).toBe(0);
   });
@@ -214,6 +222,12 @@ describe("resolveDependencies", () => {
 
     expect(out.artifacts.map((a) => a.coordinates)).toEqual(["org.cache:one:1", "org.cache:two:2"]);
     expect(out.degraded).toEqual([
+      { from: "gradle", reason: "timeout" },
+      { from: "maven", reason: "no-mvn" },
+    ]);
+    // the heuristic set is not the build's answer: every degradation that
+    // led to the cache scan marks incompleteness
+    expect(out.incomplete).toEqual([
       { from: "gradle", reason: "timeout" },
       { from: "maven", reason: "no-mvn" },
     ]);

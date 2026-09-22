@@ -276,6 +276,9 @@ describe("find_class", () => {
     expect(parsed.found).toBe(false);
     expect(parsed.via).toBe("negative");
     expect(parsed.searchedArtifacts).toContain("com.example:demo-lib:1.0.0");
+    // the incompleteness flag rides the transport verbatim (GH#18): false
+    // over this suite's complete manifest, true for a partial one
+    expect(parsed.incomplete).toBe(false);
   });
 });
 

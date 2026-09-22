@@ -31,6 +31,19 @@ export interface ResolutionOutcome {
   warnings: string[];
   degraded: DegradedEntry[];
   /**
+   * The degraded entries that make the artifact set NON-exhaustive — a
+   * negative computed over it is not definitive (GH#18). Today exactly two
+   * causes qualify: the Maven reactor's partial entry (failed modules mean
+   * their unique dependencies are missing) and, when the cascade fell all
+   * the way to the cache scan, every degraded entry (the heuristic set is
+   * not the build's answer at all). Sibling-cascade failures — gradle
+   * failing before a COMPLETE maven win — and `no-artifacts` successes stay
+   * in `degraded` (surfaced as warnings) without marking incompleteness:
+   * the winning set is exhaustive under the cascade model. Manifest
+   * writers persist this list verbatim.
+   */
+  incomplete: DegradedEntry[];
+  /**
    * True when no detected build system answered and the artifacts are the
    * cache scan's heuristic set. Callers with a previously-resolved manifest
    * serve that stale (flagged) instead of replacing it with this guesswork.
@@ -95,6 +108,7 @@ export async function resolveDependencies(
 
   const warnings: string[] = [];
   const degraded: DegradedEntry[] = [];
+  const incomplete: DegradedEntry[] = [];
 
   let artifacts: DependencyArtifact[] | null = null;
   let viaCacheScan = false;
@@ -111,9 +125,12 @@ export async function resolveDependencies(
       if (resolution.ok && resolution.artifacts.length > 0) {
         artifacts = resolution.artifacts;
         // a reactor that partially failed still answers, but the missing
-        // modules' unique dependencies ride the warning channel
+        // modules' unique dependencies ride the warning channel — and the
+        // answer set is truncated, which is exactly what `incomplete` names
         if (resolution.partial !== undefined) {
-          degraded.push({ from: "maven", reason: resolution.partial });
+          const entry: DegradedEntry = { from: "maven", reason: resolution.partial };
+          degraded.push(entry);
+          incomplete.push(entry);
         }
         // non-fatal maven observations (a derived m2 anchor) ride with the
         // winner — they explain where the answer was anchored
@@ -127,7 +144,8 @@ export async function resolveDependencies(
   if (artifacts === null) {
     // no detected system answered (or none detected) — the caches are the
     // whole truth now, and the warning marks that regardless of whether any
-    // system was even attempted
+    // system was even attempted. The heuristic set is not the build's
+    // answer, so every degradation that led here marks incompleteness
     warnings.push(DEGRADED_WARNING);
     viaCacheScan = true;
     const scan = await cacheScan({
@@ -138,6 +156,7 @@ export async function resolveDependencies(
     });
     artifacts = scan.artifacts;
     warnings.push(...scan.warnings);
+    incomplete.push(...degraded);
   }
 
   if (opts.includeJdk !== false) {
@@ -146,5 +165,5 @@ export async function resolveDependencies(
     if (jdkResult.artifact !== null) artifacts = [...artifacts, jdkResult.artifact];
   }
 
-  return { artifacts: dedup(artifacts), warnings, degraded, viaCacheScan };
+  return { artifacts: dedup(artifacts), warnings, degraded, incomplete, viaCacheScan };
 }

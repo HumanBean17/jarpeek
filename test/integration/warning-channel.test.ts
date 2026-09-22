@@ -9,7 +9,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openContext, type QueryContext } from "../../src/core/query/context.js";
-import { computeDependencySetHash, writeManifest } from "../../src/index/manifest.js";
+import { handleMiss } from "../../src/core/miss.js";
+import { LookupMissError } from "../../src/core/query/outline.js";
+import { resolveNow } from "../../src/core/query/resolve-cmd.js";
+import { computeDependencySetHash, readManifest, writeManifest } from "../../src/index/manifest.js";
 import type { DependencyArtifact } from "../../src/core/types.js";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
@@ -108,6 +111,158 @@ describe("warning channel lifecycle", () => {
     await second.ensureReady();
     expect(calls).toBe(1); // served fresh: no resolver ran
     expect(await second.bootstrapWarnings()).toEqual([]);
+  });
+});
+
+describe("partial-resolution persistence (GH#18)", () => {
+  /** A Maven-detected project (partial resolution is the Maven reactor's failure mode). */
+  function pomProject(): { projectRoot: string } {
+    const { projectRoot } = freshProject();
+    rmSync(join(projectRoot, "build.gradle"));
+    writeFileSync(join(projectRoot, "pom.xml"), "<project/>");
+    return { projectRoot };
+  }
+
+  it("a partial bootstrap persists its degraded state — a fresh process serving the fresh manifest still reports it", async () => {
+    const { projectRoot } = pomProject();
+    const artifacts: DependencyArtifact[] = [
+      {
+        coordinates: "com.example:partial-lib:1.0",
+        kind: "external",
+        sourcesJar: DEMO_SOURCES_JAR,
+      },
+    ];
+    let calls = 0;
+    const resolvers = {
+      maven: async () => {
+        calls++;
+        return {
+          ok: true,
+          artifacts,
+          partial: "modules failed to resolve: mod ([ERROR] sibling was not found)",
+        };
+      },
+      includeJdk: false,
+    };
+    const first = openContext(projectRoot, { resolvers });
+    await first.ensureReady();
+    expect(calls).toBe(1);
+
+    // the manifest the partial bootstrap wrote records the truncation —
+    // without this, the incomplete set is indistinguishable from a complete
+    // one on disk
+    const written = await readManifest(projectRoot);
+    expect(written?.incomplete).toEqual([
+      { from: "maven", reason: "modules failed to resolve: mod ([ERROR] sibling was not found)" },
+    ]);
+
+    // the exact false-negative machine from the issue: a later invocation,
+    // fresh process, manifest hashes fresh → served without bootstrapping —
+    // and the persisted incompleteness still reaches the warning channel
+    const second = openContext(projectRoot, { resolvers });
+    const served = await second.ensureReady();
+    expect(served).toEqual({ bootstrapped: false, stale: false });
+    expect(calls).toBe(1); // never re-resolved: serving, not retrying
+    expect(await second.bootstrapWarnings()).toContain(
+      "maven: modules failed to resolve: mod ([ERROR] sibling was not found)",
+    );
+  });
+
+  it("a clean re-resolve clears the persisted incompleteness", async () => {
+    const { projectRoot } = pomProject();
+    const artifacts: DependencyArtifact[] = [
+      {
+        coordinates: "com.example:partial-lib:1.0",
+        kind: "external",
+        sourcesJar: DEMO_SOURCES_JAR,
+      },
+    ];
+    let partial = true;
+    const resolvers = {
+      maven: async () =>
+        partial
+          ? { ok: true, artifacts, partial: "modules failed to resolve: mod ([ERROR] broken)" }
+          : { ok: true, artifacts },
+      includeJdk: false,
+    };
+    await openContext(projectRoot, { resolvers }).ensureReady();
+    expect((await readManifest(projectRoot))?.incomplete).toBeDefined();
+
+    // the build heals and the manifest goes stale: the next bootstrap writes
+    // a complete manifest, and the persisted flag must not survive it
+    partial = false;
+    const pom = join(projectRoot, "pom.xml");
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(pom, future, future);
+    const healed = openContext(projectRoot, { resolvers });
+    await healed.ensureReady();
+    expect(await healed.bootstrapWarnings()).toEqual([]);
+    expect((await readManifest(projectRoot))?.incomplete).toBeUndefined();
+  });
+
+  it("resolveNow persists the same incompleteness — and clears it on a clean resolve", async () => {
+    const { projectRoot } = pomProject();
+    const artifacts: DependencyArtifact[] = [
+      {
+        coordinates: "com.example:partial-lib:1.0",
+        kind: "external",
+        sourcesJar: DEMO_SOURCES_JAR,
+      },
+    ];
+    let partial = true;
+    const resolvers = {
+      maven: async () =>
+        partial
+          ? { ok: true, artifacts, partial: "modules failed to resolve: mod ([ERROR] broken)" }
+          : { ok: true, artifacts },
+      includeJdk: false,
+    };
+
+    // the explicit resolve writes the flag just like the bootstrap does
+    const result = await resolveNow(openContext(projectRoot, { resolvers }));
+    expect(result.degraded).toEqual([
+      { from: "maven", reason: "modules failed to resolve: mod ([ERROR] broken)" },
+    ]);
+    expect((await readManifest(projectRoot))?.incomplete).toEqual([
+      { from: "maven", reason: "modules failed to resolve: mod ([ERROR] broken)" },
+    ]);
+
+    // and a clean forced resolve clears it — no staleness dance needed
+    partial = false;
+    await resolveNow(openContext(projectRoot, { resolvers }));
+    expect((await readManifest(projectRoot))?.incomplete).toBeUndefined();
+  });
+
+  it("a failed cascade sibling does NOT flag the manifest — the winning set is complete (GH#18 review)", async () => {
+    // hybrid project (gradle marker + pom.xml): gradle fails, maven answers
+    // COMPLETELY — the gradle failure stays a warning, but the served set is
+    // exhaustive, so no `incomplete` may persist and negatives stay definitive
+    const { projectRoot } = pomProject();
+    writeFileSync(join(projectRoot, "settings.gradle"), "");
+    const artifacts: DependencyArtifact[] = [
+      {
+        coordinates: "com.example:hybrid-lib:1.0",
+        kind: "external",
+        sourcesJar: DEMO_SOURCES_JAR,
+      },
+    ];
+    const resolvers = {
+      gradle: async () => ({ ok: false as const, artifacts: [], reason: "no-wrapper-no-gradle" }),
+      maven: async () => ({ ok: true as const, artifacts }),
+      includeJdk: false,
+    };
+    const ctx = openContext(projectRoot, { resolvers });
+    await ctx.ensureReady();
+
+    expect(await ctx.bootstrapWarnings()).toContain("gradle: no-wrapper-no-gradle");
+    const manifest = await readManifest(projectRoot);
+    expect(manifest?.incomplete).toBeUndefined();
+
+    // and a miss over it is a genuine negative, not a flagged one
+    const miss = await handleMiss(ctx, new LookupMissError("com.example.Nowhere"));
+    expect(miss.found).toBe(false);
+    if (miss.found) throw new Error("unreachable");
+    expect(miss.incomplete).toBe(false);
   });
 });
 
