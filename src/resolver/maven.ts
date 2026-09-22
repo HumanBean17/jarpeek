@@ -49,9 +49,16 @@ const CP_FILE_REL = "target/jarpeek-classpath.txt";
  * whose fix is a flag, not a build change.
  */
 const CACHED_LOOKUP_FAILURE = /was cached in the local repository|resolution is not reattempted/i;
-/** Advice appended to a partial resolution whose cause was a cached lookup: un-cache, then re-resolve. */
-const CACHED_LOOKUP_ADVICE =
-  " — Maven cached a failed lookup; run mvn -U once, then jarpeek resolve";
+/**
+ * Advice appended to a partial resolution whose cause was a cached lookup:
+ * jarpeek's own `-U` flag clears it in one command (GH#21) — no raw mvn by
+ * the user. When the run ALREADY had `-U` (see `CACHED_LOOKUP_PERSISTED`),
+ * a re-run would be noise.
+ */
+const CACHED_LOOKUP_ADVICE = " — Maven cached a failed lookup; re-run: jarpeek resolve -U";
+/** The cached-lookup advice variant for a run that already forced updates: the cache is not the (only) problem. */
+const CACHED_LOOKUP_PERSISTED =
+  " — Maven cached a failed lookup that -U did not clear (the artifact may be genuinely unavailable)";
 
 export interface MavenResolution {
   ok: boolean;
@@ -93,6 +100,13 @@ export interface ResolveMavenOptions {
   mvnOnPath?: () => boolean;
   /** Which mvn runs resolves; undefined means `auto` (system first, wrapper fallback). */
   strategy?: BuildToolStrategy;
+  /**
+   * Force dependency update checks (`mvn -U`): both the build-classpath and
+   * the sources run re-check every repository, which is what clears a cached
+   * negative lookup — the one partial-failure cause a plain re-resolve
+   * cannot heal (GH#21).
+   */
+  forceUpdate?: boolean;
 }
 
 /** One mvn command the resolver may run, tagged with where it came from. */
@@ -554,6 +568,7 @@ export async function resolveMaven(
             "-B",
             "-q",
             "-fae",
+            ...(opts.forceUpdate ? ["-U"] : []),
             "dependency:build-classpath",
             `-Dmdep.outputFile=${CP_FILE_REL}`,
           ],
@@ -600,7 +615,14 @@ export async function resolveMaven(
       try {
         await exec(
           candidate.command,
-          [...candidate.preArgs, "-B", "-q", "dependency:sources", "-DincludeScope=test"],
+          [
+            ...candidate.preArgs,
+            "-B",
+            "-q",
+            ...(opts.forceUpdate ? ["-U"] : []),
+            "dependency:sources",
+            "-DincludeScope=test",
+          ],
           { timeoutMs, cwd: projectRoot },
         );
       } catch {
@@ -618,10 +640,15 @@ export async function resolveMaven(
         // lookup (the failure a plain re-resolve will not clear). The
         // cached-lookup marker is matched on the FULL output, not the
         // diagnosis text: detection must not depend on where the cause line
-        // survived the clip.
+        // survived the clip. A run that already forced updates gets the
+        // exhausted-remedies variant — re-run advice would point at the
+        // command that just failed to heal it.
         const detail = failureDiagnosis(result);
-        const advice =
-          CACHED_LOOKUP_FAILURE.test(`${result.stderr}\n${result.stdout}`) ? CACHED_LOOKUP_ADVICE : "";
+        const advice = CACHED_LOOKUP_FAILURE.test(`${result.stderr}\n${result.stdout}`)
+          ? opts.forceUpdate
+            ? CACHED_LOOKUP_PERSISTED
+            : CACHED_LOOKUP_ADVICE
+          : "";
         return { ...parsed, partial: `modules failed to resolve: ${failed} (${detail})${advice}` };
       }
       return parsed;

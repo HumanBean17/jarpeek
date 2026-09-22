@@ -90,6 +90,7 @@ export function resolveHelp(t: Catalog): string {
   return `
 ${t["help.examples"]}
   jarpeek resolve
+  jarpeek resolve -U
 ${t["help.related"]} ${t["related.resolve"]}
 `;
 }

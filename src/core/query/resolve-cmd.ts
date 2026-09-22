@@ -26,10 +26,26 @@ export interface ResolveNowResult {
   viaCacheScan: boolean;
 }
 
+export interface ResolveNowOptions {
+  /**
+   * Force dependency update checks (`-U` / `--refresh-dependencies`): the
+   * one-command healing path for Maven's cached negative lookups (GH#21).
+   * The CLI's `resolve -U` flag and the MCP `resolve` tool's `forceUpdate`
+   * input land here; the lazy bootstrap never sets it.
+   */
+  forceUpdate?: boolean;
+}
+
 /** Re-resolve and rewrite the v2 manifest unconditionally. */
-export async function resolveNow(ctx: QueryContext): Promise<ResolveNowResult> {
+export async function resolveNow(
+  ctx: QueryContext,
+  opts: ResolveNowOptions = {},
+): Promise<ResolveNowResult> {
   const startedAt = Date.now();
-  const resolution = await resolveDependencies(ctx.projectRoot, ctx.resolvers);
+  const resolution = await resolveDependencies(ctx.projectRoot, {
+    ...ctx.resolvers,
+    ...(opts.forceUpdate ? { forceUpdate: true } : {}),
+  });
   await writeManifest(ctx.projectRoot, {
     version: 2,
     resolvedAt: new Date().toISOString(),

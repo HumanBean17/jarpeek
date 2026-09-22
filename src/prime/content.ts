@@ -70,10 +70,11 @@ rewrites \`.jarpeek/manifest.json\`. jarpeek never indexes; later queries
 read the manifest and open only the jar entries they need. A resolve that
 fails never fails the query: the command still answers, as a miss with the
 failure's reason, and re-resolution backs off for 60 seconds so a broken
-build is not re-run per query. \`resolve\` forces a re-resolve at any time;
-\`status\` reports manifest freshness and JVM availability. All progress and
-warnings go to stderr; stdout carries only the answer, so it stays
-parseable.
+build is not re-run per query. \`resolve\` forces a re-resolve at any time
+(\`resolve -U\` also forces dependency update checks, clearing Maven's cached
+negative lookups in one command); \`status\` reports manifest freshness and
+JVM availability. All progress and warnings go to stderr; stdout carries
+only the answer, so it stays parseable.
 
 ## Commands
 
@@ -85,7 +86,7 @@ parseable.
 | \`read-source <fqn> [--full] [--lines a:b]\` | one class | the whole file by default, numbered; \`--lines a:b\` for a range — outline and read-member are the frugal entry points before whole files |
 | \`read-resource <artifact> <glob>\` | artifact + glob | non-class jar entries: configs, service descriptors, manifests |
 | \`search-symbols <query> --artifact <g:a:v> [--limit n] [--kind k]\` | member name, scoped to one artifact (the flag is required) | every declaration with that name in that artifact |
-| \`resolve\` | — | force a re-resolve; rewrites the manifest; prints one line (count, duration) |
+| \`resolve [-U]\` | — | force a re-resolve; rewrites the manifest; prints one line (count, duration). \`-U\` (Maven \`-U\`, Gradle \`--refresh-dependencies\`) forces update checks — the fix when a partial resolution warns about a cached negative lookup |
 | \`status\` | — | manifest freshness and JVM availability report |
 | \`where <coordinates>\` | one artifact | its recorded on-disk paths (sources jar, source dir, binary jar), each flagged exists or missing |
 

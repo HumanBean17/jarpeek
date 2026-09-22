@@ -65,6 +65,13 @@ export interface ResolveDependenciesOptions {
    */
   strategy?: BuildToolStrategy;
   /**
+   * Force dependency update checks: Maven runs with `-U`, Gradle with
+   * `--refresh-dependencies` — the one-command healing path for a cached
+   * negative lookup (GH#21). Per-invocation only: never part of the
+   * manifest fingerprint, and the lazy bootstrap never sets it.
+   */
+  forceUpdate?: boolean;
+  /**
    * Effective cache roots, computed once by `openContext` (the same
    * convergence `strategy` follows): the full m2 anchor list reaches the
    * Maven resolver, the primary m2 root and the gradle root reach the
@@ -114,14 +121,21 @@ export async function resolveDependencies(
   let viaCacheScan = false;
   for (const system of detectBuildSystems(projectRoot)) {
     if (system === "gradle") {
-      const resolution = await gradle(projectRoot, { strategy: opts.strategy });
+      const resolution = await gradle(projectRoot, {
+        strategy: opts.strategy,
+        ...(opts.forceUpdate ? { forceUpdate: true } : {}),
+      });
       if (resolution.ok && resolution.artifacts.length > 0) {
         artifacts = resolution.artifacts;
         break;
       }
       degraded.push({ from: "gradle", reason: resolution.reason ?? NO_ARTIFACTS });
     } else {
-      const resolution = await maven(projectRoot, { strategy: opts.strategy, roots: opts.roots });
+      const resolution = await maven(projectRoot, {
+        strategy: opts.strategy,
+        roots: opts.roots,
+        ...(opts.forceUpdate ? { forceUpdate: true } : {}),
+      });
       if (resolution.ok && resolution.artifacts.length > 0) {
         artifacts = resolution.artifacts;
         // a reactor that partially failed still answers, but the missing

@@ -626,13 +626,15 @@ command("search-symbols", "cmd.search-symbols", searchSymbolsHelp)
     });
   });
 
-command("resolve", "cmd.resolve", resolveHelp).action(async () => {
-  const inv = invocation();
-  const ctx = ctxFor(inv);
-  const result = await resolveNow(ctx);
-  emit(result, inv, () => renderResolve(result, inv.locale));
-  warn(inv.locale, ...result.degraded.map((entry) => `${entry.from}: ${entry.reason}`));
-});
+command("resolve", "cmd.resolve", resolveHelp)
+  .option("-U, --force-update", ui["opt.forceUpdate"])
+  .action(async (cmd: { forceUpdate?: boolean }) => {
+    const inv = invocation();
+    const ctx = ctxFor(inv);
+    const result = await resolveNow(ctx, { forceUpdate: cmd.forceUpdate === true });
+    emit(result, inv, () => renderResolve(result, inv.locale));
+    warn(inv.locale, ...result.degraded.map((entry) => `${entry.from}: ${entry.reason}`));
+  });
 
 command("status", "cmd.status", statusHelp).action(async () => {
   const inv = invocation();

@@ -50,6 +50,8 @@ export const ru: Catalog = {
   "opt.fullFile": "весь файл",
   "opt.lines": "диапазон строк, напр. 2:3",
   "opt.artifact": "координаты g:a:v или уникальный id артефакта",
+  "opt.forceUpdate":
+    "принудительно проверить обновления зависимостей (mvn -U / gradle --refresh-dependencies); сбрасывает закешированные неудачные поиски",
   "opt.primeFull": "полная cli-шпаргалка (по умолчанию без привязки MCP)",
   "opt.primeMcp": "короткая mcp-карточка",
   "opt.primeExport": "стандартное содержимое, даже если есть .jarpeek/PRIME.md",

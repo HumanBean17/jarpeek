@@ -53,6 +53,8 @@ export const en = {
   "opt.fullFile": "the whole file",
   "opt.lines": "line range, e.g. 2:3",
   "opt.artifact": "g:a:v coordinates or unique artifact id",
+  "opt.forceUpdate":
+    "force dependency update checks (mvn -U / gradle --refresh-dependencies); clears cached negative lookups",
   "opt.primeFull": "the full cli cheatsheet (default without MCP wiring)",
   "opt.primeMcp": "the short mcp card",
   "opt.primeExport": "the default content even when .jarpeek/PRIME.md exists",

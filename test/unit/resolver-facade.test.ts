@@ -142,6 +142,47 @@ describe("resolveDependencies", () => {
     expect(seen).toEqual({ gradle: undefined, maven: undefined });
   });
 
+  it("threads forceUpdate into both resolvers, undefined when unset (GH#21)", async () => {
+    const projectRoot = scratch();
+    writeFileSync(join(projectRoot, "settings.gradle"), "");
+    writeFileSync(join(projectRoot, "pom.xml"), "<project/>");
+    const seen: { gradle?: boolean; maven?: boolean } = {};
+
+    const forced = await resolveDependencies(projectRoot, {
+      forceUpdate: true,
+      includeJdk: false,
+      // both resolvers fail so each gets its turn and the cascade ends at
+      // the (stubbed) cache scan
+      gradle: async (_root, opts) => {
+        seen.gradle = opts?.forceUpdate;
+        return { ok: false, artifacts: [], reason: "gradle-failed:nope" };
+      },
+      maven: async (_root, opts) => {
+        seen.maven = opts?.forceUpdate;
+        return { ok: false, artifacts: [], reason: "mvn-failed:nope" };
+      },
+      cacheScan: async () => ({ artifacts: [], warnings: [] }),
+    });
+    expect(forced.viaCacheScan).toBe(true);
+    expect(seen).toEqual({ gradle: true, maven: true });
+
+    seen.gradle = undefined;
+    seen.maven = undefined;
+    // gradle fails so maven also runs: both halves of the assertion are live
+    await resolveDependencies(projectRoot, {
+      includeJdk: false,
+      gradle: async (_root, opts) => {
+        seen.gradle = opts?.forceUpdate;
+        return { ok: false, artifacts: [], reason: "gradle-failed:nope" };
+      },
+      maven: async (_root, opts) => {
+        seen.maven = opts?.forceUpdate;
+        return { ok: true, artifacts: [artifact("g:g:1")] };
+      },
+    });
+    expect(seen).toEqual({ gradle: undefined, maven: undefined });
+  });
+
   it("gradle-only project: gradle result wins, maven and cache scan never run", async () => {
     const dir = scratch();
     writeFileSync(join(dir, "settings.gradle"), "");

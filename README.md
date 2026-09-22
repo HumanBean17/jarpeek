@@ -81,7 +81,7 @@ nine tools:
 | `read_source` | `fqn`, `mode?` (`full`\|`lines`\|`outline`), `from?`, `to?` | Source text for one class — full by default; prefer outline |
 | `read_resource` | `artifact`, `glob` | Non-class jar entries (config, services, manifests) |
 | `search_symbols` | `query`, `artifact` (required), `limit?`, `kind?` | Declarations by member name in one artifact |
-| `resolve` | — | Forced re-resolve; one summary line (count, duration, warnings), plus the warnings when any |
+| `resolve` | `forceUpdate?` | Forced re-resolve; one summary line (count, duration, warnings), plus the warnings when any. `forceUpdate` (Maven `-U` / Gradle `--refresh-dependencies`) clears cached negative lookups |
 | `status` | — | Manifest freshness (present, resolvedAt, stale, incomplete, artifactCount) and JVM report |
 | `where` | `coordinates` | The artifact's recorded on-disk paths, each flagged exists or missing |
 
@@ -106,8 +106,14 @@ reports the failure. A Maven reactor where only some modules resolve keeps
 what resolved but the manifest is flagged `incomplete` (with the failed
 modules and the Maven error) — visible in `status`, and a `find_class`
 negative over it carries `incomplete: true`, so it never reads as a
-definitive "not in any dependency". The full cascade and degradation rules
-are in the [design notes](docs/design.md).
+definitive "not in any dependency". When the Maven error names a cached
+negative lookup ("was cached in the local repository") — the one failure a
+plain re-resolve cannot clear — the warning says so and names the fix:
+`jarpeek resolve -U` re-runs Maven with update checks forced (`-U`; Gradle
+resolutions get `--refresh-dependencies`) and writes a complete manifest in
+one command; the same option reaches MCP as `resolve`'s `forceUpdate`
+input. The full cascade and degradation rules are in the
+[design notes](docs/design.md).
 
 ### CLI
 
@@ -124,6 +130,7 @@ jarpeek read-source com.example.lib.ApiClient --lines 40:80
 jarpeek read-resource com.example:demo-lib:1.0.0 'META-INF/**'
 jarpeek search-symbols builder --artifact com.example:demo-lib:1.0.0 --kind method
 jarpeek resolve
+jarpeek resolve -U
 jarpeek status
 jarpeek where com.example:demo-lib:1.0.0
 ```
@@ -170,6 +177,7 @@ the one named artifact.
 | Knob | Meaning |
 | --- | --- |
 | `--build-tool <auto\|system\|wrapper>` | CLI global flag (all subcommands incl. `mcp`): which mvn/gradle runs resolves (`auto` = system first, wrapper fallback) |
+| `resolve -U` / `--force-update` | Per-invocation `resolve` flag: force dependency update checks (Maven `-U`, Gradle `--refresh-dependencies`); the healing path for a cached-negative-lookup partial. No env mirror — it is an action, not configuration, and it does not affect the manifest fingerprint |
 | `JARPEEK_BUILD_TOOL` | Same tri-state via environment; beats config, loses to the flag — the layer to use for harness-spawned MCP servers without server args |
 | `--lang <en\|ru>` | CLI global flag: interface language for human-mode output (help, tables' framing, warnings, errors). Flag beats the `language` config field; default English. `--json`, the MCP server, and `prime` output stay English — they are agent/machine contract |
 | `JARPEEK_M2_DIR` / `M2_REPO` | Where the Maven local repository lives; steers both the Maven resolver's anchor and the cache scan |

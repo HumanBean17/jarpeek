@@ -50,3 +50,42 @@ export function writeFailingGradlew(projectRoot: string, message: string): void 
   const bat = ["@echo off", `echo ${message} 1>&2`, "exit /b 1", ""].join("\r\n");
   writeFileSync(join(projectRoot, "gradlew.bat"), bat);
 }
+
+/**
+ * A succeeding wrapper that also records its argv to
+ * `<root>/gradlew-args.txt` (overwritten per run; the resolver spawns with
+ * cwd = projectRoot) — for flag-threading tests that must see the real
+ * command line a resolve produced (GH#21).
+ */
+export function writeRecordingGradlew(projectRoot: string, jar: string, sourcesJar: string): void {
+  const dump = JSON.stringify({
+    configurations: [
+      {
+        name: "compileClasspath",
+        dependencies: [{ coordinates: "com.example:demo-lib:1.0.0", kind: "external", path: jar }],
+      },
+    ],
+    sources: { "com.example:demo-lib:1.0.0": sourcesJar },
+  });
+  const sh = [
+    "#!/bin/sh",
+    `echo "$@" > gradlew-args.txt`,
+    `echo '###JARPEEK-BEGIN###'`,
+    `echo '${dump}'`,
+    `echo '###JARPEEK-END###'`,
+    "exit 0",
+    "",
+  ].join("\n");
+  writeFileSync(join(projectRoot, "gradlew"), sh, { mode: 0o755 });
+  chmodSync(join(projectRoot, "gradlew"), 0o755);
+  const bat = [
+    "@echo off",
+    "echo %* > gradlew-args.txt",
+    "echo ###JARPEEK-BEGIN###",
+    `echo ${dump}`,
+    "echo ###JARPEEK-END###",
+    "exit /b 0",
+    "",
+  ].join("\r\n");
+  writeFileSync(join(projectRoot, "gradlew.bat"), bat);
+}
