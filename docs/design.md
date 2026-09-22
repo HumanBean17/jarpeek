@@ -92,11 +92,16 @@ with the layer each came from.
   process serving a fresh manifest — surfaces it: `status` reports
   `manifest.incomplete` with the reason in `degraded`, and a miss computed
   over the truncated set carries `incomplete: true` so a hollow negative
-  never reads as definitive (GH#18). When the failure detail is Maven's
-  cached negative lookup ("was cached in the local repository"), the
-  warning says so and recommends `mvn -U` once followed by
-  `jarpeek resolve` — the one partial-failure cause a plain re-resolve
-  will not clear.
+  never reads as definitive (GH#18). Only truncating degradations mark
+  `incomplete`: the Maven partial entry, or every entry behind a
+  cache-scan resolution the explicit `resolve` command wrote (a heuristic
+  set is not the build's answer either). A failed cascade sibling — gradle
+  failing before a COMPLETE Maven win — stays a plain warning, because the
+  winning set is exhaustive and its negatives are genuine. When the
+  failure detail is Maven's cached negative lookup ("was cached in the
+  local repository"), the warning says so and recommends `mvn -U` once
+  followed by `jarpeek resolve` — the one partial-failure cause a plain
+  re-resolve will not clear.
 - Degradations are reported, never hidden: each is a `warning: ...` line
   on stderr (a `degraded[]` field in JSON), aggregated so an invocation
   never exceeds the three-line warning budget.

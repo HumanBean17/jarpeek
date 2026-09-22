@@ -25,10 +25,13 @@ export interface Manifest {
   /**
    * Present when the resolution that wrote this manifest was partial — the
    * artifact list is trustworthy for what it contains but NOT exhaustive, so
-   * a negative computed over it is not definitive. Carries the resolution's
-   * `degraded` entries (the failed-module reason and its cause); absent means
-   * the resolution reported no degradation. Additive v2 field: manifests
-   * written before it existed parse as complete.
+   * a negative computed over it is not definitive. Carries the truncating
+   * degraded entries (the Maven partial reason with failed modules and
+   * cause, or the failures behind a cache-scan resolution); degraded
+   * entries that do not truncate the winning set (a failed cascade
+   * sibling) stay warnings and never land here. Absent means the
+   * resolution's answer was complete. Additive v2 field: manifests written
+   * before it existed parse as complete.
    */
   incomplete?: DegradedEntry[];
 }
@@ -84,7 +87,10 @@ function validIncomplete(incomplete: Manifest["incomplete"]): boolean {
   if (incomplete === undefined) return true;
   return (
     Array.isArray(incomplete) &&
-    incomplete.every((entry) => typeof entry?.from === "string" && typeof entry?.reason === "string")
+    incomplete.every(
+      (entry) =>
+        (entry?.from === "gradle" || entry?.from === "maven") && typeof entry.reason === "string",
+    )
   );
 }
 

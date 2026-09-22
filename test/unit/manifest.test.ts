@@ -217,6 +217,32 @@ describe("readManifest / writeManifest", () => {
         JSON.stringify({ ...base, incomplete: "modules failed" }), // not a list
       );
       expect(await readManifest(root)).toBeNull();
+
+      writeFileSync(
+        join(root, ".jarpeek", "manifest.json"),
+        JSON.stringify({ ...base, incomplete: null }), // explicitly null, not absent
+      );
+      expect(await readManifest(root)).toBeNull();
+
+      writeFileSync(
+        join(root, ".jarpeek", "manifest.json"),
+        JSON.stringify({ ...base, incomplete: [{ from: "cli", reason: "mangled" }] }), // unknown origin
+      );
+      expect(await readManifest(root)).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("an empty incomplete list is valid and reads as complete", async () => {
+    // status/miss predicate is length > 0: an explicit [] must never flag
+    const root = tmpProjectRoot();
+    try {
+      const m: Manifest = { ...manifestFor("deadbeef", [artifact({})]), incomplete: [] };
+      await writeManifest(root, m);
+      const read = await readManifest(root);
+      expect(read).toEqual(m);
+      expect(read?.incomplete).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

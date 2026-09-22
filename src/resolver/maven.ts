@@ -37,7 +37,8 @@ import type { BuildToolStrategy } from "./strategy.js";
 import { runWithTimeout, SpawnError, TimeoutError, type RunResult } from "../util/exec.js";
 
 const DEFAULT_TIMEOUT_MS = 300_000;
-const STDERR_TAIL_CHARS = 500;
+/** Max characters of mvn output a failure reason keeps (tail for `failureDetail`, head for `failureDiagnosis`). */
+const DETAIL_MAX_CHARS = 500;
 /** Per-module classpath output, relative to each module's basedir (forward slashes: the mojo normalizes). */
 const CP_FILE_REL = "target/jarpeek-classpath.txt";
 
@@ -60,9 +61,10 @@ export interface MavenResolution {
    * Set when the run partially failed: some modules resolved (artifacts is
    * trustworthy) but at least one module's resolution failed, so its unique
    * dependencies are missing. Names the failed module directories followed
-   * by the mvn failure detail in parens (plus `-U` advice when the detail
-   * names a cached negative lookup) — the caller persists this reason with
-   * the manifest, so it must carry the cause, not just the module list.
+   * by the mvn failure detail in parens (plus `-U` advice when the run's
+   * output names a cached negative lookup) — the caller persists this
+   * reason with the manifest, so it must carry the cause, not just the
+   * module list.
    */
   partial?: string;
   /**
@@ -145,7 +147,7 @@ export function mvnOnPathDefault(): boolean {
 
 function stderrTail(stderr: string): string {
   const trimmed = stderr.trim();
-  return trimmed.length <= STDERR_TAIL_CHARS ? trimmed : trimmed.slice(-STDERR_TAIL_CHARS);
+  return trimmed.length <= DETAIL_MAX_CHARS ? trimmed : trimmed.slice(-DETAIL_MAX_CHARS);
 }
 
 /**
@@ -188,7 +190,7 @@ function failureDiagnosis(result: RunResult): string {
   const flat = (errors.length > 0 ? errors.join("; ") : failureDetail(result))
     .replace(/\s+/g, " ")
     .trim();
-  return flat.length <= STDERR_TAIL_CHARS ? flat : flat.slice(0, STDERR_TAIL_CHARS);
+  return flat.length <= DETAIL_MAX_CHARS ? flat : flat.slice(0, DETAIL_MAX_CHARS);
 }
 
 /** A windows drive-letter root: `C:\` or `C:/`. */

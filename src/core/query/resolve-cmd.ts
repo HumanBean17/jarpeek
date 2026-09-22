@@ -35,9 +35,10 @@ export async function resolveNow(ctx: QueryContext): Promise<ResolveNowResult> {
     resolvedAt: new Date().toISOString(),
     dependencySetHash: await computeDependencySetHash(ctx.projectRoot, ctx.buildTool, ctx.roots.m2[0].path),
     artifacts: resolution.artifacts,
-    // same contract as the bootstrap's write: a partial resolution persists
-    // its degraded entries so its manifest never reads as exhaustive
-    ...(resolution.degraded.length > 0 ? { incomplete: resolution.degraded } : {}),
+    // same contract as the bootstrap's write: only truncating degradations
+    // (the maven partial entry, or every entry of a cache-scan resolution)
+    // mark the manifest non-exhaustive
+    ...(resolution.incomplete.length > 0 ? { incomplete: resolution.incomplete } : {}),
   });
   return {
     artifactCount: resolution.artifacts.length,

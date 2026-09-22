@@ -152,7 +152,9 @@ describe("status on an incomplete manifest (GH#18)", () => {
     expect(result.degraded).toContain(`maven: ${reason}`);
     const table = renderStatus(result);
     expect(table).toContain("manifest.incomplete");
-    expect(table).toContain("true");
+    // pin the CELL, not just any "true" in the table (present/stale also
+    // render true in other rows)
+    expect(table).toMatch(/manifest\.incomplete {2,}true/);
   });
 });
 

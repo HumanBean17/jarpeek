@@ -929,6 +929,66 @@ describe("resolveMaven: multi-module", () => {
     expect(resolution.partial).toContain("run mvn -U once, then jarpeek resolve");
     // the reason is single-line: it rides the line-budgeted warning channel
     expect(resolution.partial).not.toContain("\n");
+    // the diagnosis keeps the CAUSE head and clips the boilerplate tail:
+    // late help lines are dropped and the total reason stays bounded
+    expect(resolution.partial).not.toContain("help boilerplate line 11");
+    expect(resolution.partial!.length).toBeLessThan(
+      "modules failed to resolve: mod (".length + 500 + 1 + 100,
+    );
+  });
+
+  it("the -U advice fires even when the cached-lookup marker sits past the clipped diagnosis", async () => {
+    const { projectRoot } = multiModule();
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    // cause lines WITHOUT the marker first (ordinary failure text), the
+    // cached-lookup marker only at the tail, beyond the 500-char clip —
+    // detection must read the full output, not the clipped reason
+    const markerPastClip = [
+      ...Array.from({ length: 12 }, (_, i) => `[ERROR] cause line ${i} describing why resolution failed here padding`),
+      "[ERROR] This failure was cached in the local repository and resolution is not reattempted",
+      "[ERROR]   mvn <args> -rf :mod",
+    ].join("\n");
+    const { exec } = stubExec(async (_cmd, args) => {
+      if (args.includes("dependency:sources")) return { stdout: "", stderr: "", code: 0 };
+      const file = join(projectRoot, "target", "jarpeek-classpath.txt");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, rootCp, "utf8");
+      return { stdout: markerPastClip, stderr: "", code: 1 };
+    });
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    // the advice proves detection ran on the full output…
+    expect(resolution.partial).toContain("run mvn -U once, then jarpeek resolve");
+    // …while the clipped diagnosis itself no longer contains the marker
+    expect(resolution.partial).not.toContain("was cached in the local repository");
+  });
+
+  it("the partial diagnosis prefers stdout [ERROR] lines over stderr ones", async () => {
+    const { projectRoot } = multiModule();
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const { exec } = stubExec(async (_cmd, args) => {
+      if (args.includes("dependency:sources")) return { stdout: "", stderr: "", code: 0 };
+      const file = join(projectRoot, "target", "jarpeek-classpath.txt");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, rootCp, "utf8");
+      return {
+        stdout: "[ERROR] Failed to execute goal on project mod: could not resolve dependencies\n",
+        stderr: "[ERROR] wrapper script launcher failure\n",
+        code: 1,
+      };
+    });
+
+    const resolution = await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(resolution.ok).toBe(true);
+    // batch-mode mvn writes the build log to stdout: the diagnosis comes
+    // from there, and the launcher-level stderr line never wins
+    expect(resolution.partial).toContain("Failed to execute goal on project mod");
+    expect(resolution.partial).not.toContain("wrapper script launcher failure");
   });
 
   it("a partial resolution from an ordinary failure carries the diagnosis without -U advice", async () => {

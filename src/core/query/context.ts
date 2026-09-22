@@ -184,11 +184,13 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
         resolvedAt: new Date().toISOString(),
         dependencySetHash: await computeDependencySetHash(projectRoot, buildTool, roots.m2[0].path),
         artifacts: resolution.artifacts,
-        // a partial resolution's manifest must never read as exhaustive:
-        // its degraded entries persist with it, so a LATER invocation (a
-        // fresh process serving this fresh manifest) can still tell a
-        // genuine negative from one computed over an unknown-truncated set
-        ...(resolution.degraded.length > 0 ? { incomplete: resolution.degraded } : {}),
+        // only truncating degradations mark the manifest non-exhaustive
+        // (the maven partial entry) — sibling-cascade failures stay
+        // warnings: the winning set is complete. Without this field a
+        // LATER invocation (a fresh process serving this fresh manifest)
+        // cannot tell a genuine negative from one computed over an
+        // unknown-truncated set (GH#18)
+        ...(resolution.incomplete.length > 0 ? { incomplete: resolution.incomplete } : {}),
       });
       failedAt = undefined;
       return { bootstrapped: true, stale: wasStale };

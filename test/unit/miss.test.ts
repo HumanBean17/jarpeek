@@ -134,6 +134,9 @@ describe("handleMiss negative", () => {
     // failed resolve answers as a miss, reason included) — the same channel
     // the hits path surfaces its degraded[] through
     expect(result.degraded).toContain("resolution failed: degraded to cache-scan; run jarpeek resolve");
+    // no manifest was served, so there is no served set to call truncated:
+    // the miss reports its emptiness through searchedArtifacts, not a flag
+    expect(result.incomplete).toBe(false);
   });
 
   it("a negative over a healthy manifest carries an empty degraded set", async () => {
