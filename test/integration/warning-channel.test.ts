@@ -112,6 +112,34 @@ describe("warning channel lifecycle", () => {
     expect(calls).toBe(1); // served fresh: no resolver ran
     expect(await second.bootstrapWarnings()).toEqual([]);
   });
+
+  it("the lazy bootstrap never forces dependency updates (GH#21)", async () => {
+    // forceUpdate is an explicit resolve's action, not the bootstrap's: an
+    // automatic -U on every lazy resolve would be exactly the ungated
+    // "automatic variant" GH#21's scope decisions rule out
+    const { projectRoot } = freshProject();
+    const seenForceUpdate: Array<boolean | undefined> = [];
+    const ctx = openContext(projectRoot, {
+      resolvers: {
+        gradle: async (_root: string, opts?: { forceUpdate?: boolean }) => {
+          seenForceUpdate.push(opts?.forceUpdate);
+          return {
+            ok: true,
+            artifacts: [
+              {
+                coordinates: "com.example:lazy-lib:1.0",
+                kind: "external",
+                sourcesJar: DEMO_SOURCES_JAR,
+              },
+            ],
+          };
+        },
+        includeJdk: false,
+      },
+    });
+    await ctx.ensureReady();
+    expect(seenForceUpdate).toEqual([undefined]);
+  });
 });
 
 describe("partial-resolution persistence (GH#18)", () => {

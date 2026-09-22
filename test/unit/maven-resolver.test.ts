@@ -996,6 +996,11 @@ describe("resolveMaven: multi-module", () => {
     // names the likelier truth instead
     expect(resolution.partial).toContain("-U did not clear");
     expect(resolution.partial).not.toContain("re-run: jarpeek resolve -U");
+    // same channel invariants as the unforced variant: single-line, bounded
+    expect(resolution.partial).not.toContain("\n");
+    expect(resolution.partial!.length).toBeLessThan(
+      "modules failed to resolve: mod (".length + 500 + 1 + 100,
+    );
   });
 
   it("the partial diagnosis prefers stdout [ERROR] lines over stderr ones", async () => {

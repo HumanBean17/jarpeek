@@ -68,10 +68,11 @@ export interface MavenResolution {
    * Set when the run partially failed: some modules resolved (artifacts is
    * trustworthy) but at least one module's resolution failed, so its unique
    * dependencies are missing. Names the failed module directories followed
-   * by the mvn failure detail in parens (plus `-U` advice when the run's
-   * output names a cached negative lookup) — the caller persists this
-   * reason with the manifest, so it must carry the cause, not just the
-   * module list.
+   * by the mvn failure detail in parens, plus the `-U` advice when the
+   * run's output names a cached negative lookup — the re-run form, or the
+   * exhausted-remedies form when the run already forced updates — the
+   * caller persists this reason with the manifest, so it must carry the
+   * cause, not just the module list.
    */
   partial?: string;
   /**

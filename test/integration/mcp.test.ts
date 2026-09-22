@@ -252,6 +252,10 @@ describe("tool listing", () => {
     expect(props("where")).toEqual(["coordinates"]);
     const readSource = list.tools.find((t) => t.name === "read_source")!.inputSchema as any;
     expect(readSource.properties.mode.enum).toEqual(["outline", "full", "lines"]);
+    // the name AND the shape: a boolean drifting to string would silently
+    // change what hosts accept for the healing path (GH#21)
+    const resolveTool = list.tools.find((t) => t.name === "resolve")!.inputSchema as any;
+    expect(resolveTool.properties.forceUpdate.type).toBe("boolean");
   });
 });
 

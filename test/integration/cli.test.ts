@@ -498,21 +498,23 @@ describe("resolve", () => {
     // CLI parse → resolveNow → facade → resolver → spawn chain
     writeRecordingGradlew(resolveSuite.projectRoot, DEMO_JAR, DEMO_SOURCES_JAR);
     const argsFile = join(resolveSuite.projectRoot, "gradlew-args.txt");
+    try {
+      const forced = cli(resolveSuite, ["resolve", "-U"]);
+      expect(forced.code, `resolve -U should exit 0 (stderr: ${forced.stderr})`).toBe(0);
+      expect(readFileSync(argsFile, "utf8")).toContain("--refresh-dependencies");
 
-    const forced = cli(resolveSuite, ["resolve", "-U"]);
-    expect(forced.code, `resolve -U should exit 0 (stderr: ${forced.stderr})`).toBe(0);
-    expect(readFileSync(argsFile, "utf8")).toContain("--refresh-dependencies");
-
-    // and the long form parses identically; the plain resolve stays flagless
-    const long = cli(resolveSuite, ["resolve", "--force-update"]);
-    expect(long.code).toBe(0);
-    expect(readFileSync(argsFile, "utf8")).toContain("--refresh-dependencies");
-    const plain = cli(resolveSuite, ["resolve"]);
-    expect(plain.code).toBe(0);
-    expect(readFileSync(argsFile, "utf8")).not.toContain("--refresh-dependencies");
-
-    // restore the suite's plain wrapper for the tests that follow
-    writeFakeGradlew(resolveSuite.projectRoot, DEMO_JAR, DEMO_SOURCES_JAR);
+      // and the long form parses identically; the plain resolve stays flagless
+      const long = cli(resolveSuite, ["resolve", "--force-update"]);
+      expect(long.code).toBe(0);
+      expect(readFileSync(argsFile, "utf8")).toContain("--refresh-dependencies");
+      const plain = cli(resolveSuite, ["resolve"]);
+      expect(plain.code).toBe(0);
+      expect(readFileSync(argsFile, "utf8")).not.toContain("--refresh-dependencies");
+    } finally {
+      // restore the suite's plain wrapper even on assertion failure, so a
+      // later test added to this describe is never served the recording one
+      writeFakeGradlew(resolveSuite.projectRoot, DEMO_JAR, DEMO_SOURCES_JAR);
+    }
   });
 });
 

@@ -393,7 +393,8 @@ describe("resolveGradle: forceUpdate (GH#21)", () => {
     await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].args).not.toContain("--refresh-dependencies");
+    // exact shape, mirroring the forced test's assertion: nothing shifted
+    expect(calls[0].args).toEqual(INIT_ARGS(projectRoot));
   });
 });
 
