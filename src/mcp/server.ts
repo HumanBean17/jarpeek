@@ -199,8 +199,15 @@ export function createMcpServer(ctx: QueryContext): McpServer {
 
   server.registerTool(
     "resolve",
-    { description: "Re-resolve dependencies and rewrite the manifest.", inputSchema: {} },
-    () => run(ctx, async () => ok(await resolveNow(ctx))),
+    {
+      description:
+        "Re-resolve dependencies and rewrite the manifest. forceUpdate (Maven -U / Gradle --refresh-dependencies) clears cached negative lookups — the healing path when status reports manifest.incomplete.",
+      inputSchema: { forceUpdate: z.boolean().optional() },
+    },
+    ({ forceUpdate }) =>
+      run(ctx, async () =>
+        ok(await resolveNow(ctx, ...(forceUpdate !== undefined ? [{ forceUpdate }] : []))),
+      ),
   );
 
   server.registerTool("status", { description: "Manifest and JVM report.", inputSchema: {} }, () =>

@@ -896,7 +896,7 @@ describe("resolveMaven: multi-module", () => {
     expect(existsSync(join(mod, "target", "jarpeek-classpath.txt"))).toBe(false);
   });
 
-  it("a partial resolution caused by a cached negative lookup recommends -U (GH#18)", async () => {
+  it("a partial resolution caused by a cached negative lookup advises the -U re-run (GH#18, GH#21)", async () => {
     const { projectRoot } = multiModule();
     const m2 = join(projectRoot, "m2");
     const { content: rootCp } = materialize(m2, CP_UNIX, []);
@@ -926,7 +926,9 @@ describe("resolveMaven: multi-module", () => {
     expect(resolution.ok).toBe(true);
     expect(resolution.partial).toContain("modules failed to resolve: mod");
     expect(resolution.partial).toContain("was cached in the local repository");
-    expect(resolution.partial).toContain("run mvn -U once, then jarpeek resolve");
+    // the healing path is jarpeek's own command now — one invocation, no
+    // raw mvn by the user (GH#21)
+    expect(resolution.partial).toContain("re-run: jarpeek resolve -U");
     // the reason is single-line: it rides the line-budgeted warning channel
     expect(resolution.partial).not.toContain("\n");
     // the diagnosis keeps the CAUSE head and clips the boilerplate tail:
@@ -961,9 +963,44 @@ describe("resolveMaven: multi-module", () => {
 
     expect(resolution.ok).toBe(true);
     // the advice proves detection ran on the full output…
-    expect(resolution.partial).toContain("run mvn -U once, then jarpeek resolve");
+    expect(resolution.partial).toContain("re-run: jarpeek resolve -U");
     // …while the clipped diagnosis itself no longer contains the marker
     expect(resolution.partial).not.toContain("was cached in the local repository");
+  });
+
+  it("a cached-lookup marker that survives a forced-update run gets the exhausted-remedies advice (GH#21)", async () => {
+    const { projectRoot } = multiModule();
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const cachedFailure = [
+      "[ERROR] The following artifacts could not be resolved: com.example:sib:1.0-SNAPSHOT:",
+      "[ERROR]   This failure was cached in the local repository and resolution is not reattempted",
+    ].join("\n");
+    const { exec } = stubExec(async (_cmd, args) => {
+      if (args.includes("dependency:sources")) return { stdout: "", stderr: "", code: 0 };
+      const file = join(projectRoot, "target", "jarpeek-classpath.txt");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, rootCp, "utf8");
+      return { stdout: cachedFailure, stderr: "", code: 1 };
+    });
+
+    const resolution = await resolveMaven(projectRoot, {
+      exec,
+      mvnOnPath: PROBE_FOUND,
+      m2Dir: m2,
+      forceUpdate: true,
+    });
+
+    expect(resolution.ok).toBe(true);
+    // -U already ran: telling the user to re-run it is noise — the advice
+    // names the likelier truth instead
+    expect(resolution.partial).toContain("-U did not clear");
+    expect(resolution.partial).not.toContain("re-run: jarpeek resolve -U");
+    // same channel invariants as the unforced variant: single-line, bounded
+    expect(resolution.partial).not.toContain("\n");
+    expect(resolution.partial!.length).toBeLessThan(
+      "modules failed to resolve: mod (".length + 500 + 1 + 100,
+    );
   });
 
   it("the partial diagnosis prefers stdout [ERROR] lines over stderr ones", async () => {
@@ -1001,8 +1038,55 @@ describe("resolveMaven: multi-module", () => {
 
     expect(resolution.ok).toBe(true);
     expect(resolution.partial).toContain("reactor partially failed");
-    expect(resolution.partial).not.toContain("mvn -U");
+    expect(resolution.partial).not.toContain("cached a failed lookup");
     expect(resolution.partial).not.toContain("\n");
+  });
+
+  it("forceUpdate threads -U into the build-classpath AND sources invocations (GH#21)", async () => {
+    const { projectRoot } = multiModule();
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const { exec, calls } = reactorCpExec([{ dir: projectRoot, content: rootCp }]);
+
+    const resolution = await resolveMaven(projectRoot, {
+      exec,
+      mvnOnPath: PROBE_FOUND,
+      m2Dir: m2,
+      forceUpdate: true,
+    });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls).toHaveLength(2);
+    expect(effectiveMvn(calls[0]).args).toEqual([
+      "-B",
+      "-q",
+      "-fae",
+      "-U",
+      "dependency:build-classpath",
+      "-Dmdep.outputFile=target/jarpeek-classpath.txt",
+    ]);
+    // sources jars are as cacheable as binaries: the refresh applies there too
+    expect(effectiveMvn(calls[1]).args).toEqual([
+      "-B",
+      "-q",
+      "-U",
+      "dependency:sources",
+      "-DincludeScope=test",
+    ]);
+  });
+
+  it("without forceUpdate neither invocation carries -U (GH#21)", async () => {
+    const { projectRoot } = multiModule();
+    const m2 = join(projectRoot, "m2");
+    const { content: rootCp } = materialize(m2, CP_UNIX, []);
+    const { exec, calls } = reactorCpExec([{ dir: projectRoot, content: rootCp }]);
+
+    await resolveMaven(projectRoot, { exec, mvnOnPath: PROBE_FOUND, m2Dir: m2 });
+
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(effectiveMvn(call).args).not.toContain("-U");
+    }
   });
 
   it("never ingests a stale output file left by a crashed previous run", async () => {

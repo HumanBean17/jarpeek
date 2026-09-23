@@ -360,6 +360,44 @@ describe("resolveGradle: wrapper selection", () => {
   });
 });
 
+describe("resolveGradle: forceUpdate (GH#21)", () => {
+  it("threads --refresh-dependencies into the dump invocation when forceUpdate is set", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    const { exec, calls } = outputExec(SAMPLE_OUTPUT);
+
+    const resolution = await resolveGradle(projectRoot, {
+      exec,
+      gradleOnPath: PROBE_FOUND,
+      forceUpdate: true,
+    });
+
+    expect(resolution.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual([
+      "-I",
+      join(projectRoot, ".jarpeek", "gradle-init.gradle"),
+      "--console=plain",
+      "-q",
+      "--no-configuration-cache",
+      "--refresh-dependencies",
+      "jarpeekDump",
+    ]);
+  });
+
+  it("omits --refresh-dependencies by default", async () => {
+    const projectRoot = scratch();
+    stubPlatform("darwin");
+    const { exec, calls } = outputExec(SAMPLE_OUTPUT);
+
+    await resolveGradle(projectRoot, { exec, gradleOnPath: PROBE_FOUND });
+
+    expect(calls).toHaveLength(1);
+    // exact shape, mirroring the forced test's assertion: nothing shifted
+    expect(calls[0].args).toEqual(INIT_ARGS(projectRoot));
+  });
+});
+
 describe("resolveGradle: bare-gradle PATH probe", () => {
   it("reports no-wrapper-no-gradle on win32 when no wrapper and no gradle is on PATH", async () => {
     const projectRoot = scratch();

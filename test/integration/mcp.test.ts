@@ -247,11 +247,15 @@ describe("tool listing", () => {
     expect(props("read_source")).toEqual(["fqn", "from", "mode", "to"]);
     expect(props("read_resource")).toEqual(["artifact", "glob"]);
     expect(props("search_symbols")).toEqual(["artifact", "kind", "limit", "query"]);
-    expect(props("resolve")).toEqual([]);
+    expect(props("resolve")).toEqual(["forceUpdate"]);
     expect(props("status")).toEqual([]);
     expect(props("where")).toEqual(["coordinates"]);
     const readSource = list.tools.find((t) => t.name === "read_source")!.inputSchema as any;
     expect(readSource.properties.mode.enum).toEqual(["outline", "full", "lines"]);
+    // the name AND the shape: a boolean drifting to string would silently
+    // change what hosts accept for the healing path (GH#21)
+    const resolveTool = list.tools.find((t) => t.name === "resolve")!.inputSchema as any;
+    expect(resolveTool.properties.forceUpdate.type).toBe("boolean");
   });
 });
 
@@ -466,5 +470,40 @@ describe("lazy bootstrap", () => {
     const parsed = JSON.parse((result.content![0] as { text: string }).text);
     expect(parsed.hits.map((h: any) => h.fqn)).toContain("com.example.Demo");
     expect(existsSync(join(lazy.projectRoot, MANIFEST_REL))).toBe(true);
+  });
+});
+
+describe("resolve forceUpdate input (GH#21)", () => {
+  const extraRoots: string[] = [];
+
+  afterAll(() => {
+    for (const root of extraRoots) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("threads forceUpdate into the resolver, undefined when omitted", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-mcp-forceupdate-"));
+    extraRoots.push(projectRoot);
+    writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+    const seenForceUpdate: Array<boolean | undefined> = [];
+    const ctx = openContext(projectRoot, {
+      resolvers: {
+        gradle: async (_root, opts) => {
+          seenForceUpdate.push(opts?.forceUpdate);
+          return { ok: true, artifacts: demoArtifacts() };
+        },
+        includeJdk: false,
+      },
+      onNotice: () => {},
+    });
+    const client = await connect(ctx);
+
+    // an agent that sees manifest.incomplete=true heals in one MCP call
+    const healed = payload(
+      await client.callTool({ name: "resolve", arguments: { forceUpdate: true } }),
+    );
+    expect(healed.artifactCount).toBe(demoArtifacts().length);
+    const plain = payload(await client.callTool({ name: "resolve", arguments: {} }));
+    expect(plain.artifactCount).toBe(demoArtifacts().length);
+    expect(seenForceUpdate).toEqual([true, undefined]);
   });
 });

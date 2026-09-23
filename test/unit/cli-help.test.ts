@@ -116,7 +116,7 @@ describe("help constants (en)", () => {
         searchSymbolsHelp(en),
         ["jarpeek search-symbols builder --artifact com.example:demo-lib:1.0.0 --kind method"],
       ],
-      [resolveHelp(en), ["jarpeek resolve"]],
+      [resolveHelp(en), ["jarpeek resolve", "jarpeek resolve -U"]],
       [statusHelp(en), ["jarpeek status"]],
       [whereHelp(en), ["jarpeek where com.example:demo-lib:1.0.0"]],
     ];
@@ -165,7 +165,7 @@ describe("help constants (ru)", () => {
       [readSourceHelp(ru), "jarpeek read-source com.example.lib.ApiClient --full"],
       [readResourceHelp(ru), "jarpeek read-resource com.example:demo-lib:1.0.0 'META-INF/**'"],
       [searchSymbolsHelp(ru), "jarpeek search-symbols builder --artifact"],
-      [resolveHelp(ru), "jarpeek resolve"],
+      [resolveHelp(ru), "jarpeek resolve -U"],
       [statusHelp(ru), "jarpeek status"],
       [whereHelp(ru), "jarpeek where com.example:demo-lib:1.0.0"],
     ];

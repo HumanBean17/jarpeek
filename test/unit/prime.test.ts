@@ -105,6 +105,9 @@ describe("defaultPrimeContent(cli)", () => {
     expect(text).toContain("did you mean");
     // where's contract is the paths line
     expect(text).toContain("where <coordinates>");
+    // resolve's healing flag is part of the lazy contract (GH#21)
+    expect(text).toContain("resolve [-U]");
+    expect(text).toContain("--refresh-dependencies");
   });
 
   it("documents the skeleton outline flags and the full-default read-source", () => {

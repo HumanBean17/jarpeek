@@ -49,6 +49,12 @@ export interface ResolveGradleOptions {
   gradleOnPath?: () => boolean;
   /** Which gradle runs resolves; undefined means `auto` (system first, wrapper fallback). */
   strategy?: BuildToolStrategy;
+  /**
+   * Force dependency re-checks (`--refresh-dependencies`): the Gradle analog
+   * of the Maven resolver's `forceUpdate`, threaded by the facade from the
+   * `resolve` command's `-U` flag (GH#21).
+   */
+  forceUpdate?: boolean;
 }
 
 /** One dependency entry as printed by the init script. */
@@ -264,6 +270,7 @@ export async function resolveGradle(
       "--console=plain",
       "-q",
       "--no-configuration-cache",
+      ...(opts.forceUpdate ? ["--refresh-dependencies"] : []),
       "jarpeekDump",
     ];
 

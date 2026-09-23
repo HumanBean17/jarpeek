@@ -99,9 +99,17 @@ with the layer each came from.
   failing before a COMPLETE Maven win — stays a plain warning, because the
   winning set is exhaustive and its negatives are genuine. When the
   failure detail is Maven's cached negative lookup ("was cached in the
-  local repository"), the warning says so and recommends `mvn -U` once
-  followed by `jarpeek resolve` — the one partial-failure cause a plain
-  re-resolve will not clear.
+  local repository"), the warning says so and recommends
+  `jarpeek resolve -U` — the one partial-failure cause a plain re-resolve
+  will not clear, and one jarpeek command now clears it: `-U` /
+  `--force-update` re-runs Maven with update checks forced (`-U` on both
+  the build-classpath and the sources run) and Gradle with
+  `--refresh-dependencies` (GH#21). The flag is per-invocation — no env
+  mirror, no manifest-fingerprint line, never set by the lazy bootstrap —
+  and a successful forced resolve heals the manifest through the normal
+  rewrite (the `incomplete` field simply goes absent). A cached-lookup
+  marker that survives a run that already had `-U` flips the advice to
+  the likelier truth instead: the artifact may be genuinely unavailable.
 - Degradations are reported, never hidden: each is a `warning: ...` line
   on stderr (a `degraded[]` field in JSON), aggregated so an invocation
   never exceeds the three-line warning budget.

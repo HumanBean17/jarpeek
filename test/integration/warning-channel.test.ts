@@ -112,6 +112,34 @@ describe("warning channel lifecycle", () => {
     expect(calls).toBe(1); // served fresh: no resolver ran
     expect(await second.bootstrapWarnings()).toEqual([]);
   });
+
+  it("the lazy bootstrap never forces dependency updates (GH#21)", async () => {
+    // forceUpdate is an explicit resolve's action, not the bootstrap's: an
+    // automatic -U on every lazy resolve would be exactly the ungated
+    // "automatic variant" GH#21's scope decisions rule out
+    const { projectRoot } = freshProject();
+    const seenForceUpdate: Array<boolean | undefined> = [];
+    const ctx = openContext(projectRoot, {
+      resolvers: {
+        gradle: async (_root: string, opts?: { forceUpdate?: boolean }) => {
+          seenForceUpdate.push(opts?.forceUpdate);
+          return {
+            ok: true,
+            artifacts: [
+              {
+                coordinates: "com.example:lazy-lib:1.0",
+                kind: "external",
+                sourcesJar: DEMO_SOURCES_JAR,
+              },
+            ],
+          };
+        },
+        includeJdk: false,
+      },
+    });
+    await ctx.ensureReady();
+    expect(seenForceUpdate).toEqual([undefined]);
+  });
 });
 
 describe("partial-resolution persistence (GH#18)", () => {
@@ -231,6 +259,49 @@ describe("partial-resolution persistence (GH#18)", () => {
     partial = false;
     await resolveNow(openContext(projectRoot, { resolvers }));
     expect((await readManifest(projectRoot))?.incomplete).toBeUndefined();
+  });
+
+  it("a forced-update resolveNow heals the cached-lookup partial end to end (GH#21)", async () => {
+    const { projectRoot } = pomProject();
+    const artifacts: DependencyArtifact[] = [
+      {
+        coordinates: "com.example:partial-lib:1.0",
+        kind: "external",
+        sourcesJar: DEMO_SOURCES_JAR,
+      },
+    ];
+    let partial = true;
+    const seenForceUpdate: Array<boolean | undefined> = [];
+    const resolvers = {
+      maven: async (_root: string, opts?: { forceUpdate?: boolean }) => {
+        seenForceUpdate.push(opts?.forceUpdate);
+        // the partial reason carries the real resolver's contract advice
+        return partial
+          ? {
+              ok: true,
+              artifacts,
+              partial:
+                "modules failed to resolve: mod ([ERROR] sib not found) — Maven cached a failed lookup; re-run: jarpeek resolve -U",
+            }
+          : { ok: true, artifacts };
+      },
+      includeJdk: false,
+    };
+
+    // the plain resolve hits the cache, stays partial, persists the flag —
+    // and the advice names jarpeek's own healing command
+    const first = await resolveNow(openContext(projectRoot, { resolvers }));
+    expect(first.degraded[0]?.reason).toContain("re-run: jarpeek resolve -U");
+    expect((await readManifest(projectRoot))?.incomplete).toBeDefined();
+
+    // ONE command heals it: the -U re-resolve clears the cache (stubbed
+    // clean here) and the manifest's incomplete flag goes with it
+    partial = false;
+    const healed = await resolveNow(openContext(projectRoot, { resolvers }), { forceUpdate: true });
+    expect(healed.degraded).toEqual([]);
+    expect((await readManifest(projectRoot))?.incomplete).toBeUndefined();
+    // the flag threaded exactly: plain resolve saw no forceUpdate, the heal did
+    expect(seenForceUpdate).toEqual([undefined, true]);
   });
 
   it("a failed cascade sibling does NOT flag the manifest — the winning set is complete (GH#18 review)", async () => {

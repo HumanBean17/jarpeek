@@ -92,7 +92,7 @@ const resolveSuite = {} as Suite;
 const suites: Suite[] = [];
 
 // the fake gradlew wrapper pair (sh + bat) lives in test/helpers
-import { writeFakeGradlew } from "../helpers/fake-gradlew.js";
+import { writeFakeGradlew, writeRecordingGradlew } from "../helpers/fake-gradlew.js";
 
 beforeAll(async () => {
   Object.assign(c, openSuite(() => demoArtifacts()));
@@ -491,6 +491,30 @@ describe("resolve", () => {
     expect(readFileSync(join(resolveSuite.projectRoot, ".jarpeek", "manifest.json"), "utf8")).toContain(
       '"version":2',
     );
+  });
+
+  it("-U / --force-update threads --refresh-dependencies into the real wrapper (GH#21)", () => {
+    // this suite's wrapper records its argv: the flag must survive the full
+    // CLI parse → resolveNow → facade → resolver → spawn chain
+    writeRecordingGradlew(resolveSuite.projectRoot, DEMO_JAR, DEMO_SOURCES_JAR);
+    const argsFile = join(resolveSuite.projectRoot, "gradlew-args.txt");
+    try {
+      const forced = cli(resolveSuite, ["resolve", "-U"]);
+      expect(forced.code, `resolve -U should exit 0 (stderr: ${forced.stderr})`).toBe(0);
+      expect(readFileSync(argsFile, "utf8")).toContain("--refresh-dependencies");
+
+      // and the long form parses identically; the plain resolve stays flagless
+      const long = cli(resolveSuite, ["resolve", "--force-update"]);
+      expect(long.code).toBe(0);
+      expect(readFileSync(argsFile, "utf8")).toContain("--refresh-dependencies");
+      const plain = cli(resolveSuite, ["resolve"]);
+      expect(plain.code).toBe(0);
+      expect(readFileSync(argsFile, "utf8")).not.toContain("--refresh-dependencies");
+    } finally {
+      // restore the suite's plain wrapper even on assertion failure, so a
+      // later test added to this describe is never served the recording one
+      writeFakeGradlew(resolveSuite.projectRoot, DEMO_JAR, DEMO_SOURCES_JAR);
+    }
   });
 });
 
