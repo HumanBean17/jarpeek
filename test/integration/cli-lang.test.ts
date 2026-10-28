@@ -257,7 +257,7 @@ describe("init (ru)", () => {
   roots.push(projectRoot);
 
   it("the report labels localize", () => {
-    const run = cli(projectRoot, ["--lang", "ru", "init", "--yes"]);
+    const run = cli(projectRoot, ["--lang", "ru", "init", "--yes", "--scope", "project"]);
     expect(run.code).toBe(0);
     expect(run.stdout).toContain("системы сборки:");
     expect(run.stdout).toContain("(нет)");

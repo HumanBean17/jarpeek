@@ -23,6 +23,13 @@ const CLI = join(PKG_ROOT, "src", "cli", "index.ts");
 
 const roots: string[] = [];
 
+/** A tmp Maven project (prime's hook is silent outside JVM builds). */
+function jvmProject(): string {
+  const dir = tmpProject();
+  writeFileSync(join(dir, "pom.xml"), "<project/>");
+  return dir;
+}
+
 /** A tmp project root; with `primeMd`, a `.jarpeek/PRIME.md` override in it. */
 function tmpProject(primeMd?: string): string {
   const dir = mkdtempSync(join(tmpdir(), "jarpeek-prime-"));
@@ -223,7 +230,7 @@ describe("prime() selection", () => {
 
 describe("hook-json envelope", () => {
   it("wraps the selected text as a SessionStart additionalContext", () => {
-    const result = prime(tmpProject(), { full: true, hookJson: true });
+    const result = prime(jvmProject(), { full: true, hookJson: true });
     const parsed = JSON.parse(result.text) as {
       hookSpecificOutput: { hookEventName: string; additionalContext: string };
     };
@@ -253,9 +260,50 @@ describe("CLI wiring", () => {
   });
 
   it("--hook-json prints one parseable SessionStart envelope", async () => {
-    const stdout = await runCli(tmpProject(), ["prime", "--hook-json"]);
+    const stdout = await runCli(jvmProject(), ["prime", "--hook-json"]);
     const parsed = JSON.parse(stdout) as { hookSpecificOutput: { additionalContext: string } };
     expect(parsed.hookSpecificOutput.hookEventName).toBe("SessionStart");
     expect(parsed.hookSpecificOutput.additionalContext).toContain("find-class");
+  });
+});
+
+describe("machine-wide behavior", () => {
+  it("the session hook says nothing outside a JVM build (no override)", async () => {
+    expect(prime(tmpProject(), { hookJson: true })).toEqual({ text: "", source: "default" });
+    expect(await runCli(tmpProject(), ["prime", "--hook-json"])).toBe("");
+    // an explicit `prime` still answers anywhere
+    expect(prime(tmpProject()).text).toBe(defaultPrimeContent("cli"));
+  });
+
+  it("a multi-build workspace ends the text with its builds — the project values", () => {
+    const root = tmpProject();
+    for (const [dir, file] of [["svc/a", "pom.xml"], ["svc/b", "build.gradle"]] as const) {
+      mkdirSync(join(root, dir), { recursive: true });
+      writeFileSync(join(root, dir, file), "");
+    }
+    const text = prime(root, { mcp: true }).text;
+    expect(text.startsWith(defaultPrimeContent("mcp"))).toBe(true);
+    expect(text).toContain("Builds in this workspace (`project` values): svc/a (maven), svc/b (gradle).");
+    // one build: nothing to choose between, nothing appended
+    expect(prime(jvmProject(), { mcp: true }).text).toBe(defaultPrimeContent("mcp"));
+  });
+
+  it("primeMode falls back to the machine-wide config init writes", () => {
+    const home = mkdtempSync(join(tmpdir(), "jarpeek-prime-home-"));
+    roots.push(home);
+    mkdirSync(join(home, ".config", "jarpeek"), { recursive: true });
+    writeFileSync(join(home, ".config", "jarpeek", "config.json"), JSON.stringify({ primeMode: "mcp" }));
+    vi.stubEnv("JARPEEK_HOME", home);
+    vi.stubEnv("JARPEEK_PRIME_MODE", "");
+    try {
+      expect(prime(jvmProject()).text).toBe(defaultPrimeContent("mcp"));
+      // the project's own config still wins
+      const project = jvmProject();
+      mkdirSync(join(project, ".jarpeek"));
+      writeFileSync(join(project, ".jarpeek", "config.json"), JSON.stringify({ primeMode: "cli" }));
+      expect(prime(project).text).toBe(defaultPrimeContent("cli"));
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

@@ -57,11 +57,26 @@ npm install -g jarpeek
 jarpeek init
 ```
 
-`init` detects the build system, wires the MCP server or CLI hints into
-your AI harness (Claude Code, Codex, Gemini CLI, Qwen Code, GigaCode),
-and stops there — no first index, no resolve. The first query
-auto-resolves (or run `jarpeek resolve` yourself). `--yes` takes the
-non-interactive defaults (Claude Code + MCP).
+Run `init` **once per machine**, not per project. It wires the MCP server
+or CLI hints into your AI harnesses (Claude Code, Codex, Gemini CLI, Qwen
+Code, GigaCode) at user level, and stops there — no first index, no
+resolve. From then on every repository, git worktree, monorepo and folder
+of repos works with no further setup: jarpeek finds the builds of whatever
+directory the agent runs in (see [Workspaces](#workspaces)), and the first
+query auto-resolves. `--yes` takes the non-interactive defaults (Claude
+Code + MCP).
+
+| Harness | MCP (machine-wide) | CLI hints (machine-wide) |
+| --- | --- | --- |
+| Claude Code | `claude mcp add --scope user` (printed for you to run when `claude` is not on `PATH`) | `~/.claude/CLAUDE.md` + SessionStart hook in `~/.claude/settings.json` |
+| Codex | `~/.codex/config.toml` | `~/.codex/AGENTS.md` + hook in `~/.codex/config.toml` |
+| Gemini CLI, Qwen Code, GigaCode | `~/.gemini/settings.json`, `~/.qwen/…`, `~/.gigacode/…` | `~/.<harness>/<HARNESS>.md` + hook in its `settings.json` |
+
+The session hook stays silent in folders with no Gradle/Maven build, so
+machine-wide wiring costs nothing in other projects. `init --scope
+project` writes the configs into the current repository instead (`.mcp.json`,
+`CLAUDE.md`, …) for teams that commit them; a project entry takes
+precedence over the machine-wide one in that repo.
 
 For a quick trial without installing, `npx jarpeek@latest init` also works
 — but the wired configs invoke `jarpeek` by name, so install it globally
@@ -74,7 +89,8 @@ optional — without it, decompilation degrades to signature-only answers.
 
 ### MCP
 
-`jarpeek mcp` serves a stdio MCP server; `init` registers it for you. The
+`jarpeek mcp` serves a stdio MCP server; `init` registers it for you
+(machine-wide; the server serves the client's session folder). The
 nine tools:
 
 | Tool | Arguments | Answers with |
@@ -167,7 +183,7 @@ jarpeek where com.example:demo-lib:1.0.0
 
 `search-symbols` without `--artifact` is a usage error.
 
-Also: `jarpeek init` (wire harnesses), `jarpeek prime` (print the agent
+Also: `jarpeek init` (wire harnesses, once per machine; `--scope project` for one repo), `jarpeek prime` (print the agent
 cheatsheet; `--full`, `--mcp`, `--export`, `--hook-json`), `jarpeek mcp`
 (serve MCP stdio).
 
@@ -213,11 +229,11 @@ the one named artifact.
 | `JARPEEK_M2_DIR` / `M2_REPO` | Where the Maven local repository lives; steers both the Maven resolver's anchor and the cache scan |
 | `JARPEEK_GRADLE_CACHE_DIR` / `GRADLE_USER_HOME` | Where the Gradle modules-2 cache lives (`GRADLE_USER_HOME` is the cache's parent — the scan walks `<it>/caches/modules-2/files-2.1`) |
 | `JARPEEK_CACHE_DIR` | Where the shared manifest cache lives (default: `~/Library/Caches/jarpeek` on macOS, `%LOCALAPPDATA%\jarpeek` on Windows, `$XDG_CACHE_HOME/jarpeek` or `~/.cache/jarpeek` elsewhere) |
-| `JARPEEK_HOME` | Override the home directory used for user-scoped harness configs and the global config below |
+| `JARPEEK_HOME` | Override the home directory used for user-scoped harness configs, the global config below and the default cache dir; while set, `init` prints the `claude mcp add` command instead of running it (Claude Code's own config cannot be relocated with it) |
 | `JARPEEK_PRIME_MODE` | Default `prime` mode (`cli` or `mcp`) when config is absent |
 | `.jarpeek/PRIME.md` | Replaces the agent cheatsheet verbatim, every mode |
-| `.jarpeek/config.json` | Written by `init`; records the wired `primeMode`; `buildTool` and `language` (`"en"`/`"ru"`) are hand-added, `m2Dir`/`gradleCacheDir` are pinned by `init`'s advanced step (or by hand) — persistent defaults |
-| `~/.config/jarpeek/config.json` | Machine-wide defaults: the same `m2Dir` / `gradleCacheDir` fields, read when the project config names none |
+| `.jarpeek/config.json` | Per-project defaults, optional: `buildTool` and `language` (`"en"`/`"ru"`) are hand-added; `init --scope project` records `primeMode` and its advanced step's `m2Dir`/`gradleCacheDir` pins here |
+| `~/.config/jarpeek/config.json` | Machine-wide defaults: `primeMode` and the `m2Dir` / `gradleCacheDir` pins written by `init` (or by hand), read when the project config names none |
 
 Cache roots converge in a fixed order — explicit env var, project config,
 global config, maven's `settings.xml` `<localRepository>` (m2 only), then

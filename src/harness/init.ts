@@ -1,7 +1,11 @@
 /**
- * The init flow: detect the project, ask which harnesses to wire and how,
- * and write the configs. Nothing resolves or indexes here — the first query
- * pays for resolution (or `jarpeek resolve` does it eagerly).
+ * The init flow: ask which harnesses to wire and how, and write the
+ * configs — once per machine by default (`scope: "user"`): every repo,
+ * worktree and monorepo is then covered with no per-project step, because
+ * the server and the CLI discover the builds of whatever directory they
+ * run in. `scope: "project"` writes the configs into one repository
+ * instead (for teams that commit them). Nothing resolves or indexes here —
+ * the first query pays for resolution (or `jarpeek resolve` does it eagerly).
  *
  * Everything user-facing is injected: PromptIo wraps @clack/prompts (tests
  * replay fixed answers), and the seams accept fakes so the flow never
@@ -13,13 +17,22 @@ import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import * as clack from "@clack/prompts";
-import { HARNESSES, type HarnessDescriptor, type HarnessId } from "./descriptors.js";
-import { ensureGitignoreJarpeek, hookSettingsTarget, resolveTarget, wireCli, wireMcp } from "./wiring.js";
+import { HARNESSES, type HarnessDescriptor, type HarnessId, type WiringScope } from "./descriptors.js";
+import {
+  claudeUserConfigPath,
+  cliTargetsFor,
+  ensureGitignoreJarpeek,
+  mcpTargetFor,
+  resolveTarget,
+  wireCli,
+  wireMcp,
+  type ClaudeCli,
+} from "./wiring.js";
 import { detectBuildSystems, type BuildSystem, type ResolveDependenciesOptions } from "../resolver/index.js";
 import { resolveJdk } from "../resolver/jdk.js";
 import { commandOnPath } from "../util/path-probe.js";
 import { PRIME_CONFIG_PATH } from "../prime/command.js";
-import { effectiveRoots, looksAbsolute } from "../resolver/roots.js";
+import { effectiveRoots, globalConfigPath, looksAbsolute } from "../resolver/roots.js";
 
 /** The prompts init asks; the real implementation is @clack/prompts. */
 export interface PromptIo {
@@ -37,6 +50,8 @@ export interface InitResolvers extends ResolveDependenciesOptions {
   commandOnPath?: typeof commandOnPath;
   /** Cache-root detection for the advanced step's placeholders; defaults to the real convergence. */
   effectiveRoots?: typeof effectiveRoots;
+  /** Claude Code's CLI for the user-scope entry; null = unavailable. Default: the real one, when usable. */
+  claudeCli?: ClaudeCli | null;
 }
 
 export interface InitOptions {
@@ -46,15 +61,23 @@ export interface InitOptions {
   command?: string;
   /** Non-interactive defaults: claude + mcp (the CLI's --yes). */
   yes?: boolean;
+  /** Machine-wide (default) or into this project. */
+  scope?: WiringScope;
 }
 
 export interface InitResult {
+  scope: WiringScope;
   detected: { buildSystems: BuildSystem[]; jdk: string | null };
   wired: Array<{ harness: string; mode: string; targets: string[] }>;
   notes: string[];
 }
 
 const NOTE_NON_INTERACTIVE = "non-interactive: defaults applied";
+/** What machine-wide wiring buys. */
+const NOTE_MACHINE_WIDE = "machine-wide: every repo, worktree and monorepo on this machine is covered — no per-project init";
+/** A project-scoped entry next to the machine-wide one: it wins in that repo. */
+const NOTE_PROJECT_LEFTOVER = (files: string[]): string =>
+  `project-scoped jarpeek config in ${files.join(", ")} takes precedence in this repo; remove it to use the machine-wide wiring`;
 /** Where resolution moved to: the first query, or the explicit command. */
 const NOTE_AUTO_RESOLVE = "first query auto-resolves (or run: jarpeek resolve)";
 /** The npx trap: configs invoke `jarpeek`, which only exists once installed. */
@@ -95,16 +118,18 @@ function clackPromptIo(): PromptIo {
   };
 }
 
-/** Does the descriptor's MCP target already hold a jarpeek block? */
-function hasExistingBlock(descriptor: HarnessDescriptor, projectRoot: string): boolean {
-  const target = resolveTarget(descriptor.mcp.target, projectRoot);
+/** Does the descriptor's MCP target at `scope` already hold a jarpeek block? */
+function hasExistingBlock(descriptor: HarnessDescriptor, projectRoot: string, scope: WiringScope): boolean {
+  const where = mcpTargetFor(descriptor, scope);
+  const target = where === null ? claudeUserConfigPath() : resolveTarget(where.target, projectRoot);
+  const format = where === null ? "mcp-json" : where.format;
   let text: string;
   try {
     text = readFileSync(target, "utf8");
   } catch {
     return false;
   }
-  if (descriptor.mcp.format === "codex-toml") {
+  if (format === "codex-toml") {
     return /^[ \t]*\[mcp_servers\.jarpeek\]/m.test(text);
   }
   try {
@@ -114,9 +139,13 @@ function hasExistingBlock(descriptor: HarnessDescriptor, projectRoot: string): b
   }
 }
 
-/** Merge `fields` into `.jarpeek/config.json`, preserving everything else. */
-async function updateProjectConfig(projectRoot: string, fields: Record<string, string>): Promise<void> {
-  const path = join(projectRoot, PRIME_CONFIG_PATH);
+/** The config file a scope records into: the machine-wide one, or the project's `.jarpeek/config.json`. */
+function configPath(scope: WiringScope, projectRoot: string): string {
+  return scope === "user" ? globalConfigPath() : join(projectRoot, PRIME_CONFIG_PATH);
+}
+
+/** Merge `fields` into the config at `path`, preserving everything else. */
+async function updateConfig(path: string, fields: Record<string, string>): Promise<void> {
   let doc: Record<string, unknown> = {};
   try {
     const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
@@ -129,10 +158,10 @@ async function updateProjectConfig(projectRoot: string, fields: Record<string, s
   await writeFile(path, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
 }
 
-/** One string field of the project config, when it is a string. */
-async function readProjectConfigField(projectRoot: string, field: string): Promise<string | undefined> {
+/** One string field of the config at `path`, when it is a string. */
+async function readConfigField(path: string, field: string): Promise<string | undefined> {
   try {
-    const parsed = JSON.parse(await readFile(join(projectRoot, PRIME_CONFIG_PATH), "utf8")) as unknown;
+    const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
     const value = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>)[field] : undefined;
     return typeof value === "string" ? value : undefined;
   } catch {
@@ -140,23 +169,14 @@ async function readProjectConfigField(projectRoot: string, field: string): Promi
   }
 }
 
-/** Record the wired mode where prime's auto-detect reads it. */
-function writePrimeMode(projectRoot: string, mode: "mcp" | "cli"): Promise<void> {
-  return updateProjectConfig(projectRoot, { primeMode: mode });
-}
-
 /** The targets one harness wiring touches, for InitResult.wired. */
-function wiringTargets(descriptor: HarnessDescriptor, projectRoot: string, mode: string): string[] {
-  if (mode === "mcp") return [resolveTarget(descriptor.mcp.target, projectRoot)];
-  const targets = [join(projectRoot, descriptor.instructionsFile)];
-  if (descriptor.supportsSessionStartHook) {
-    targets.push(
-      descriptor.mcp.format === "codex-toml"
-        ? resolveTarget(descriptor.mcp.target, projectRoot)
-        : hookSettingsTarget(descriptor, projectRoot),
-    );
+function wiringTargets(descriptor: HarnessDescriptor, projectRoot: string, mode: string, scope: WiringScope): string[] {
+  if (mode === "mcp") {
+    const where = mcpTargetFor(descriptor, scope);
+    return [where === null ? claudeUserConfigPath() : resolveTarget(where.target, projectRoot)];
   }
-  return targets;
+  const { instructions, hooks } = cliTargetsFor(descriptor, projectRoot, scope);
+  return hooks === null ? [instructions] : [instructions, hooks];
 }
 
 /**
@@ -169,13 +189,15 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
   const notes: string[] = [];
   const resolvers = opts.resolvers ?? {};
   const wired: InitResult["wired"] = [];
+  const scope: WiringScope = opts.scope ?? "user";
+  const config = configPath(scope, projectRoot);
 
   const buildSystems = (resolvers.detectBuildSystems ?? detectBuildSystems)(projectRoot);
   const jdkOutcome = await (resolvers.jdk ?? resolveJdk)();
   const jdk = jdkOutcome.artifact !== null ? jdkOutcome.artifact.coordinates.replace(/^jdk:/, "") : null;
   notes.push(...jdkOutcome.warnings.map((warning) => `jdk: ${warning}`));
 
-  const existing = HARNESSES.filter((d) => hasExistingBlock(d, projectRoot)).map((d) => d.id);
+  const existing = HARNESSES.filter((d) => hasExistingBlock(d, projectRoot, scope)).map((d) => d.id);
   if (existing.length > 0) notes.push(`existing jarpeek config: ${existing.join(", ")}`);
 
   const interactive = opts.yes !== true && (opts.prompts !== undefined || process.stdout.isTTY === true);
@@ -204,14 +226,14 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
       await prompts.text(
         "Maven local repository override (absolute path)",
         `detected: ${detected.m2[0].path} — leave empty to keep following Maven`,
-        await readProjectConfigField(projectRoot, "m2Dir"),
+        await readConfigField(config, "m2Dir"),
       )
     ).trim();
     const gradleAnswer = (
       await prompts.text(
         "Gradle cache override (absolute path)",
         `detected: ${detected.gradle.path} — leave empty to keep following Gradle`,
-        await readProjectConfigField(projectRoot, "gradleCacheDir"),
+        await readConfigField(config, "gradleCacheDir"),
       )
     ).trim();
     // the same absoluteness rule the convergence applies: a relative answer
@@ -224,7 +246,7 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
       if (looksAbsolute(gradleAnswer)) rootFields.gradleCacheDir = gradleAnswer;
       else notes.push(`not an absolute path — not pinned: ${gradleAnswer}`);
     }
-    if (Object.keys(rootFields).length > 0) notes.push("cache roots pinned in .jarpeek/config.json");
+    if (Object.keys(rootFields).length > 0) notes.push(`cache roots pinned in ${config}`);
   } else {
     harnessIds = ["claude"];
     mode = "mcp";
@@ -234,12 +256,26 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
   for (const id of harnessIds) {
     const descriptor = HARNESSES.find((d) => d.id === id);
     if (descriptor === undefined) continue;
-    if (mode === "mcp") await wireMcp(descriptor, projectRoot, { command: opts.command });
-    else await wireCli(descriptor, projectRoot, { command: opts.command });
-    wired.push({ harness: id, mode, targets: wiringTargets(descriptor, projectRoot, mode) });
+    if (mode === "mcp") {
+      const result = await wireMcp(descriptor, projectRoot, {
+        command: opts.command,
+        scope,
+        ...(resolvers.claudeCli !== undefined ? { claudeCli: resolvers.claudeCli } : {}),
+      });
+      // claude's user entry is written by its own CLI; when that is not
+      // possible, the exact command is the answer — never a silent skip
+      if (result.manual !== undefined) {
+        notes.push(`${id}: not wired automatically — run: ${result.manual}`);
+        continue;
+      }
+    } else {
+      await wireCli(descriptor, projectRoot, { command: opts.command, scope });
+    }
+    wired.push({ harness: id, mode, targets: wiringTargets(descriptor, projectRoot, mode, scope) });
   }
-  if (mode === "mcp") await writePrimeMode(projectRoot, "mcp");
-  if (Object.keys(rootFields).length > 0) await updateProjectConfig(projectRoot, rootFields);
+  // the wired mode, where prime's auto-detect reads it
+  if (mode === "mcp") await updateConfig(config, { primeMode: "mcp" });
+  if (Object.keys(rootFields).length > 0) await updateConfig(config, rootFields);
 
   // the configs invoke the command by bare name: if it is not on PATH the
   // wiring is dead on arrival (the classic npx-first-run trap)
@@ -249,9 +285,18 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
     notes.push(NOTE_NOT_ON_PATH(command));
   }
 
-  if (await ensureGitignoreJarpeek(projectRoot)) notes.push("added .jarpeek/ to .gitignore");
+  if (scope === "project") {
+    if (await ensureGitignoreJarpeek(projectRoot)) notes.push("added .jarpeek/ to .gitignore");
+  } else {
+    notes.push(NOTE_MACHINE_WIDE);
+    // a committed project entry shadows the machine-wide one in that repo
+    const leftovers = HARNESSES.filter((d) => d.mcp.scope === "project" && hasExistingBlock(d, projectRoot, "project")).map(
+      (d) => d.mcp.target,
+    );
+    if (leftovers.length > 0) notes.push(NOTE_PROJECT_LEFTOVER(leftovers));
+  }
 
   notes.push(NOTE_AUTO_RESOLVE);
 
-  return { detected: { buildSystems, jdk }, wired, notes };
+  return { scope, detected: { buildSystems, jdk }, wired, notes };
 }

@@ -16,3 +16,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 process.env.JARPEEK_CACHE_DIR = mkdtempSync(join(tmpdir(), "jarpeek-cache-"));
+
+/**
+ * Suite-wide home isolation: `init` wires machine-wide by default, so every
+ * test file gets a scratch JARPEEK_HOME — no test can write the developer's
+ * real ~/.claude, ~/.gemini, ~/.codex or ~/.config/jarpeek. (The real
+ * `claude mcp add` never runs while JARPEEK_HOME relocates home.) Tests
+ * that exercise the home layer stub it explicitly with vi.stubEnv.
+ */
+process.env.JARPEEK_HOME = mkdtempSync(join(tmpdir(), "jarpeek-home-"));

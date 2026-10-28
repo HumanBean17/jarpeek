@@ -78,6 +78,18 @@ setup cost this layer removes; the directory itself names the builds.
 - **MCP roots.** The server starts before it knows its workspace: the
   first call asks the client for its roots (Claude Code sends the session
   folder) and rediscovers on `roots/list_changed`. `--project` pins it.
+- **Wire once per machine.** Because the directory names the builds,
+  nothing about wiring is per-project any more: `init` defaults to user
+  scope. Claude Code's user entry goes through `claude mcp add --scope
+  user` — `~/.claude.json` is live application state jarpeek reads (for
+  idempotency) but never writes; when the CLI is unavailable, or
+  `JARPEEK_HOME` relocates home, the exact command is printed rather than
+  claimed done. Machine-wide wiring reaches every session, so its
+  footprint outside JVM work must be zero: the SessionStart hook prints
+  nothing where no build is found, and the instructions line names its
+  scope (Gradle/Maven projects). `--scope project` keeps the committed,
+  per-repo wiring for teams that want it; it shadows the user entry in
+  that repo, and user-scope `init` says so when it finds one.
 
 ## The resolve cascade
 

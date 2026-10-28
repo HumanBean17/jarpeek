@@ -559,12 +559,37 @@ describe("where", () => {
 });
 
 describe("init", () => {
-  it("--yes wires the claude mcp defaults non-interactively and exits 0", () => {
+  it("--yes is machine-wide: nothing in the project, the claude command handed over under a relocated home", () => {
+    const root = mkdtempSync(join(tmpdir(), "jarpeek-cli-init-"));
+    const home = mkdtempSync(join(tmpdir(), "jarpeek-cli-init-home-"));
+    try {
+      const run = spawnSync(process.execPath, ["--import", "tsx", "src/cli/index.ts", "--project", root, "init", "--yes"], {
+        cwd: PKG_ROOT,
+        encoding: "utf8",
+        timeout: 60_000,
+        env: { ...process.env, JAVA_HOME: "", JARPEEK_HOME: home },
+      });
+      expect(run.status).toBe(0);
+      expect(run.stdout).toContain("machine-wide: every repo, worktree and monorepo");
+      // JARPEEK_HOME relocates home: the real `claude mcp add` never runs, the command is printed instead
+      expect(run.stdout).toContain("run: claude mcp add --scope user jarpeek -- ");
+      expect(existsSync(join(root, ".mcp.json"))).toBe(false);
+      expect(existsSync(join(root, ".gitignore"))).toBe(false);
+      expect(JSON.parse(readFileSync(join(home, ".config", "jarpeek", "config.json"), "utf8"))).toEqual({
+        primeMode: "mcp",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("--scope project --yes wires the claude mcp defaults into the repo and exits 0", () => {
     const root = mkdtempSync(join(tmpdir(), "jarpeek-cli-init-"));
     try {
       const run = spawnSync(
         process.execPath,
-        ["--import", "tsx", "src/cli/index.ts", "--project", root, "init", "--yes"],
+        ["--import", "tsx", "src/cli/index.ts", "--project", root, "init", "--yes", "--scope", "project"],
         {
           cwd: PKG_ROOT,
           encoding: "utf8",
