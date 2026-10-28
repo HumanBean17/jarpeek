@@ -22,7 +22,8 @@ import { renderJson } from "./json.js";
 import { clipCell, numberLines, renderTable, renderStatus } from "./render.js";
 import { handleMiss, type MissResult } from "../core/miss.js";
 import { fuzzyScore } from "../core/fuzzy.js";
-import { openContext, type QueryContext } from "../core/query/context.js";
+import type { QueryContext } from "../core/query/context.js";
+import { Workspace } from "../workspace/workspace.js";
 import { BUILD_TOOL_STRATEGIES } from "../resolver/strategy.js";
 import { findClass, type FindClassResult } from "../core/query/find-class.js";
 import {
@@ -86,12 +87,16 @@ interface Invocation {
   locale: Locale;
 }
 
-/** Context with the bootstrap's one notice line routed to stderr. */
+/**
+ * The invocation's context: the builds `--project` (default: cwd) means —
+ * the enclosing build, every build below a monorepo/multi-repo root, or the
+ * directory itself — with the bootstrap's notice lines routed to stderr.
+ */
 function ctxFor(inv: Invocation): QueryContext {
-  return openContext(inv.project, {
+  return new Workspace([inv.project], {
     onNotice: (msg) => process.stderr.write(`[jarpeek] ${msg}...\n`),
     buildToolFlag: inv.buildTool,
-  });
+  }).context();
 }
 
 /**
@@ -177,6 +182,13 @@ async function runQuery(
 // -- human renderers ----------------------------------------------------------
 
 function renderFindClassRows(hits: FindClassResult["hits"]): string {
+  // multi-build workspaces: which builds each hit's artifact belongs to
+  if (hits.some((hit) => hit.projects !== undefined)) {
+    return renderTable([
+      ["FQN", "KIND", "ARTIFACT", "PROVENANCE", "PROJECTS"],
+      ...hits.map((hit) => [hit.fqn, hit.kind, hit.coordinates, hit.provenance, (hit.projects ?? []).join(",")]),
+    ]);
+  }
   return renderTable([
     ["FQN", "KIND", "ARTIFACT", "PROVENANCE"],
     ...hits.map((hit) => [hit.fqn, hit.kind, hit.coordinates, hit.provenance]),
@@ -313,6 +325,7 @@ function renderResolve(result: ResolveNowResult, locale: Locale): string {
   const rest = result.warnings.length - shown.length;
   return [
     `${resolved}${warnings}`,
+    ...(result.projects ?? []).map((p) => `  ${p.project}: ${p.artifactCount} (${p.durationMs}ms)`),
     ...shown,
     ...(rest > 0 ? [t(tr["render.moreLine"], { n: rest })] : []),
   ].join("\n");

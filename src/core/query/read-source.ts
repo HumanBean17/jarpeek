@@ -20,6 +20,7 @@ import { listZipEntries, readTextEntry } from "../../parse/zip.js";
 import { sliceLines, splitLines } from "../../util/lines.js";
 import type { QueryContext } from "./context.js";
 import { locateClass, type LocateResult } from "./locate.js";
+import type { Alternative } from "./locate.js";
 import { mergedDegraded, outline, servedStale, type OutlineResult } from "./outline.js";
 
 export type ReadSourceMode = "outline" | "full" | "lines";
@@ -40,7 +41,9 @@ export interface FullReadResult {
   content: string;
   startLine: 1;
   lineCount: number;
-  alternatives?: Array<{ coordinates: string }>;
+  alternatives?: Alternative[];
+  /** Multi-build workspaces: the builds whose dependency set holds the served artifact. */
+  projects?: string[];
   degraded: string[];
 }
 
@@ -56,7 +59,9 @@ export interface LinesReadResult {
   endLine: number;
   lineCount: number;
   clamped: boolean;
-  alternatives?: Array<{ coordinates: string }>;
+  alternatives?: Alternative[];
+  /** Multi-build workspaces: the builds whose dependency set holds the served artifact. */
+  projects?: string[];
   degraded: string[];
 }
 
@@ -72,7 +77,8 @@ export interface ResolvedContent {
   provenance: Provenance;
   content: string;
   stale: boolean;
-  alternatives: Array<{ coordinates: string }>;
+  alternatives: Alternative[];
+  projects?: string[];
   degraded: string[];
   /** Raw outcome when a decompile was attempted — present even when it degraded. */
   decompile?: DecompileResult;
@@ -91,7 +97,7 @@ const JDK_NOTE = "signatures only (jdk: decompilation is out of scope)";
  */
 export async function resolveContent(ctx: QueryContext, fqn: string): Promise<ResolvedContent> {
   await ctx.ensureReady();
-  const { winner, alternatives, degraded: locateDegraded }: LocateResult =
+  const { winner, alternatives, projects, degraded: locateDegraded }: LocateResult =
     await locateClass(ctx, fqn, { includeNested: false });
   const meta = winner.artifact;
   // the internal name the decompiler keys on: the located entry minus .class
@@ -111,6 +117,7 @@ export async function resolveContent(ctx: QueryContext, fqn: string): Promise<Re
     content,
     stale,
     alternatives,
+    ...(projects !== undefined ? { projects } : {}),
     degraded,
   });
 
@@ -180,6 +187,7 @@ export async function readSource(
     file: source.file,
     provenance: source.provenance,
     ...(source.stale ? { stale: true } : {}),
+    ...(source.projects !== undefined ? { projects: source.projects } : {}),
     ...(source.alternatives.length > 0 ? { alternatives: source.alternatives } : {}),
     degraded: source.degraded,
   };

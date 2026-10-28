@@ -62,4 +62,6 @@ export interface ClassHit {
   version: string;
   kind: DeclKind;
   provenance: Provenance;
+  /** Multi-build workspaces only: the builds (workspace-relative) whose dependency set holds this artifact. */
+  projects?: string[];
 }

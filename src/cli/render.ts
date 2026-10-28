@@ -67,7 +67,9 @@ export function renderStatus(result: {
     incomplete: boolean;
     artifactCount: number;
     dependencySetHash?: string;
+    path?: string;
   };
+  projects?: Array<{ project: string; manifest: { present: boolean; stale: boolean; incomplete: boolean; artifactCount: number } }>;
   resolver: { m2Root: { path: string; source: string }; gradleCacheRoot: { path: string; source: string } };
   jvm: { available: boolean; version?: string };
 }): string {
@@ -80,6 +82,16 @@ export function renderStatus(result: {
     ["manifest.incomplete", String(result.manifest.incomplete)],
     ["manifest.artifactCount", String(result.manifest.artifactCount)],
     ["manifest.dependencySetHash", result.manifest.dependencySetHash ?? ""],
+    ...(result.manifest.path !== undefined ? [["manifest.path", result.manifest.path]] : []),
+    // multi-build workspaces: one summary row per build
+    ...(result.projects ?? []).map((p) => [
+      `project ${p.project}`,
+      [
+        p.manifest.present ? `${p.manifest.artifactCount} artifacts` : "not resolved",
+        ...(p.manifest.stale ? ["stale"] : []),
+        ...(p.manifest.incomplete ? ["incomplete"] : []),
+      ].join(", "),
+    ]),
     ["resolver.m2Root", `${result.resolver.m2Root.path} (${result.resolver.m2Root.source})`],
     [
       "resolver.gradleCacheRoot",

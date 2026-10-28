@@ -12,7 +12,7 @@ export const en = {
   // -- program and global flags ---------------------------------------------
   "cli.description": "Dependency source access for AI agents on JVM projects",
   "opt.json": "machine-readable output (the exact MCP result object)",
-  "opt.project": "project root (default: cwd)",
+  "opt.project": "workspace: the build enclosing this dir, else every build below it (default: cwd)",
   "opt.buildTool":
     "which mvn/gradle runs resolves: system from PATH, the root wrapper, or system-first with wrapper fallback (default)",
   "opt.lang": "interface language for human-mode output (en, ru)",

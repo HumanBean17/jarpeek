@@ -1,9 +1,10 @@
 /**
  * Build-system detection for the resolver facade.
  *
- * Detection is marker-file based and intentionally shallow: jarpeek never
- * walks the tree guessing at multi-module layouts — the resolvers themselves
- * handle submodules once the top-level tool family is known. A project with
+ * Detection is marker-file based and intentionally shallow: it answers for
+ * one build root, and the resolvers themselves handle submodules once the
+ * top-level tool family is known. Finding the build roots of a workspace
+ * (monorepo, multi-repo folder) is `workspace/discover.ts`'s job. A project with
  * both marker families is not an error; the cascade order in `index.ts`
  * simply tries Gradle first.
  */

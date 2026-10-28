@@ -76,6 +76,16 @@ export interface QueryContext {
    * partial stays partial for every later invocation too.
    */
   bootstrapWarnings(): Promise<string[]>;
+  /** True when the served manifest no longer matches the build files / recorded artifact paths. */
+  stale(): Promise<boolean>;
+  /**
+   * Present on a workspace context spanning several builds: one entry per
+   * build, labeled by its workspace-relative path. Queries answer over the
+   * union; status and resolve report per build.
+   */
+  readonly members?: ReadonlyArray<{ project: string; ctx: QueryContext }>;
+  /** Multi-build only: the builds (workspace-relative) whose dependency set holds `coordinates`. */
+  projectsOf?(coordinates: string): Promise<string[]>;
 }
 
 export interface OpenContextOptions {
@@ -92,6 +102,10 @@ export interface OpenContextOptions {
   onNotice?: (msg: string) => void;
   /** Injectable clock (tests); defaults to Date.now. */
   now?: () => number;
+  /** Shared listing service (a workspace shares one across its builds); default: a fresh one. */
+  listings?: ListingService;
+  /** Shared memoized decompiler; default: a fresh one. */
+  decompiler?: DecompileFn;
 }
 
 function errorMessage(e: unknown): string {
@@ -242,8 +256,8 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
   let inFlight: Promise<EnsureReadyResult> | undefined;
 
   // Construct once per context
-  const listings = new ListingService();
-  const decompiler = createDecompiler();
+  const listings = opts.listings ?? new ListingService();
+  const decompiler = opts.decompiler ?? createDecompiler();
 
   return {
     projectRoot,
@@ -275,6 +289,10 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       return inFlight;
     },
     manifest: read,
+    async stale(): Promise<boolean> {
+      const manifest = await read();
+      return manifest !== null && isStale(projectRoot, manifest, buildTool, m2Root);
+    },
     async artifacts(): Promise<DependencyArtifact[]> {
       const manifest = await read();
       return manifest === null ? [] : manifest.artifacts;

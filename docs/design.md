@@ -42,6 +42,43 @@ failure.
   entry for that class — one source entry or class file (outline adds
   its directly nested classes) — never the jar around it.
 
+## Workspaces, not project roots
+
+An agent's working directory is rarely a build root: it starts at a
+monorepo's root, in a service's source folder, in a parent folder of
+several repos, or in a git worktree. Requiring an `init` (or a
+`--project`) per build multiplied by every repo and every worktree is the
+setup cost this layer removes; the directory itself names the builds.
+
+- **Up, then down.** Inside a build the enclosing root wins, by each
+  tool's own rule (Gradle: nearest settings file, else nearest build
+  file; Maven: nearest `.mvn/` beside a pom, else the outermost
+  contiguous parent pom). The walk stops at the repository root (`.git`)
+  or the home directory, so a stray build file above cannot swallow
+  unrelated folders. Above builds, every build root below: `git ls-files`
+  inside a repository (fast, honors `.gitignore`, nested repositories
+  walked on their own), a bounded walk elsewhere; descent stops at a
+  build root, and test-fixture projects (`fixtures/`, `testdata/`,
+  `src/test/`) are not builds. No build anywhere: the directory itself,
+  exactly the pre-workspace behavior (cache-scan fallback included).
+- **Federation over hints.** With several builds and no `project`, a
+  query answers over the union — members keep their own manifests,
+  freshness and backoff; the merged view dedupes by coordinates (one
+  external jar is one artifact everywhere) and labels hits with their
+  `projects`. A hint-required design would fail the very first
+  hint-less query at a monorepo root; federation answers it and hands
+  the agent the labels to scope a follow-up.
+- **Honest unions.** A member that cannot resolve leaves the union
+  `incomplete` (named per build), so a negative over a partial workspace
+  never reads as definitive — GH#18's contract, lifted to workspaces.
+  Warnings carry their build's label.
+- **Budget held.** Members resolve two at a time (they share the local
+  repository); the batch announces itself in one stderr line and
+  concurrent heartbeats collapse to one per interval.
+- **MCP roots.** The server starts before it knows its workspace: the
+  first call asks the client for its roots (Claude Code sends the session
+  folder) and rediscovers on `roots/list_changed`. `--project` pins it.
+
 ## The resolve cascade
 
 Resolution runs gradle → maven → local-machine cache scan, with the
