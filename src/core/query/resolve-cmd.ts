@@ -14,6 +14,7 @@ import {
   computeDependencySetHash,
   writeManifest,
 } from "../../index/manifest.js";
+import { withResolveLock } from "../../index/lock.js";
 import { resolveDependencies } from "../../resolver/index.js";
 import type { QueryContext } from "./context.js";
 
@@ -42,19 +43,26 @@ export async function resolveNow(
   opts: ResolveNowOptions = {},
 ): Promise<ResolveNowResult> {
   const startedAt = Date.now();
-  const resolution = await resolveDependencies(ctx.projectRoot, {
-    ...ctx.resolvers,
-    ...(opts.forceUpdate ? { forceUpdate: true } : {}),
-  });
-  await writeManifest(ctx.projectRoot, {
-    version: 2,
-    resolvedAt: new Date().toISOString(),
-    dependencySetHash: await computeDependencySetHash(ctx.projectRoot, ctx.buildTool, ctx.roots.m2[0].path),
-    artifacts: resolution.artifacts,
-    // same contract as the bootstrap's write: only truncating degradations
-    // (the maven partial entry, or every entry of a cache-scan resolution)
-    // mark the manifest non-exhaustive
-    ...(resolution.incomplete.length > 0 ? { incomplete: resolution.incomplete } : {}),
+  const m2Root = ctx.roots.m2[0].path;
+  // serialized with any concurrent resolve of the same build files (another
+  // worktree's bootstrap included); unlike the bootstrap, this always runs
+  const key = await computeDependencySetHash(ctx.projectRoot, ctx.buildTool, m2Root);
+  const resolution = await withResolveLock(key, async () => {
+    const outcome = await resolveDependencies(ctx.projectRoot, {
+      ...ctx.resolvers,
+      ...(opts.forceUpdate ? { forceUpdate: true } : {}),
+    });
+    await writeManifest(ctx.projectRoot, {
+      version: 2,
+      resolvedAt: new Date().toISOString(),
+      dependencySetHash: await computeDependencySetHash(ctx.projectRoot, ctx.buildTool, m2Root),
+      artifacts: outcome.artifacts,
+      // same contract as the bootstrap's write: only truncating degradations
+      // (the maven partial entry, or every entry of a cache-scan resolution)
+      // mark the manifest non-exhaustive
+      ...(outcome.incomplete.length > 0 ? { incomplete: outcome.incomplete } : {}),
+    });
+    return outcome;
   });
   return {
     artifactCount: resolution.artifacts.length,

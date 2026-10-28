@@ -11,6 +11,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
+import { lastManifestPath } from "../../src/index/manifest.js";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -75,7 +76,7 @@ function demoArtifacts(): DependencyArtifact[] {
 /** A project whose gradle resolver always answers the fixture artifact set. */
 function openSuite(artifacts: () => DependencyArtifact[] | null): Suite {
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-cli-project-"));
-  writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+  writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
   const injected = artifacts();
   const ctx = openContext(projectRoot, {
     // `null` means "use the real cascade" — the resolve suite's fake gradlew
@@ -461,7 +462,7 @@ describe("resolve", () => {
     expect(run.stdout).toMatch(/^resolved \d+ artifacts? in \d+ms\n$/);
     // the manifest it wrote names the resolved artifact
     const manifest = JSON.parse(
-      readFileSync(join(resolveSuite.projectRoot, ".jarpeek", "manifest.json"), "utf8"),
+      readFileSync(lastManifestPath(resolveSuite.projectRoot)!, "utf8"),
     );
     expect(manifest.artifacts.map((a: { coordinates: string }) => a.coordinates)).toContain(
       "com.example:demo-lib:1.0.0",
@@ -488,7 +489,7 @@ describe("resolve", () => {
     expect(actual.viaCacheScan).toBe(false);
     expect(actual.durationMs).toBeGreaterThanOrEqual(0);
     // the forced resolve rewrote the v2 manifest
-    expect(readFileSync(join(resolveSuite.projectRoot, ".jarpeek", "manifest.json"), "utf8")).toContain(
+    expect(readFileSync(lastManifestPath(resolveSuite.projectRoot)!, "utf8")).toContain(
       '"version":2',
     );
   });

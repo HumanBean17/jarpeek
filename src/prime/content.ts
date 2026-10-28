@@ -66,7 +66,8 @@ protocol below has already tried the recovery steps for you.
 Nothing needs to be started or configured by hand. The first query on a
 fresh project — or the first query after the build files change —
 auto-resolves the dependency set: one bounded Gradle/Maven pass that
-rewrites \`.jarpeek/manifest.json\`. jarpeek never indexes; later queries
+writes a manifest to jarpeek's machine-wide cache, shared by every checkout
+(worktrees included) with the same build files. jarpeek never indexes; later queries
 read the manifest and open only the jar entries they need. A resolve that
 fails never fails the query: the command still answers, as a miss with the
 failure's reason, and re-resolution backs off for 60 seconds so a broken

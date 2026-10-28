@@ -2,7 +2,7 @@
  * The Gradle init script jarpeek injects to ask a build for its resolved
  * dependency artifacts.
  *
- * Invoked as `gradle -I .jarpeek/gradle-init.gradle --console=plain -q
+ * Invoked as `gradle -I <cache>/gradle-init.gradle --console=plain -q
  * jarpeekDump`: the script registers one task `jarpeekDump` on the root
  * project (never per-subproject); running it prints a single JSON document
  * between sentinel lines on stdout —
@@ -30,8 +30,9 @@
  * (Gradle >= 7 API surface, per-configuration try/catch, `println` output
  * that survives `--console=plain -q`).
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { cacheDir } from "../util/cache-dir.js";
 
 // NOTE: the script lives in a template literal; the Groovy interpolation in
 // the coordinates GString is escaped (\${) so JavaScript does not evaluate it.
@@ -170,14 +171,17 @@ gradle.projectsLoaded {
 `;
 
 /**
- * Materialize the init script at `<projectRoot>/.jarpeek/gradle-init.gradle`,
- * returning its path. Idempotent: when the file already holds exactly
- * `GRADLE_INIT_SCRIPT` nothing is rewritten (mtime preserved), so repeated
- * resolutions never dirty the project.
+ * Materialize the init script in the machine-wide cache
+ * (`<cache>/gradle-init.gradle`), returning its path — never inside the
+ * project, so resolves leave checkouts untouched. Idempotent: when the file
+ * already holds exactly `GRADLE_INIT_SCRIPT` nothing is rewritten; a write
+ * goes through tmp + rename so a concurrent resolve never reads half a
+ * script.
  */
-export async function ensureGradleInitScript(projectRoot: string): Promise<string> {
-  const scriptPath = join(projectRoot, ".jarpeek", "gradle-init.gradle");
-  await mkdir(join(projectRoot, ".jarpeek"), { recursive: true });
+export async function ensureGradleInitScript(): Promise<string> {
+  const dir = cacheDir();
+  const scriptPath = join(dir, "gradle-init.gradle");
+  await mkdir(dir, { recursive: true });
 
   let existing: string | undefined;
   try {
@@ -186,7 +190,9 @@ export async function ensureGradleInitScript(projectRoot: string): Promise<strin
     // absent: fall through and write it
   }
   if (existing !== GRADLE_INIT_SCRIPT) {
-    await writeFile(scriptPath, GRADLE_INIT_SCRIPT, "utf8");
+    const tmp = `${scriptPath}.${process.pid}.tmp`;
+    await writeFile(tmp, GRADLE_INIT_SCRIPT, "utf8");
+    await rename(tmp, scriptPath);
   }
   return scriptPath;
 }

@@ -237,7 +237,7 @@ export async function resolveGradle(
   const exec = opts.exec ?? runWithTimeout;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const strategy = opts.strategy ?? "auto";
-  const initScriptPath = await ensureGradleInitScript(projectRoot);
+  const initScriptPath = await ensureGradleInitScript();
 
   let candidates: Candidate[];
   if (opts.wrapper !== undefined) {

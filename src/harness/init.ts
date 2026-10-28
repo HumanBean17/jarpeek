@@ -17,7 +17,6 @@ import { HARNESSES, type HarnessDescriptor, type HarnessId } from "./descriptors
 import { ensureGitignoreJarpeek, hookSettingsTarget, resolveTarget, wireCli, wireMcp } from "./wiring.js";
 import { detectBuildSystems, type BuildSystem, type ResolveDependenciesOptions } from "../resolver/index.js";
 import { resolveJdk } from "../resolver/jdk.js";
-import { ensureGradleInitScript } from "../resolver/gradle-init.js";
 import { commandOnPath } from "../util/path-probe.js";
 import { PRIME_CONFIG_PATH } from "../prime/command.js";
 import { effectiveRoots, looksAbsolute } from "../resolver/roots.js";
@@ -34,7 +33,6 @@ export interface PromptIo {
 /** Seams injectable per call. */
 export interface InitResolvers extends ResolveDependenciesOptions {
   detectBuildSystems?: typeof detectBuildSystems;
-  ensureGradleInitScript?: typeof ensureGradleInitScript;
   /** PATH probe for the wired command; defaults to the real one. */
   commandOnPath?: typeof commandOnPath;
   /** Cache-root detection for the advanced step's placeholders; defaults to the real convergence. */
@@ -252,10 +250,6 @@ export async function runInit(projectRoot: string, opts: InitOptions = {}): Prom
   }
 
   if (await ensureGitignoreJarpeek(projectRoot)) notes.push("added .jarpeek/ to .gitignore");
-  if (buildSystems.includes("gradle")) {
-    const script = await (resolvers.ensureGradleInitScript ?? ensureGradleInitScript)(projectRoot);
-    notes.push(`gradle init script: ${script}`);
-  }
 
   notes.push(NOTE_AUTO_RESOLVE);
 

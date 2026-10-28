@@ -89,7 +89,8 @@ describe("interactive mcp wiring", () => {
     });
     expect(readFileSync(join(root, ".gitignore"), "utf8")).toContain(".jarpeek/");
     expect(existsSync(join(root, ".jarpeek", "manifest.json"))).toBe(false);
-    expect(existsSync(join(root, ".jarpeek", "gradle-init.gradle"))).toBe(true);
+    // the gradle init script lives in the machine-wide cache, written by the first resolve
+    expect(existsSync(join(root, ".jarpeek", "gradle-init.gradle"))).toBe(false);
     // the index prompt and the index call are both gone
     expect(result.notes.some((note) => note.includes("indexed"))).toBe(false);
     expect(result.notes).toContain("first query auto-resolves (or run: jarpeek resolve)");
@@ -140,7 +141,6 @@ describe("idempotency", () => {
       join(".gemini", "settings.json"),
       join(".jarpeek", "config.json"),
       ".gitignore",
-      join(".jarpeek", "gradle-init.gradle"),
     ];
     const before = hashAll(root, targets);
     const second = await runInit(root, opts);

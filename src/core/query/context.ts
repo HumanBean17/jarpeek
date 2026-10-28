@@ -35,6 +35,7 @@ import {
   writeManifest,
   type Manifest,
 } from "../../index/manifest.js";
+import { withResolveLock } from "../../index/lock.js";
 import { resolveDependencies, type ResolveDependenciesOptions } from "../../resolver/index.js";
 import { effectiveBuildToolStrategy, type BuildToolStrategy } from "../../resolver/strategy.js";
 import { effectiveRoots, type EffectiveRoots } from "../../resolver/roots.js";
@@ -104,6 +105,8 @@ const FAILED_BOOTSTRAP_BACKOFF_MS = 60_000;
 const NOTICE_FIRST_RUN = "resolving dependencies (first run — may download dependencies and sources)";
 /** Notice emitted when the manifest exists but no longer matches the build. */
 const NOTICE_STALE = "resolving dependencies (manifest stale)";
+/** Notice emitted while another process resolves the same build files. */
+const NOTICE_WAITING = "waiting for a concurrent resolve of the same build";
 /** While a bootstrap runs, one heartbeat per this many milliseconds. */
 const HEARTBEAT_MS = 30_000;
 
@@ -134,6 +137,10 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
     roots: { m2: roots.m2.map((candidate) => candidate.path), gradle: roots.gradle.path },
   };
 
+  const m2Root = roots.m2[0].path;
+  /** The manifest serving this root under this context's identity. */
+  const read = (): Promise<Manifest | null> => readManifest(projectRoot, buildTool, m2Root);
+
   /** When a bootstrap failed or served stale (throw, or cache-scan fallback): retries back off to this. */
   let failedAt: number | undefined;
 
@@ -141,7 +148,29 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
     if (!warnings.includes(msg)) warnings.push(msg);
   };
 
+  /**
+   * Resolve under the cross-process lock for the current key: a sibling
+   * checkout (or a parallel agent) resolving the same build files makes
+   * this process wait, then serve the manifest it wrote instead of
+   * re-running the build.
+   */
   async function runBootstrap(wasStale: boolean): Promise<EnsureReadyResult> {
+    const key = await computeDependencySetHash(projectRoot, buildTool, m2Root);
+    return withResolveLock(
+      key,
+      async () => {
+        const fresh = await read();
+        if (fresh !== null && !(await isStale(projectRoot, fresh, buildTool, m2Root))) {
+          failedAt = undefined;
+          return { bootstrapped: false, stale: false };
+        }
+        return resolveAndWrite(wasStale);
+      },
+      { onWait: () => opts.onNotice?.(NOTICE_WAITING) },
+    );
+  }
+
+  async function resolveAndWrite(wasStale: boolean): Promise<EnsureReadyResult> {
     // the one progress line a resolve-only bootstrap owes the user…
     opts.onNotice?.(wasStale ? NOTICE_STALE : NOTICE_FIRST_RUN);
     // …plus a heartbeat while it runs: a cold-cache resolve can download for
@@ -158,7 +187,7 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       // artifact set that reads as fresh — the degradation ladder's "serve
       // stale index" row
       if (resolution.viaCacheScan) {
-        const existing = await readManifest(projectRoot);
+        const existing = await read();
         if (existing !== null && existing.artifacts.length > 0) {
           warnings.length = 0;
           for (const entry of resolution.degraded) addWarning(`${entry.from}: ${entry.reason}`);
@@ -182,7 +211,7 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       await writeManifest(projectRoot, {
         version: 2,
         resolvedAt: new Date().toISOString(),
-        dependencySetHash: await computeDependencySetHash(projectRoot, buildTool, roots.m2[0].path),
+        dependencySetHash: await computeDependencySetHash(projectRoot, buildTool, m2Root),
         artifacts: resolution.artifacts,
         // only truncating degradations mark the manifest non-exhaustive
         // (the maven partial entry) — sibling-cascade failures stay
@@ -195,7 +224,7 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       failedAt = undefined;
       return { bootstrapped: true, stale: wasStale };
     } catch (e) {
-      const manifest = await readManifest(projectRoot);
+      const manifest = await read();
       if (manifest !== null) {
         addWarning(`stale index served (resolution failed: ${errorMessage(e)})`);
         return { bootstrapped: false, stale: true };
@@ -224,8 +253,8 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
     listings,
     decompiler,
     async ensureReady(): Promise<EnsureReadyResult> {
-      const manifest = await readManifest(projectRoot);
-      if (manifest !== null && !(await isStale(projectRoot, manifest, buildTool, roots.m2[0].path))) {
+      const manifest = await read();
+      if (manifest !== null && !(await isStale(projectRoot, manifest, buildTool, m2Root))) {
         return { bootstrapped: false, stale: false };
       }
       if (failedAt !== undefined && now() - failedAt < FAILED_BOOTSTRAP_BACKOFF_MS) {
@@ -245,9 +274,9 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
       }
       return inFlight;
     },
-    manifest: () => readManifest(projectRoot),
+    manifest: read,
     async artifacts(): Promise<DependencyArtifact[]> {
-      const manifest = await readManifest(projectRoot);
+      const manifest = await read();
       return manifest === null ? [] : manifest.artifacts;
     },
     // the serving process's degradation state: this bootstrap's warnings,
@@ -255,7 +284,7 @@ export function openContext(projectRoot: string, opts: OpenContextOptions = {}):
     // without that, a fresh process serving a fresh-but-partial manifest
     // would answer as if the set were exhaustive (GH#18)
     async bootstrapWarnings(): Promise<string[]> {
-      const manifest = await readManifest(projectRoot);
+      const manifest = await read();
       const persisted = (manifest?.incomplete ?? []).map((entry) => `${entry.from}: ${entry.reason}`);
       return [...new Set([...warnings, ...persisted])];
     },

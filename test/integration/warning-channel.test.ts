@@ -4,7 +4,7 @@
  * accumulation of every bootstrap this process ever ran.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,7 +22,7 @@ const roots: string[] = [];
 
 function freshProject(): { projectRoot: string } {
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-warnchan-project-"));
-  writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+  writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
   roots.push(projectRoot);
   return { projectRoot };
 }
@@ -147,7 +147,7 @@ describe("partial-resolution persistence (GH#18)", () => {
   function pomProject(): { projectRoot: string } {
     const { projectRoot } = freshProject();
     rmSync(join(projectRoot, "build.gradle"));
-    writeFileSync(join(projectRoot, "pom.xml"), "<project/>");
+    writeFileSync(join(projectRoot, "pom.xml"), `<project/><!-- ${projectRoot} -->`);
     return { projectRoot };
   }
 
@@ -220,8 +220,7 @@ describe("partial-resolution persistence (GH#18)", () => {
     // a complete manifest, and the persisted flag must not survive it
     partial = false;
     const pom = join(projectRoot, "pom.xml");
-    const future = new Date(Date.now() + 60_000);
-    utimesSync(pom, future, future);
+    writeFileSync(pom, `${readFileSync(pom, "utf8")}<!-- healed -->`);
     const healed = openContext(projectRoot, { resolvers });
     await healed.ensureReady();
     expect(await healed.bootstrapWarnings()).toEqual([]);

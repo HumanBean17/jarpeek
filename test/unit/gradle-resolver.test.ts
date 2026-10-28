@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -38,7 +38,7 @@ const APP_DIR = "/home/dev/work/demo/app";
 /** The pinned gradle arguments after the command itself (init script, console, cc-off, task). */
 const INIT_ARGS = (projectRoot: string) => [
   "-I",
-  join(projectRoot, ".jarpeek", "gradle-init.gradle"),
+  join(process.env.JARPEEK_CACHE_DIR!, "gradle-init.gradle"),
   "--console=plain",
   "-q",
   "--no-configuration-cache",
@@ -376,7 +376,7 @@ describe("resolveGradle: forceUpdate (GH#21)", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].args).toEqual([
       "-I",
-      join(projectRoot, ".jarpeek", "gradle-init.gradle"),
+      join(process.env.JARPEEK_CACHE_DIR!, "gradle-init.gradle"),
       "--console=plain",
       "-q",
       "--no-configuration-cache",
@@ -690,22 +690,23 @@ describe("gradleOnPathDefault", () => {
 });
 
 describe("ensureGradleInitScript", () => {
-  it("writes .jarpeek/gradle-init.gradle and rewrites nothing on identical content", async () => {
+  it("writes <cache>/gradle-init.gradle (never into the project) and rewrites nothing on identical content", async () => {
     const projectRoot = scratch();
 
-    const first = await ensureGradleInitScript(projectRoot);
-    expect(first).toBe(join(projectRoot, ".jarpeek", "gradle-init.gradle"));
+    const first = await ensureGradleInitScript();
+    expect(first).toBe(join(process.env.JARPEEK_CACHE_DIR!, "gradle-init.gradle"));
+    expect(existsSync(join(projectRoot, ".jarpeek"))).toBe(false);
     expect(readFileSync(first, "utf8")).toBe(GRADLE_INIT_SCRIPT);
 
     const mtimeBefore = statSync(first).mtimeMs;
-    const second = await ensureGradleInitScript(projectRoot);
+    const second = await ensureGradleInitScript();
     expect(second).toBe(first);
     expect(readFileSync(second, "utf8")).toBe(GRADLE_INIT_SCRIPT);
     expect(statSync(first).mtimeMs).toBe(mtimeBefore); // no rewrite when content matches
 
     // a tampered file is restored
     await writeFile(first, "// tampered", "utf8");
-    const restored = await ensureGradleInitScript(projectRoot);
+    const restored = await ensureGradleInitScript();
     expect(restored).toBe(first);
     expect(readFileSync(restored, "utf8")).toBe(GRADLE_INIT_SCRIPT);
   });

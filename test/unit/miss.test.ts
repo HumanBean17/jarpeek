@@ -39,7 +39,7 @@ afterAll(() => {
 /** Open a context over a manifest written BEFORE construction (fresh, served without resolving). */
 async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContext> {
   const projectRoot = freshRoot();
-  writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+  writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
   const ctx = openContext(projectRoot, { onNotice: () => {} });
   await writeManifest(projectRoot, {
     version: 2,
@@ -109,7 +109,7 @@ describe("handleMiss negative", () => {
     // so with no manifest the bootstrap FAILS and the miss reports an empty
     // searched set instead of presenting the cache scan as resolved
     const projectRoot = freshRoot();
-    writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+    writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
     const ctx = openContext(projectRoot, {
       resolvers: {
         gradle: async () => ({ ok: false, artifacts: [], reason: "network down" }),
@@ -154,7 +154,7 @@ describe("handleMiss negative", () => {
     // the issue's exact scenario: a LATER invocation, fresh process, serving
     // a fresh-but-partial manifest — the negative must not read as definitive
     const projectRoot = freshRoot();
-    writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+    writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
     const ctx = openContext(projectRoot, { onNotice: () => {} });
     const reason = "modules failed to resolve: mod ([ERROR] sibling was not found)";
     await writeManifest(projectRoot, {
