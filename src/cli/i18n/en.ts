@@ -28,7 +28,7 @@ export const en = {
   "cmd.resolve": "force a dependency resolve pass",
   "cmd.status": "manifest and JVM report",
   "cmd.where": "on-disk paths for one artifact",
-  "cmd.mcp": "serve the MCP stdio server for this project",
+  "cmd.mcp": "serve the MCP stdio server (workspace: the client's roots, else cwd)",
   "cmd.prime": "the jarpeek cheatsheet for agents (this file)",
   "cmd.init": "wire AI harnesses (MCP server or CLI hints) — once per machine",
 

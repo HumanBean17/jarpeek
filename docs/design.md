@@ -72,12 +72,14 @@ setup cost this layer removes; the directory itself names the builds.
   `incomplete` (named per build), so a negative over a partial workspace
   never reads as definitive — GH#18's contract, lifted to workspaces.
   Warnings carry their build's label.
-- **Budget held.** Members resolve two at a time (they share the local
-  repository); the batch announces itself in one stderr line and
-  concurrent heartbeats collapse to one per interval.
+- **Budget held.** Members bootstrap two at a time (they share the local
+  repository; an explicit `resolve` runs them one by one); the batch
+  announces itself in one stderr line and concurrent heartbeats collapse
+  to one per interval.
 - **MCP roots.** The server starts before it knows its workspace: the
   first call asks the client for its roots (Claude Code sends the session
-  folder) and rediscovers on `roots/list_changed`. `--project` pins it.
+  folder; a client without roots gets the cwd) and rediscovers on
+  `roots/list_changed`. `--project` pins it.
 - **Wire once per machine.** Because the directory names the builds,
   nothing about wiring is per-project any more: `init` defaults to user
   scope. Claude Code's user entry goes through `claude mcp add --scope
@@ -86,7 +88,8 @@ setup cost this layer removes; the directory itself names the builds.
   `JARPEEK_HOME` relocates home, the exact command is printed rather than
   claimed done. Machine-wide wiring reaches every session, so its
   footprint outside JVM work must be zero: the SessionStart hook prints
-  nothing where no build is found, and the instructions line names its
+  nothing where no build is found (its discovery reads only the git
+  index — instant even in a huge non-JVM monorepo), and the instructions line names its
   scope (Gradle/Maven projects). `--scope project` keeps the committed,
   per-repo wiring for teams that want it; it shadows the user entry in
   that repo, and user-scope `init` says so when it finds one.

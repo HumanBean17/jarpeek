@@ -99,6 +99,9 @@ describe("buildsBelow", () => {
     writeFileSync(join(root, "vendor-repo", "pom.xml"), "");
 
     expect(rels(root).sort()).toEqual(["services/a", "services/b", "services/new", "vendor-repo"]);
+    // the session hook's cheap mode: the git index only
+    const tracked = buildsBelow(root, { untracked: false }).map((b) => b.slice(root.length + 1));
+    expect(tracked.sort()).toEqual(["services/a", "services/b"]);
   });
 
   it("outside git: a bounded walk that stops at build roots and skips dependency dirs", () => {

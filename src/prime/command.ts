@@ -70,7 +70,8 @@ export function prime(projectRoot: string, opts: PrimeOptions = {}): PrimeResult
     if (existsSync(overridePath)) {
       selected = { text: readFileSync(overridePath, "utf8"), source: "override" };
     } else {
-      const { builds } = discoverBuilds(projectRoot);
+      // tracked files only: this runs at every session start, in every repository
+      const { builds } = discoverBuilds(projectRoot, { untracked: false });
       // a session hook outside any JVM build injects nothing
       if (opts.hookJson && builds.length === 0) return { text: "", source: "default" };
       const text = defaultPrimeContent(selectMode(projectRoot, opts));

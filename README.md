@@ -183,9 +183,9 @@ jarpeek where com.example:demo-lib:1.0.0
 
 `search-symbols` without `--artifact` is a usage error.
 
-Also: `jarpeek init` (wire harnesses, once per machine; `--scope project` for one repo), `jarpeek prime` (print the agent
-cheatsheet; `--full`, `--mcp`, `--export`, `--hook-json`), `jarpeek mcp`
-(serve MCP stdio).
+Also: `jarpeek init` (wire harnesses, once per machine; `--scope project`
+for one repo), `jarpeek prime` (print the agent cheatsheet; `--full`,
+`--mcp`, `--export`, `--hook-json`), `jarpeek mcp` (serve MCP stdio).
 
 Diagnostics — the one bootstrap notice, resolve heartbeats, warnings,
 degradations — go to stderr (warnings under a three-line cap); stdout
@@ -215,8 +215,8 @@ and JVM availability.
 Degradations are reported, never hidden, and the answer still arrives:
 each is a `warning: ...` line on stderr (a `degraded[]` field in JSON),
 aggregated under the three-line warning budget. Search results are scoped
-to the project's resolved dependency set, and `search_symbols` further to
-the one named artifact.
+to the resolved dependency set of the builds in scope, and
+`search_symbols` further to the one named artifact.
 
 ## Configuration
 
