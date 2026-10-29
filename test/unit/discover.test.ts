@@ -100,7 +100,7 @@ describe("buildsBelow", () => {
 
     expect(rels(root).sort()).toEqual(["services/a", "services/b", "services/new", "vendor-repo"]);
     // the session hook's cheap mode: the git index only
-    const tracked = buildsBelow(root, { untracked: false }).map((b) => b.slice(root.length + 1));
+    const tracked = buildsBelow(root, { untracked: false }).map((b) => relative(root, b).split(sep).join("/"));
     expect(tracked.sort()).toEqual(["services/a", "services/b"]);
   });
 
