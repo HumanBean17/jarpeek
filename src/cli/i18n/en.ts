@@ -28,9 +28,9 @@ export const en = {
   "cmd.resolve": "force a dependency resolve pass",
   "cmd.status": "manifest and JVM report",
   "cmd.where": "on-disk paths for one artifact",
-  "cmd.mcp": "serve the MCP stdio server for this project",
+  "cmd.mcp": "serve the MCP stdio server (workspace: the client's roots, else cwd)",
   "cmd.prime": "the jarpeek cheatsheet for agents (this file)",
-  "cmd.init": "wire AI harnesses (MCP server or CLI hints) for this project",
+  "cmd.init": "wire AI harnesses (MCP server or CLI hints) — once per machine",
 
   // -- per-command option help -------------------------------------------------
   "opt.kind": "filter by declaration kind",
@@ -60,6 +60,7 @@ export const en = {
   "opt.primeExport": "the default content even when .jarpeek/PRIME.md exists",
   "opt.primeHookJson": "wrap the text as a SessionStart hook additionalContext payload",
   "opt.yes": "non-interactive: claude + mcp defaults",
+  "opt.scope": "user: wire once for this machine (every repo, worktree, monorepo); project: write configs into this repo",
 
   // -- help-block prose ----------------------------------------------------------
   "help.frugal":
@@ -70,7 +71,7 @@ export const en = {
   "help.mcp": "serves the stdio MCP server; jarpeek init writes the harness configs that launch it.",
   "help.prime":
     "--full produces the full agent cheatsheet; --export bypasses a .jarpeek/PRIME.md override.",
-  "help.init": "non-interactive wiring (Claude Code + MCP).",
+  "help.init": "non-interactive, machine-wide wiring (Claude Code + MCP); --scope project writes into this repo instead.",
 
   // -- related: cross-link sentences ----------------------------------------------
   "related.find-class": "outline <fqn> shows a hit's shape.",

@@ -68,8 +68,11 @@ function codexHome(): string {
   return home;
 }
 
+/** The suite-wide scratch home (test/setup.ts); restored after tests repoint it. */
+const SUITE_HOME = process.env.JARPEEK_HOME;
+
 afterAll(() => {
-  delete process.env.JARPEEK_HOME; // codex tests point it at tmp fake homes
+  process.env.JARPEEK_HOME = SUITE_HOME; // codex tests point it at tmp fake homes
   for (const dir of roots) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -101,7 +104,7 @@ describe("descriptor table", () => {
         join(root, "fakehome", ".codex", "config.toml"),
       );
     } finally {
-      delete process.env.JARPEEK_HOME;
+      process.env.JARPEEK_HOME = SUITE_HOME;
     }
   });
 });

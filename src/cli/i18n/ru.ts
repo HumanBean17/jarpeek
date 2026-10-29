@@ -25,9 +25,9 @@ export const ru: Catalog = {
   "cmd.resolve": "принудительный проход разрешения зависимостей",
   "cmd.status": "отчёт по манифесту и JVM",
   "cmd.where": "пути на диске для одного артефакта",
-  "cmd.mcp": "запустить stdio MCP-сервер для этого проекта",
+  "cmd.mcp": "запустить stdio MCP-сервер (рабочая область: корни клиента, иначе cwd)",
   "cmd.prime": "шпаргалка jarpeek для агентов (этот файл)",
-  "cmd.init": "настроить AI-харнесы (MCP-сервер или CLI-подсказки) для этого проекта",
+  "cmd.init": "настроить AI-харнесы (MCP-сервер или CLI-подсказки) — один раз на машину",
 
   // -- per-command option help -------------------------------------------------
   "opt.kind": "фильтр по типу объявления",
@@ -57,6 +57,7 @@ export const ru: Catalog = {
   "opt.primeExport": "стандартное содержимое, даже если есть .jarpeek/PRIME.md",
   "opt.primeHookJson": "обернуть текст как additionalContext-нагрузку хука SessionStart",
   "opt.yes": "без интерактива: claude + mcp по умолчанию",
+  "opt.scope": "user: один раз для всей машины (любой репозиторий, worktree, монорепо); project: конфиги в этот репозиторий",
 
   // -- help-block prose ----------------------------------------------------------
   "help.frugal":
@@ -68,7 +69,7 @@ export const ru: Catalog = {
     "обслуживает stdio MCP-сервер; jarpeek init пишет конфиги харнесов, которые его запускают.",
   "help.prime":
     "--full даёт полную шпаргалку для агентов; --export обходит переопределение через .jarpeek/PRIME.md.",
-  "help.init": "настройка без интерактива (Claude Code + MCP).",
+  "help.init": "настройка без интерактива для всей машины (Claude Code + MCP); --scope project — в этот репозиторий.",
 
   // -- related: cross-link sentences ----------------------------------------------
   "related.find-class": "outline <fqn> показывает устройство найденного класса.",

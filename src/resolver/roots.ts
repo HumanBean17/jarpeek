@@ -78,7 +78,7 @@ function configField(configPath: string, field: string): string | undefined {
 }
 
 /** The machine-wide config; `JARPEEK_HOME` relocates it (test isolation). */
-function globalConfigPath(): string {
+export function globalConfigPath(): string {
   return join(process.env.JARPEEK_HOME ?? homedir(), ".config", "jarpeek", "config.json");
 }
 

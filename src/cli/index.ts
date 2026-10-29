@@ -682,6 +682,8 @@ command("prime", "cmd.prime", primeHelp)
       exportContent: cmd.export === true,
       hookJson: cmd.hookJson === true,
     });
+    // a session hook outside any JVM build prints nothing at all
+    if (!inv.json && result.text.length === 0) return;
     // both cheatsheets (and a user override) may end in newlines; one terminator
     process.stdout.write(
       inv.json ? `${renderJson(result)}\n` : `${result.text.replace(/\n+$/, "")}\n`,
@@ -690,9 +692,10 @@ command("prime", "cmd.prime", primeHelp)
 
 command("init", "cmd.init", initHelp)
   .option("--yes", ui["opt.yes"])
-  .action(async (cmd: { yes?: boolean }) => {
+  .addOption(new Option("--scope <scope>", ui["opt.scope"]).choices(["user", "project"]).default("user"))
+  .action(async (cmd: { yes?: boolean; scope: "user" | "project" }) => {
     const inv = invocation();
-    const result = await runInit(inv.project, { yes: cmd.yes === true });
+    const result = await runInit(inv.project, { yes: cmd.yes === true, scope: cmd.scope });
     emit(result, inv, () => renderInit(result, inv.locale));
   });
 

@@ -291,9 +291,31 @@ function fromPortable(m: Manifest, projectRoot: string): Manifest {
   };
 }
 
+/**
+ * Parsed manifests by path, reused while the file's (inode, size, mtime)
+ * stay put — every write is a rename onto a fresh inode.
+ */
+const parseMemo = new Map<string, { ino: number; size: number; mtimeMs: number; manifest: Manifest }>();
+
 /** Parse one stored manifest file; missing, corrupt, or wrong-shaped → null. */
 function loadFile(path: string): Manifest | null {
-  if (!existsSync(path)) return null;
+  let stats;
+  try {
+    stats = statSync(path);
+  } catch {
+    return null;
+  }
+  const memo = parseMemo.get(path);
+  if (memo !== undefined && memo.ino === stats.ino && memo.size === stats.size && memo.mtimeMs === stats.mtimeMs) {
+    return memo.manifest;
+  }
+  const manifest = parseFile(path);
+  if (manifest === null) parseMemo.delete(path);
+  else parseMemo.set(path, { ino: stats.ino, size: stats.size, mtimeMs: stats.mtimeMs, manifest });
+  return manifest;
+}
+
+function parseFile(path: string): Manifest | null {
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<Manifest>;
     if (

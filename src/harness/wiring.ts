@@ -37,16 +37,23 @@
  *   https://learn.chatgpt.com/codex/extend/mcp
  *   https://learn.chatgpt.com/codex/hooks
  */
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { readFile, rename, writeFile, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { HarnessDescriptor } from "./descriptors.js";
+import type { HarnessDescriptor, WiringScope } from "./descriptors.js";
+import { commandOnPath } from "../util/path-probe.js";
 
 /** Marker identifying the one instructions line jarpeek owns. */
 export const INSTRUCTIONS_MARKER = "<!-- jarpeek -->";
 
-/** The instructions pointer line appended once to each harness's memory file. */
-export const INSTRUCTIONS_LINE = `${INSTRUCTIONS_MARKER} dependency-source tooling: run \`jarpeek prime\` for usage`;
+/**
+ * The instructions pointer line appended once to each harness's memory
+ * file. Machine-wide it sits in every session's context, so it names its
+ * scope: JVM builds only.
+ */
+export const INSTRUCTIONS_LINE = `${INSTRUCTIONS_MARKER} Gradle/Maven projects — dependency sources (find a class, read a member): run \`jarpeek prime\` for usage`;
 
 /** The session-start hook command: prime's cheatsheet as hook JSON on stdout. */
 const hookCommandFor = (command: string): string => `${command} prime --hook-json`;
@@ -57,15 +64,55 @@ const SESSION_START_KEY = "SessionStart";
 export interface WireMcpOptions {
   /** Executable to register (default "jarpeek"; tests/dev may pass a path). */
   command?: string;
+  /** Where to wire (default "project"; init's default is "user"). */
+  scope?: WiringScope;
+  /** Claude Code's CLI for its user-scope entry; null = unavailable (default: the real one, if usable). */
+  claudeCli?: ClaudeCli | null;
 }
 
 export interface WireMcpResult {
   target: string;
   changed: boolean;
+  /** Set when the entry could not be written automatically: the exact command to run by hand. */
+  manual?: string;
 }
 
 export interface WireCliOptions {
   command?: string;
+  scope?: WiringScope;
+}
+
+/** The `claude` CLI, as far as wiring needs it. */
+export interface ClaudeCli {
+  run(args: string[]): { ok: boolean; output: string };
+}
+
+/**
+ * The real `claude` CLI, or null when it cannot be used: not on PATH, or
+ * JARPEEK_HOME relocates home (tests, sandboxes) — `claude mcp add` would
+ * write the real user config, which JARPEEK_HOME promises not to touch.
+ */
+export function defaultClaudeCli(): ClaudeCli | null {
+  if (process.env.JARPEEK_HOME !== undefined) return null;
+  if (!commandOnPath("claude")) return null;
+  return {
+    run(args) {
+      const result = spawnSync("claude", args, {
+        encoding: "utf8",
+        timeout: 30_000,
+        // the npm-installed bin is claude.cmd on win32: spawnable only through a shell
+        shell: process.platform === "win32",
+      });
+      return { ok: result.status === 0, output: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
+    },
+  };
+}
+
+/** Claude Code's user config (`CLAUDE_CONFIG_DIR` relocates it). */
+export function claudeUserConfigPath(): string {
+  const dir = process.env.CLAUDE_CONFIG_DIR;
+  if (dir !== undefined && dir.length > 0) return join(dir, ".claude.json");
+  return join(process.env.JARPEEK_HOME ?? homedir(), ".claude.json");
 }
 
 /** Files wireCli touched this run, as `<kind>:<target>` strings; empty = no-op. */
@@ -132,18 +179,60 @@ function mcpServerEntry(command: string): { command: string; args: string[] } {
   return { command, args: ["mcp"] };
 }
 
+/** The MCP config file (and its format) a descriptor wires at `scope`; null for claude's CLI-owned user scope. */
+export function mcpTargetFor(
+  descriptor: HarnessDescriptor,
+  scope: WiringScope,
+): { target: string; format: HarnessDescriptor["mcp"]["format"] } | null {
+  if (scope === "project") return { target: descriptor.mcp.target, format: descriptor.mcp.format };
+  return descriptor.user.mcp === "claude-cli" ? null : descriptor.user.mcp;
+}
+
+/**
+ * Claude Code's user-scope entry goes through its own CLI: `~/.claude.json`
+ * is live application state Claude Code rewrites constantly, so jarpeek
+ * reads it (to stay idempotent) but never writes it.
+ */
+function wireClaudeUser(entry: { command: string; args: string[] }, cli: ClaudeCli | null): WireMcpResult {
+  const target = claudeUserConfigPath();
+  const manual = `claude mcp add --scope user jarpeek -- ${[entry.command, ...entry.args].join(" ")}`;
+  let current: unknown;
+  try {
+    current = (JSON.parse(readFileSync(target, "utf8")) as { mcpServers?: Record<string, unknown> }).mcpServers?.jarpeek;
+  } catch {
+    current = undefined;
+  }
+  const same =
+    isObject(current) &&
+    current.command === entry.command &&
+    JSON.stringify(current.args ?? []) === JSON.stringify(entry.args);
+  if (same) return { target, changed: false };
+  if (cli === null) return { target, changed: false, manual };
+  if (current !== undefined) cli.run(["mcp", "remove", "--scope", "user", "jarpeek"]);
+  const added = cli.run(["mcp", "add", "--scope", "user", "jarpeek", "--", entry.command, ...entry.args]);
+  if (!added.ok) {
+    const reason = added.output.split("\n")[0] ?? "";
+    return { target, changed: false, manual: reason.length > 0 ? `${manual}  (claude: ${reason})` : manual };
+  }
+  return { target, changed: true };
+}
+
 /** Register the jarpeek stdio server in the harness's MCP config. */
 export async function wireMcp(
   descriptor: HarnessDescriptor,
   projectRoot: string,
   opts: WireMcpOptions = {},
 ): Promise<WireMcpResult> {
-  const target = resolveTarget(descriptor.mcp.target, projectRoot);
   const command = opts.command ?? "jarpeek";
   const entry = mcpServerEntry(command);
+  const where = mcpTargetFor(descriptor, opts.scope ?? "project");
+  if (where === null) {
+    return wireClaudeUser(entry, opts.claudeCli !== undefined ? opts.claudeCli : defaultClaudeCli());
+  }
+  const target = resolveTarget(where.target, projectRoot);
   let changed: boolean;
 
-  if (descriptor.mcp.format === "codex-toml") {
+  if (where.format === "codex-toml") {
     const text = await readTextOrEmpty(target);
     changed = await writeIfChanged(target, editTomlMcpSection(text, entry));
   } else {
@@ -310,6 +399,28 @@ async function appendCodexTomlHook(path: string, hookCommand: string): Promise<b
   return writeIfChanged(path, out);
 }
 
+/** The instructions file and hook settings file a descriptor's CLI wiring touches at `scope`. */
+export function cliTargetsFor(
+  descriptor: HarnessDescriptor,
+  projectRoot: string,
+  scope: WiringScope,
+): { instructions: string; hooks: string | null } {
+  if (scope === "user") {
+    return {
+      instructions: resolveTarget(descriptor.user.instructionsFile, projectRoot),
+      hooks: descriptor.supportsSessionStartHook ? resolveTarget(descriptor.user.hooks, projectRoot) : null,
+    };
+  }
+  return {
+    instructions: join(projectRoot, descriptor.instructionsFile),
+    hooks: !descriptor.supportsSessionStartHook
+      ? null
+      : descriptor.mcp.format === "codex-toml"
+        ? resolveTarget(descriptor.mcp.target, projectRoot)
+        : hookSettingsTarget(descriptor, projectRoot),
+  };
+}
+
 /** Wire the CLI consumption path: pointer line plus session-start hook. */
 export async function wireCli(
   descriptor: HarnessDescriptor,
@@ -318,6 +429,19 @@ export async function wireCli(
 ): Promise<WireCliResult> {
   const command = opts.command ?? "jarpeek";
   const actions: string[] = [];
+
+  if ((opts.scope ?? "project") === "user") {
+    const targets = cliTargetsFor(descriptor, projectRoot, "user");
+    const instructions = await appendInstructions(targets.instructions, descriptor.user.instructionsFile);
+    if (instructions !== null) actions.push(instructions);
+    if (targets.hooks !== null) {
+      const wrote = targets.hooks.endsWith(".toml")
+        ? await appendCodexTomlHook(targets.hooks, hookCommandFor(command))
+        : await mergeJsonSessionStartHook(targets.hooks, hookCommandFor(command));
+      if (wrote) actions.push(`hook:${descriptor.user.hooks}`);
+    }
+    return { actions };
+  }
 
   const instructions = await appendInstructions(
     join(projectRoot, descriptor.instructionsFile),

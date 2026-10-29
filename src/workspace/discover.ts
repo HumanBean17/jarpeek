@@ -103,8 +103,17 @@ function isFixturePath(relDir: string): boolean {
   return parts.some((part, i) => part === "src" && (parts[i + 1] === "test" || parts[i + 1] === "it"));
 }
 
+export interface DiscoverOptions {
+  /**
+   * Include untracked files (new services, nested repositories). Default
+   * true; the session-start hook passes false: a tracked-only listing reads
+   * just the git index, so even a huge non-JVM monorepo answers instantly.
+   */
+  untracked?: boolean;
+}
+
 /** Marker directories under `dir` (relative, `/`-separated) via git, or null outside a repository. */
-function markersViaGit(dir: string): { dirs: string[]; nested: string[] } | null {
+function markersViaGit(dir: string, untracked: boolean): { dirs: string[]; nested: string[] } | null {
   let out: string;
   try {
     out = execFileSync(
@@ -114,15 +123,12 @@ function markersViaGit(dir: string): { dirs: string[]; nested: string[] } | null
         dir,
         "ls-files",
         "--cached",
-        "--others",
-        "--exclude-standard",
-        "--directory",
-        "--no-empty-directory",
+        ...(untracked ? ["--others", "--exclude-standard", "--directory", "--no-empty-directory"] : []),
         "-z",
         "--",
         ...MARKERS.flatMap((m) => [`:(glob)${m}`, `:(glob)**/${m}`]),
         // untracked nested repositories surface as directories ("repo/")
-        ":(glob)**/",
+        ...(untracked ? [":(glob)**/"] : []),
       ],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000, maxBuffer: 64 * 1024 * 1024 },
     );
@@ -186,16 +192,16 @@ function topLevel(relDirs: string[]): string[] {
 }
 
 /** Absolute build roots below `dir` (inclusive), shallowest first. */
-export function buildsBelow(dir: string): string[] {
+export function buildsBelow(dir: string, opts: DiscoverOptions = {}): string[] {
   const root = resolve(dir);
-  const viaGit = markersViaGit(root);
+  const viaGit = markersViaGit(root, opts.untracked ?? true);
   let rels: string[];
   if (viaGit === null) {
     rels = markersViaWalk(root);
   } else {
     rels = [...viaGit.dirs];
     for (const nested of viaGit.nested) {
-      for (const inner of buildsBelow(join(root, nested))) {
+      for (const inner of buildsBelow(join(root, nested), opts)) {
         rels.push(relative(root, inner).split(sep).join("/"));
       }
     }
@@ -217,7 +223,7 @@ export interface Discovery {
 }
 
 /** The builds `dir` means: the one enclosing it, else every build below it. */
-export function discoverBuilds(dir: string): Discovery {
+export function discoverBuilds(dir: string, opts: DiscoverOptions = {}): Discovery {
   const workspace = resolve(dir);
   const enclosing = enclosingBuild(workspace);
   if (enclosing !== null) {
@@ -225,7 +231,7 @@ export function discoverBuilds(dir: string): Discovery {
     const build = { ...describe(workspace, enclosing), rel: "." };
     return { builds: [build], via: "enclosing", truncated: false };
   }
-  const below = buildsBelow(workspace);
+  const below = buildsBelow(workspace, opts);
   if (below.length === 0) return { builds: [], via: "none", truncated: false };
   return {
     builds: below.slice(0, MAX_BUILDS).map((root) => describe(workspace, root)),
