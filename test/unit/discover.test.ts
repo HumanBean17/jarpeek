@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { buildsBelow, discoverBuilds, enclosingBuild } from "../../src/workspace/discover.js";
 
 const roots: string[] = [];
@@ -34,7 +34,7 @@ function commitAll(root: string): void {
 }
 
 const rels = (root: string): string[] =>
-  buildsBelow(root).map((b) => (b === root ? "." : b.slice(root.length + 1)));
+  buildsBelow(root).map((b) => (b === root ? "." : relative(root, b).split(sep).join("/")));
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
