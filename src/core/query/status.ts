@@ -7,7 +7,7 @@
  * inject their own through the `opts.jvm` seam so they do not depend on the
  * host machine.
  */
-import { isStale } from "../../index/manifest.js";
+import { isStale, manifestPath } from "../../index/manifest.js";
 import { probeJvmOnce, type JvmProbe } from "../../util/jvm.js";
 import type { RootCandidate } from "../../resolver/roots.js";
 import type { QueryContext } from "./context.js";
@@ -17,6 +17,8 @@ export interface StatusResult {
   projectRoot: string;
   manifest: {
     present: boolean;
+    /** The shared cache file serving this project (absent when no manifest exists yet). */
+    path?: string;
     resolvedAt?: string;
     stale: boolean;
     /** True when the manifest records a partial resolution — a negative over it is not definitive (GH#18). */
@@ -50,7 +52,13 @@ export async function status(ctx: QueryContext, opts: StatusOptions = {}): Promi
     projectRoot: ctx.projectRoot,
     manifest: {
       present: manifest !== null,
-      ...(manifest !== null ? { resolvedAt: manifest.resolvedAt, dependencySetHash: manifest.dependencySetHash } : {}),
+      ...(manifest !== null
+        ? {
+            path: manifestPath(manifest.dependencySetHash),
+            resolvedAt: manifest.resolvedAt,
+            dependencySetHash: manifest.dependencySetHash,
+          }
+        : {}),
       stale,
       incomplete: (manifest?.incomplete?.length ?? 0) > 0,
       artifactCount: manifest?.artifacts.length ?? 0,

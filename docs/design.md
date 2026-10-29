@@ -23,6 +23,21 @@ failure.
 - **Listings in memory.** Every query reads the manifest and opens jars
   through in-memory zip listings. The manifest is the only derived state
   on disk.
+- **One manifest per build, not per checkout.** Agents work in git
+  worktrees: per-checkout state meant a full resolve and an untracked
+  `.jarpeek/` in every one. The manifest lives in the machine-wide cache
+  (`JARPEEK_CACHE_DIR`), content-addressed: the key hashes the build
+  files' contents — never mtimes, which every fresh checkout resets —
+  plus the strategy and m2 root. Checkout-specific data (module dirs
+  under the build root, module-coordinate namespaces) is stored as
+  tokens and rebased on read, so one entry serves every checkout with the
+  same build files. A build with no build files keys on its own root:
+  there is nothing to share by. Each root keeps a pointer to the entry it
+  last wrote, so a failing re-resolve after an edit still serves the
+  previous manifest flagged stale. A per-key lock file makes parallel
+  bootstraps of the same build run it once; the waiters re-read and
+  serve the result. The Gradle init script lives in the cache too —
+  resolves write nothing into a checkout.
 - **One-file parses.** A class lookup parses just the winning artifact's
   entry for that class — one source entry or class file (outline adds
   its directly nested classes) — never the jar around it.
@@ -175,10 +190,15 @@ contract, not a hope:
   both ends of the range on every push. The pins are kept in sync with
   the manifest floors by hand.
 
-## Migrating from 0.1.x
+## Migrating
 
-0.2.0 was breaking: the eager index and its cache are gone. A v1
-`.jarpeek` manifest is not read — the first query re-resolves and
-rewrites it automatically. Old caches are unused and safe to delete:
+From 0.4.x: manifests moved from `<project>/.jarpeek/manifest.json` into
+the machine-wide cache, so each project resolves once more on its first
+query. The in-project `.jarpeek/manifest.json` and
+`.jarpeek/gradle-init.gradle` are unused and safe to delete.
 
-    rm -rf ~/Library/Caches/jarpeek   # macOS; %LOCALAPPDATA%/jarpeek on Windows, ~/.cache/jarpeek elsewhere
+From 0.1.x: 0.2.0 was breaking — the eager index and its cache are gone.
+The index lived in the cache directory's `v1/` subdirectory, which is
+never read and safe to delete:
+
+    rm -rf ~/Library/Caches/jarpeek/v1   # macOS; %LOCALAPPDATA%/jarpeek/v1 on Windows, ~/.cache/jarpeek/v1 elsewhere

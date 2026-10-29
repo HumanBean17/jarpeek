@@ -124,7 +124,7 @@ afterAll(() => {
 /** Open a context over a manifest hashing under the context's own primary root (fresh, non-stale). */
 async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContext> {
   const projectRoot = freshRoot();
-  writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+  writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
   const ctx = openContext(projectRoot, {
     onNotice: () => {},
     resolvers: {

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,7 +56,7 @@ function demoArtifacts(): DependencyArtifact[] {
 
 function openSuite(artifacts: () => DependencyArtifact[]): Suite {
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-tools-project-"));
-  writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+  writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
   const ctx = openContext(projectRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts: artifacts() }), includeJdk: false },
     onNotice: () => {},
@@ -398,8 +398,9 @@ describe("where", () => {
     expect(result.paths).toEqual([
       { role: "sourcesJar", path: DEMO_SOURCES_JAR, exists: true },
     ]);
-    // the eager unpack died with the index: .jarpeek holds only the manifest
-    expect(readdirSync(join(c.projectRoot, ".jarpeek"))).toEqual(["manifest.json"]);
+    // the eager unpack died with the index, and the manifest lives in the
+    // machine-wide cache: the project holds no jarpeek state at all
+    expect(existsSync(join(c.projectRoot, ".jarpeek"))).toBe(false);
   });
 
   it("binary-only artifact lists its single jar path", async () => {
@@ -418,7 +419,7 @@ describe("read_resource / where honesty parity", () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-parity-project-"));
     suites.push({ projectRoot, ctx: undefined as unknown as QueryContext });
     try {
-      writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+      writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
       // the resource-half shape: demo-lib with its binary jar carries the
       // config entry this test reads
       let impl: () => Promise<{ ok: boolean; artifacts: DependencyArtifact[] }> = async () => ({

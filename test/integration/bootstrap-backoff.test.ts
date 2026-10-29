@@ -12,11 +12,11 @@
  * and the store never hears about it.
  */
 import { afterAll, describe, expect, it } from "vitest";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openContext, type OpenContextOptions, type QueryContext } from "../../src/core/query/context.js";
-import { writeManifest } from "../../src/index/manifest.js";
+import { lastManifestPath, writeManifest } from "../../src/index/manifest.js";
 import { findClass } from "../../src/core/query/find-class.js";
 import type { DependencyArtifact } from "../../src/core/types.js";
 
@@ -28,7 +28,7 @@ const roots: string[] = [];
 /** A tmp project with a gradle marker (so detection routes to the injected gradle resolver). */
 function freshProject(): { projectRoot: string } {
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-backoff-project-"));
-  writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+  writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
   roots.push(projectRoot);
   return { projectRoot };
 }
@@ -183,8 +183,9 @@ describe("successful resolve-only bootstrap", () => {
     expect(result).toEqual({ bootstrapped: true, stale: false });
     expect(notices).toEqual(["resolving dependencies (first run — may download dependencies and sources)"]);
 
-    // the resolve-only bootstrap's whole footprint: manifest.json, nothing else
-    expect(readdirSync(join(projectRoot, ".jarpeek"))).toEqual(["manifest.json"]);
+    // the resolve-only bootstrap's whole footprint: one cache entry, nothing in the project
+    expect(existsSync(join(projectRoot, ".jarpeek"))).toBe(false);
+    expect(lastManifestPath(projectRoot)).not.toBeNull();
     const manifest = await ctx.manifest();
     expect(manifest?.version).toBe(2);
     expect(manifest?.artifacts.map((a) => a.coordinates)).toEqual(["com.example:demo-lib:1.0.0"]);

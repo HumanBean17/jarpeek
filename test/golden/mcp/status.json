@@ -2,6 +2,7 @@
   "projectRoot": "<projectRoot>",
   "manifest": {
     "present": true,
+    "path": "<path>",
     "resolvedAt": "<resolvedAt>",
     "dependencySetHash": "<hash>",
     "stale": false,

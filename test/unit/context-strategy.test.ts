@@ -17,7 +17,7 @@ let root: string | undefined;
 /** Fresh scratch maven project (cleaned in afterEach). */
 function scratch(): string {
   root = mkdtempSync(join(tmpdir(), "jarpeek-ctx-strategy-"));
-  writeFileSync(join(root, "pom.xml"), "<project/>");
+  writeFileSync(join(root, "pom.xml"), `<project/><!-- ${root} -->`);
   return root;
 }
 

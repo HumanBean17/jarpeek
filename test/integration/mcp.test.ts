@@ -15,6 +15,7 @@
  * same ctx, not a spawned peer.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { lastManifestPath } from "../../src/index/manifest.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -39,7 +40,6 @@ const DEMO_SOURCES_JAR = join(JARS, "demo-lib-1.0.0-sources.jar");
 const NOSOURCES_JAR = join(JARS, "nosources-lib-1.0.0.jar");
 
 const SERVER_NAME = "jarpeek";
-const MANIFEST_REL = join(".jarpeek", "manifest.json");
 
 /** The 9 tools, exactly — order-independent set equality below. */
 const EXPECTED_TOOLS = [
@@ -109,7 +109,7 @@ const teardown: Array<() => Promise<unknown>> = [];
 
 beforeAll(async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-mcp-project-"));
-  writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+  writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
   const ctx = openContext(projectRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts: demoArtifacts() }), includeJdk: false },
     onNotice: () => {},
@@ -119,7 +119,7 @@ beforeAll(async () => {
 
   // lazy suite: manifest deliberately absent until the first tool call
   const lazyRoot = mkdtempSync(join(tmpdir(), "jarpeek-mcp-lazy-"));
-  writeFileSync(join(lazyRoot, "build.gradle"), "plugins { id 'java' }\n");
+  writeFileSync(join(lazyRoot, "build.gradle"), `plugins { id 'java' } // ${lazyRoot}\n`);
   const lazyCtx = openContext(lazyRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts: demoArtifacts() }), includeJdk: false },
     onNotice: () => {},
@@ -197,6 +197,7 @@ function normalizeStatus(result: any): any {
             ...result.manifest,
             resolvedAt: optional(result.manifest.resolvedAt, "<resolvedAt>"),
             dependencySetHash: optional(result.manifest.dependencySetHash, "<hash>"),
+            path: optional(result.manifest.path, "<path>"),
           },
         }
       : {}),
@@ -461,7 +462,7 @@ describe("context-cost budget (the product's core promise)", () => {
 
 describe("lazy bootstrap", () => {
   it("first find_class on a manifest-less project bootstraps and answers", async () => {
-    expect(existsSync(join(lazy.projectRoot, MANIFEST_REL))).toBe(false);
+    expect(lastManifestPath(lazy.projectRoot)).toBeNull();
     const result = await lazy.client.callTool({
       name: "find_class",
       arguments: { query: "com.example.Demo" },
@@ -469,7 +470,7 @@ describe("lazy bootstrap", () => {
     expect(result.isError).toBeFalsy();
     const parsed = JSON.parse((result.content![0] as { text: string }).text);
     expect(parsed.hits.map((h: any) => h.fqn)).toContain("com.example.Demo");
-    expect(existsSync(join(lazy.projectRoot, MANIFEST_REL))).toBe(true);
+    expect(lastManifestPath(lazy.projectRoot)).not.toBeNull();
   });
 });
 
@@ -483,7 +484,7 @@ describe("resolve forceUpdate input (GH#21)", () => {
   it("threads forceUpdate into the resolver, undefined when omitted", async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-mcp-forceupdate-"));
     extraRoots.push(projectRoot);
-    writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+    writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
     const seenForceUpdate: Array<boolean | undefined> = [];
     const ctx = openContext(projectRoot, {
       resolvers: {

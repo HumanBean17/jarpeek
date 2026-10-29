@@ -47,7 +47,7 @@ afterAll(() => {
  */
 async function contextWith(artifacts: DependencyArtifact[]): Promise<QueryContext> {
   const root = freshRoot();
-  writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
+  writeFileSync(join(root, "build.gradle"), `plugins { id 'java' } // ${root}\n`);
   // context first: the manifest must hash under the same primary m2 root
   // the context's convergence will check staleness with
   const ctx = openContext(root, {
@@ -99,9 +99,9 @@ describe("where lists recorded paths", () => {
     expect(result.paths).toEqual([{ role: "binaryJar", path: NOSOURCES_JAR, exists: true }]);
   });
 
-  it("writes nothing — .jarpeek still holds only the manifest", async () => {
+  it("writes nothing into the project", async () => {
     await where(ctx, "demo-lib");
-    expect(readdirSync(join(ctx.projectRoot, ".jarpeek"))).toEqual(["manifest.json"]);
+    expect(existsSync(join(ctx.projectRoot, ".jarpeek"))).toBe(false);
   });
 
   it("unknown artifact query throws (fatal, as today)", async () => {

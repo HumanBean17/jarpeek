@@ -41,7 +41,7 @@ const roots: string[] = [];
 /** A project whose gradle resolver always answers the given artifact set. */
 function openSuite(artifacts: DependencyArtifact[]): Suite {
   const projectRoot = mkdtempSync(join(tmpdir(), "jarpeek-lang-project-"));
-  writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+  writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
   roots.push(projectRoot);
   const ctx = openContext(projectRoot, {
     resolvers: { gradle: async () => ({ ok: true, artifacts }), includeJdk: false },
@@ -278,7 +278,7 @@ describe("the warning channel", () => {
   const pin = { JAVA_HOME: "", JARPEEK_M2_DIR: m2, JARPEEK_GRADLE_CACHE_DIR: m2 };
 
   beforeAll(() => {
-    writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+    writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
     for (let g = 1; g <= 4; g++) {
       for (const v of ["1.0.0", "2.0.0"]) {
         const dir = join(m2, "com", `g${g}`, "lib", v);
@@ -315,7 +315,7 @@ describe("resolve line plural (one)", () => {
   roots.push(projectRoot);
 
   beforeAll(() => {
-    writeFileSync(join(projectRoot, "build.gradle"), "plugins { id 'java' }\n");
+    writeFileSync(join(projectRoot, "build.gradle"), `plugins { id 'java' } // ${projectRoot}\n`);
     writeFakeGradlew(projectRoot, DEMO_JAR, DEMO_SOURCES_JAR);
   });
 

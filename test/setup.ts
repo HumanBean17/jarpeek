@@ -5,3 +5,14 @@
  * stub it explicitly with vi.stubEnv.
  */
 delete process.env.JARPEEK_BUILD_TOOL;
+
+/**
+ * Suite-wide cache isolation: manifests, locks and the Gradle init script
+ * live in the machine-wide cache, so every test file gets its own empty one
+ * — no test reads a developer's real cache or another file's entries.
+ * Spawned CLI children inherit it through process.env.
+ */
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+process.env.JARPEEK_CACHE_DIR = mkdtempSync(join(tmpdir(), "jarpeek-cache-"));

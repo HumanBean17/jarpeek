@@ -27,7 +27,7 @@ function fakeTimers(): void {
 /** Scratch maven project dir with no manifest (forces the bootstrap path). */
 function scratch(): string {
   root = mkdtempSync(join(tmpdir(), "jarpeek-heartbeat-"));
-  writeFileSync(join(root, "pom.xml"), "<project/>");
+  writeFileSync(join(root, "pom.xml"), `<project/><!-- ${root} -->`);
   return root;
 }
 

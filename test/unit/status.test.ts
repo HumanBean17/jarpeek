@@ -12,7 +12,7 @@
  * per-process probe.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,7 +45,7 @@ afterEach(() => {
 /** A context over a manifest hashing under the context's own primary root (fresh, non-stale). */
 async function contextWith(artifacts: DependencyArtifact[]): Promise<{ ctx: QueryContext; root: string }> {
   const root = freshRoot();
-  writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
+  writeFileSync(join(root, "build.gradle"), `plugins { id 'java' } // ${root}\n`);
   const ctx = openContext(root, { onNotice: () => {} });
   await writeManifest(root, {
     version: 2,
@@ -90,8 +90,9 @@ describe("status without the index", () => {
 
   it("stale flips true after a build file moves", async () => {
     const gradle = join(root, "build.gradle");
-    const future = new Date(Date.now() + 60_000);
-    utimesSync(gradle, future, future);
+    const original = readFileSync(gradle, "utf8");
+    // the key is content-addressed: an edit moves it, an mtime touch alone does not
+    writeFileSync(gradle, `${original}// moved\n`);
     try {
       const result = await status(ctx, { jvm: () => Promise.resolve(JVM) });
       expect(result.manifest.stale).toBe(true);
@@ -99,7 +100,7 @@ describe("status without the index", () => {
       expect(result.degraded.some((d) => d.includes("stale"))).toBe(true);
     } finally {
       // restore a fresh fingerprint so the shared suite's other cases stay honest
-      writeFileSync(gradle, "plugins { id 'java' }\n");
+      writeFileSync(gradle, original);
     }
   });
 
@@ -112,7 +113,7 @@ describe("status without the index", () => {
 describe("status on a manifest-less project", () => {
   it("reports present false, artifactCount 0, and never throws", async () => {
     const root = freshRoot();
-    writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
+    writeFileSync(join(root, "build.gradle"), `plugins { id 'java' } // ${root}\n`);
     const ctx = openContext(root, { onNotice: () => {} });
     const result = await status(ctx, { jvm: () => Promise.resolve({ available: false }) });
     expect(result.manifest.present).toBe(false);
@@ -128,7 +129,7 @@ describe("status on a manifest-less project", () => {
 describe("status on an incomplete manifest (GH#18)", () => {
   it("flags manifest.incomplete and surfaces the partial reason in degraded — fresh process, no bootstrap", async () => {
     const root = freshRoot();
-    writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
+    writeFileSync(join(root, "build.gradle"), `plugins { id 'java' } // ${root}\n`);
     const ctx = openContext(root, { onNotice: () => {} });
     const reason = "modules failed to resolve: mod ([ERROR] sibling was not found)";
     await writeManifest(root, {
@@ -185,7 +186,7 @@ describe("status resolver roots", () => {
     "reports the default roots when nothing is configured",
     async () => {
       const root = freshRoot();
-      writeFileSync(join(root, "build.gradle"), "plugins { id 'java' }\n");
+      writeFileSync(join(root, "build.gradle"), `plugins { id 'java' } // ${root}\n`);
       const home = mkdtempSync(join(tmpdir(), "jarpeek-status-home-"));
       vi.stubEnv("HOME", home);
       vi.stubEnv("JARPEEK_HOME", home);

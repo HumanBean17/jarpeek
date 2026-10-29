@@ -22,6 +22,10 @@ token cost.
   manifest of the on-disk jars. That is all the up-front work there is;
   every later query reads the manifest and opens only the jar entries it
   needs.
+- **Shared across checkouts.** The manifest lives in a machine-wide cache,
+  keyed by the build files' contents: a git worktree or clone with the
+  same build files answers its first query from the cache, with no
+  Gradle/Maven run, and nothing is ever written into a checkout.
 - **One-file parses.** A class lookup parses just the winning artifact's
   entry for that class — one source entry or class file, never the jar
   around it.
@@ -82,7 +86,7 @@ nine tools:
 | `read_resource` | `artifact`, `glob` | Non-class jar entries (config, services, manifests) |
 | `search_symbols` | `query`, `artifact` (required), `limit?`, `kind?` | Declarations by member name in one artifact |
 | `resolve` | `forceUpdate?` | Forced re-resolve; one summary line (count, duration, warnings), plus the warnings when any. `forceUpdate` (Maven `-U` / Gradle `--refresh-dependencies`) clears cached negative lookups |
-| `status` | — | Manifest freshness (present, resolvedAt, stale, incomplete, artifactCount) and JVM report |
+| `status` | — | Manifest freshness (present, path, resolvedAt, stale, incomplete, artifactCount) and JVM report |
 | `where` | `coordinates` | The artifact's recorded on-disk paths, each flagged exists or missing |
 
 Artifact arguments take full `g:a:v` coordinates or a unique artifact id
@@ -182,6 +186,7 @@ the one named artifact.
 | `--lang <en\|ru>` | CLI global flag: interface language for human-mode output (help, tables' framing, warnings, errors). Flag beats the `language` config field; default English. `--json`, the MCP server, and `prime` output stay English — they are agent/machine contract |
 | `JARPEEK_M2_DIR` / `M2_REPO` | Where the Maven local repository lives; steers both the Maven resolver's anchor and the cache scan |
 | `JARPEEK_GRADLE_CACHE_DIR` / `GRADLE_USER_HOME` | Where the Gradle modules-2 cache lives (`GRADLE_USER_HOME` is the cache's parent — the scan walks `<it>/caches/modules-2/files-2.1`) |
+| `JARPEEK_CACHE_DIR` | Where the shared manifest cache lives (default: `~/Library/Caches/jarpeek` on macOS, `%LOCALAPPDATA%\jarpeek` on Windows, `$XDG_CACHE_HOME/jarpeek` or `~/.cache/jarpeek` elsewhere) |
 | `JARPEEK_HOME` | Override the home directory used for user-scoped harness configs and the global config below |
 | `JARPEEK_PRIME_MODE` | Default `prime` mode (`cli` or `mcp`) when config is absent |
 | `.jarpeek/PRIME.md` | Replaces the agent cheatsheet verbatim, every mode |
@@ -203,10 +208,17 @@ Flipping the build-tool setting or the m2 root re-resolves: both are part
 of the manifest fingerprint, so a manifest produced by the other tool —
 or anchored at another repository — is never served as fresh.
 
-`.jarpeek/` is per-machine state (the manifest, prime config) — gitignore
-it (`init` adds it). The manifest is the only derived state jarpeek ever
-writes to disk; 0.1-era caches are unused and safe to delete (see the
-[design notes](docs/design.md#migrating-from-01x)).
+The manifest is the only derived state jarpeek writes to disk, and it
+lives in the cache directory above, never in the project: entries are
+keyed by a hash of the build files' contents (plus the build-tool
+strategy and m2 root), shared by every checkout with the same build
+files, rebased onto each checkout's own module paths, and pruned after
+30 days unused. Concurrent resolves of the same build files — parallel
+agents in sibling worktrees — run the build once; the others wait for
+its manifest. A project's `.jarpeek/` holds only hand-authored
+configuration (`config.json`, `PRIME.md`); earlier versions'
+`.jarpeek/manifest.json` and `.jarpeek/gradle-init.gradle` are unused and
+safe to delete (see the [design notes](docs/design.md#migrating)).
 
 ## Limitations
 
