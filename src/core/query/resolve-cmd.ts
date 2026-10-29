@@ -25,6 +25,8 @@ export interface ResolveNowResult {
   degraded: Array<{ from: "gradle" | "maven"; reason: string }>;
   /** True when no build system answered and the manifest holds the cache scan's heuristic set. */
   viaCacheScan: boolean;
+  /** Multi-build workspaces only: one entry per build, in resolve order. */
+  projects?: Array<{ project: string; artifactCount: number; durationMs: number; viaCacheScan: boolean }>;
 }
 
 export interface ResolveNowOptions {
@@ -42,6 +44,7 @@ export async function resolveNow(
   ctx: QueryContext,
   opts: ResolveNowOptions = {},
 ): Promise<ResolveNowResult> {
+  if (ctx.members !== undefined) return resolveEach(ctx, ctx.members, opts);
   const startedAt = Date.now();
   const m2Root = ctx.roots.m2[0].path;
   // serialized with any concurrent resolve of the same build files (another
@@ -70,5 +73,35 @@ export async function resolveNow(
     warnings: [...new Set(resolution.warnings)],
     degraded: resolution.degraded,
     viaCacheScan: resolution.viaCacheScan,
+  };
+}
+
+/**
+ * A multi-build workspace resolves every build in turn (one build tool run
+ * at a time — they share the local repository). Warnings and degraded
+ * reasons are labeled with their build; the count is the union's.
+ */
+async function resolveEach(
+  ctx: QueryContext,
+  members: NonNullable<QueryContext["members"]>,
+  opts: ResolveNowOptions,
+): Promise<ResolveNowResult> {
+  const startedAt = Date.now();
+  const warnings: string[] = [];
+  const degraded: ResolveNowResult["degraded"] = [];
+  const projects: NonNullable<ResolveNowResult["projects"]> = [];
+  for (const { project, ctx: member } of members) {
+    const one = await resolveNow(member, opts);
+    warnings.push(...one.warnings.map((w) => `${project}: ${w}`));
+    degraded.push(...one.degraded.map((d) => ({ ...d, reason: `${project}: ${d.reason}` })));
+    projects.push({ project, artifactCount: one.artifactCount, durationMs: one.durationMs, viaCacheScan: one.viaCacheScan });
+  }
+  return {
+    artifactCount: (await ctx.artifacts()).length,
+    durationMs: Date.now() - startedAt,
+    warnings: [...new Set(warnings)],
+    degraded,
+    viaCacheScan: projects.some((p) => p.viaCacheScan),
+    projects,
   };
 }

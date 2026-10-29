@@ -90,7 +90,32 @@ nine tools:
 | `where` | `coordinates` | The artifact's recorded on-disk paths, each flagged exists or missing |
 
 Artifact arguments take full `g:a:v` coordinates or a unique artifact id
-(the `a` segment).
+(the `a` segment). Every tool also takes an optional `project` — see
+[Workspaces](#workspaces).
+
+### Workspaces
+
+There is no per-project setup. jarpeek works out which Gradle/Maven builds
+the session means from its working directory (for MCP: the client's
+roots, i.e. the session folder):
+
+- **Inside a build** — a service folder, a source dir, a worktree of a
+  single-build repo — it uses the enclosing build root (Gradle: nearest
+  `settings.gradle[.kts]`; Maven: nearest `.mvn/`, else the outermost
+  parent pom), never climbing past the repository root.
+- **Above builds** — a monorepo root, a folder of repos — it uses every
+  build below (`git ls-files` inside a repository, so ignored and
+  fixture projects are skipped; nested repositories included).
+
+With several builds, queries span all of them: each build resolves
+lazily (two at a time, one stderr line for the batch) and is cached like
+any other manifest; `find_class` hits, and the served class and
+`alternatives` of `outline`/`read_member`/`read_source`, carry `projects`
+— the builds whose dependency set holds that artifact. When two builds
+pin different versions, pass `project` (a path inside the build, or its
+workspace-relative path as `status` lists it) to read the one you mean.
+`status` and `resolve` report per build. A directory with no build at all
+behaves as before: it is the project root.
 
 ### Resolution is lazy
 
@@ -122,7 +147,8 @@ input. The full cascade and degradation rules are in the
 ### CLI
 
 Every tool is also a dash-named subcommand; `--json` prints the exact MCP
-result object, `--project <dir>` picks the project root (default: cwd).
+result object, `--project <dir>` picks the workspace directory (default:
+cwd) — the build enclosing it, or every build below it.
 Member selectors are `#name` or `#name(Type,...)` for overloads.
 
 ```
@@ -239,6 +265,9 @@ safe to delete (see the [design notes](docs/design.md#migrating)).
   resolver's m2-layout matching and are skipped.
 - Decompilation quality is CFR's; `signature` is the floor when no JVM is
   available.
+- Gradle composite builds (`includeBuild`) and nested independent builds
+  inside a build count as part of the enclosing build: only its own
+  projects' dependencies are resolved.
 
 ## Development
 

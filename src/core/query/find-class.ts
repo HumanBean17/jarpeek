@@ -299,6 +299,7 @@ export async function findClass(
         version: versionOf(coordinates),
         kind: kinds.get(keyOf(candidate)) ?? "class",
         provenance: await provenances.get(keyOf(candidate))!,
+        ...(ctx.projectsOf !== undefined ? { projects: await ctx.projectsOf(coordinates) } : {}),
       };
     }),
   );

@@ -21,6 +21,7 @@ import type { Declaration, DependencyArtifact, Provenance } from "../types.js";
 import { matchDeclarations, parseSelector, splitSelectorList } from "../selector.js";
 import type { QueryContext } from "./context.js";
 import { resolveContent, type ResolvedContent } from "./read-source.js";
+import type { Alternative } from "./locate.js";
 
 export interface MemberSlice {
   /** Disambiguated: `run(String,int)` for methods, the plain name for fields. */
@@ -43,7 +44,9 @@ export interface ReadMemberResult {
   members: MemberSlice[];
   misses: Array<{ selector: string; reason: string }>;
   /** Other artifacts declaring the same fqn, when the winner had collisions. */
-  alternatives?: Array<{ coordinates: string }>;
+  alternatives?: Alternative[];
+  /** Multi-build workspaces: the builds whose dependency set holds the served artifact. */
+  projects?: string[];
   /** Bootstrap + resolution degradations (misaligned module source, ...). */
   degraded: string[];
 }
@@ -207,6 +210,7 @@ export async function readMember(
     ...(source.stale ? { stale: true } : {}),
     members,
     misses,
+    ...(source.projects !== undefined ? { projects: source.projects } : {}),
     ...(source.alternatives.length > 0 ? { alternatives: source.alternatives } : {}),
     degraded: source.degraded,
   };

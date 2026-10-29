@@ -7,7 +7,7 @@
  * inject their own through the `opts.jvm` seam so they do not depend on the
  * host machine.
  */
-import { isStale, manifestPath } from "../../index/manifest.js";
+import { manifestPath } from "../../index/manifest.js";
 import { probeJvmOnce, type JvmProbe } from "../../util/jvm.js";
 import type { RootCandidate } from "../../resolver/roots.js";
 import type { QueryContext } from "./context.js";
@@ -36,6 +36,17 @@ export interface StatusResult {
     version?: string;
   };
   degraded: string[];
+  /**
+   * Multi-build workspaces only: each build's own manifest report, labeled
+   * by its workspace-relative path. The top-level `manifest` summarizes the
+   * union (stale/incomplete when any build is).
+   */
+  projects?: Array<{
+    project: string;
+    projectRoot: string;
+    manifest: StatusResult["manifest"];
+    degraded: string[];
+  }>;
 }
 
 /** Test injection point for the JVM probe; defaults to the shared memoized one. */
@@ -46,19 +57,22 @@ export interface StatusOptions {
 /** Report manifest and JVM state. Never throws on a missing manifest. */
 export async function status(ctx: QueryContext, opts: StatusOptions = {}): Promise<StatusResult> {
   const manifest = await ctx.manifest();
-  const stale = manifest !== null && (await isStale(ctx.projectRoot, manifest, ctx.buildTool, ctx.roots.m2[0].path));
+  const stale = await ctx.stale();
 
   return {
     projectRoot: ctx.projectRoot,
     manifest: {
       present: manifest !== null,
-      ...(manifest !== null
+      // a merged (multi-build) manifest is a union, not a cache file: no path
+      ...(manifest !== null && ctx.members === undefined
         ? {
             path: manifestPath(manifest.dependencySetHash),
             resolvedAt: manifest.resolvedAt,
             dependencySetHash: manifest.dependencySetHash,
           }
-        : {}),
+        : manifest !== null
+          ? { resolvedAt: manifest.resolvedAt, dependencySetHash: manifest.dependencySetHash }
+          : {}),
       stale,
       incomplete: (manifest?.incomplete?.length ?? 0) > 0,
       artifactCount: manifest?.artifacts.length ?? 0,
@@ -66,5 +80,15 @@ export async function status(ctx: QueryContext, opts: StatusOptions = {}): Promi
     jvm: await (opts.jvm ?? probeJvmOnce)(),
     resolver: { m2Root: ctx.roots.m2[0], gradleCacheRoot: ctx.roots.gradle },
     degraded: await mergedDegraded(ctx, stale ? ["stale index served"] : []),
+    ...(ctx.members !== undefined
+      ? {
+          projects: await Promise.all(
+            ctx.members.map(async ({ project, ctx: member }) => {
+              const own = await status(member, opts);
+              return { project, projectRoot: member.projectRoot, manifest: own.manifest, degraded: own.degraded };
+            }),
+          ),
+        }
+      : {}),
   };
 }

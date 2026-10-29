@@ -10,9 +10,9 @@
  * fqn so the miss layer can suggest alternatives.
  */
 import type { Declaration, DeclKind, Provenance, Visibility } from "../types.js";
-import { isStale } from "../../index/manifest.js";
 import type { QueryContext } from "./context.js";
 import { classFamily, locateClass } from "./locate.js";
+import type { Alternative } from "./locate.js";
 
 /** Declaration kinds that name a type (vs members of one). */
 export const CLASS_KINDS: readonly DeclKind[] = [
@@ -53,7 +53,9 @@ export interface OutlineResult {
   /** The winner file's imports — present iff the imports section is on AND the winner carried them. */
   imports?: string[];
   rows: Declaration[];
-  alternatives?: Array<{ coordinates: string }>;
+  alternatives?: Alternative[];
+  /** Multi-build workspaces: the builds whose dependency set holds the served artifact. */
+  projects?: string[];
   degraded: string[];
 }
 
@@ -128,8 +130,7 @@ function omitJavadoc(row: Declaration): Declaration {
 
 /** True when the served manifest no longer matches the build files / artifact paths. */
 export async function servedStale(ctx: QueryContext): Promise<boolean> {
-  const manifest = await ctx.manifest();
-  return manifest !== null && isStale(ctx.projectRoot, manifest, ctx.buildTool, ctx.roots.m2[0].path);
+  return ctx.stale();
 }
 
 /** Merge bootstrap warnings with per-call degradation, without duplicates. */
@@ -147,7 +148,7 @@ export async function outline(
   opts: OutlineOptions = {},
 ): Promise<OutlineResult> {
   await ctx.ensureReady();
-  const { winner, alternatives, degraded: locateDegraded } = await locateClass(ctx, fqn);
+  const { winner, alternatives, projects, degraded: locateDegraded } = await locateClass(ctx, fqn);
   const sections = resolveSections(opts.preset, opts.sections);
   const rows = applySections(
     winner.records.filter(
@@ -166,6 +167,7 @@ export async function outline(
     ...(stale ? { stale: true } : {}),
     ...(sections.imports && winner.imports !== undefined ? { imports: winner.imports } : {}),
     rows,
+    ...(projects !== undefined ? { projects } : {}),
     ...(alternatives.length > 0 ? { alternatives } : {}),
     degraded: await mergedDegraded(ctx, [
       ...(stale ? ["stale index served"] : []),

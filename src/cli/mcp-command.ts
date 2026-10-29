@@ -3,8 +3,8 @@
  *
  * Stdio is the whole point — the host client owns this process's stdin and
  * stdout, so the server must never write a banner there. `--project` from the
- * CLI's global flags picks the project root; without it the server serves
- * the cwd.
+ * CLI's global flags pins the workspace; without it the server serves the
+ * client's MCP roots (else the cwd).
  */
 import type { Command } from "commander";
 import { startMcpServer } from "../mcp/server.js";
@@ -28,6 +28,6 @@ export function registerMcpCommand(program: Command, t: Catalog): void {
     .addHelpText("after", () => mcpHelp(t))
     .action(async () => {
       const opts = program.opts<McpOptions>();
-      await startMcpServer(opts.project ?? process.cwd(), opts.buildTool);
+      await startMcpServer(opts.project, opts.buildTool);
     });
 }

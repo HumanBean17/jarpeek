@@ -67,7 +67,8 @@ export async function handleMiss(
   const manifest = await ctx.manifest();
   const searchedArtifacts = (manifest?.artifacts ?? []).map((artifact) => artifact.coordinates);
   const degraded = [...new Set(await ctx.bootstrapWarnings())];
-  if (degraded.includes("degraded-to-cache-scan")) {
+  // a multi-build workspace labels each warning with its build ("svc: ...")
+  if (degraded.some((d) => d === "degraded-to-cache-scan" || d.endsWith(": degraded-to-cache-scan"))) {
     searchedArtifacts.push(CACHE_SCAN_NOTE);
   }
   return {

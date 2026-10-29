@@ -242,15 +242,21 @@ describe("tool listing", () => {
     const list: ListToolsResult = await c.client.listTools();
     const props = (name: string): string[] =>
       Object.keys((list.tools.find((t) => t.name === name)!.inputSchema as any).properties ?? {}).sort();
-    expect(props("find_class")).toEqual(["limit", "query"]);
-    expect(props("outline")).toEqual(["fqn", "kind", "preset", "sections", "visibility"]);
-    expect(props("read_member")).toEqual(["fqn", "selectors"]);
-    expect(props("read_source")).toEqual(["fqn", "from", "mode", "to"]);
-    expect(props("read_resource")).toEqual(["artifact", "glob"]);
-    expect(props("search_symbols")).toEqual(["artifact", "kind", "limit", "query"]);
-    expect(props("resolve")).toEqual(["forceUpdate"]);
-    expect(props("status")).toEqual([]);
-    expect(props("where")).toEqual(["coordinates"]);
+    // every tool takes the optional multi-build `project` scope
+    expect(props("find_class")).toEqual(["limit", "project", "query"]);
+    expect(props("outline")).toEqual(["fqn", "kind", "preset", "project", "sections", "visibility"]);
+    expect(props("read_member")).toEqual(["fqn", "project", "selectors"]);
+    expect(props("read_source")).toEqual(["fqn", "from", "mode", "project", "to"]);
+    expect(props("read_resource")).toEqual(["artifact", "glob", "project"]);
+    expect(props("search_symbols")).toEqual(["artifact", "kind", "limit", "project", "query"]);
+    expect(props("resolve")).toEqual(["forceUpdate", "project"]);
+    expect(props("status")).toEqual(["project"]);
+    expect(props("where")).toEqual(["coordinates", "project"]);
+    for (const tool of list.tools) {
+      const schema = tool.inputSchema as any;
+      expect(schema.properties.project.type, tool.name).toBe("string");
+      expect(schema.required ?? [], tool.name).not.toContain("project");
+    }
     const readSource = list.tools.find((t) => t.name === "read_source")!.inputSchema as any;
     expect(readSource.properties.mode.enum).toEqual(["outline", "full", "lines"]);
     // the name AND the shape: a boolean drifting to string would silently

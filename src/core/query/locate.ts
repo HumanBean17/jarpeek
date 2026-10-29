@@ -94,6 +94,14 @@ export async function mapWithPool<T, R>(
 export interface LocateDeps {
   listings: ListingService;
   manifest(): Promise<Manifest | null>;
+  /** Multi-build workspaces: the builds (workspace-relative) holding an artifact. */
+  projectsOf?(coordinates: string): Promise<string[]>;
+}
+
+/** Another artifact declaring the located fqn; `projects` in multi-build workspaces. */
+export interface Alternative {
+  coordinates: string;
+  projects?: string[];
 }
 
 export interface LocateOptions {
@@ -115,7 +123,9 @@ export interface LocatedClass {
 
 export interface LocateResult {
   winner: LocatedClass;
-  alternatives: Array<{ coordinates: string }>;
+  alternatives: Alternative[];
+  /** Multi-build workspaces: the builds whose dependency set holds the winner. */
+  projects?: string[];
   degraded: string[];
 }
 
@@ -420,7 +430,7 @@ export async function locateClass(
   const unreadable: string[] = [];
   const scan: Scan = { failed: 0 };
   let winner: LocatedClass | null = null;
-  const alternatives: Array<{ coordinates: string }> = [];
+  const alternatives: Alternative[] = [];
   for (const artifact of artifacts) {
     const listing = await deps.listings.listing(artifact);
     if (listing.unreadable !== undefined) {
@@ -439,6 +449,11 @@ export async function locateClass(
     degraded.push(`${unreadable.length} artifacts unreadable (${unreadable.slice(0, 3).join(", ")})`);
   }
   if (scan.failed > 0) degraded.push(`${scan.failed} entries failed to parse`);
+  if (deps.projectsOf !== undefined) {
+    // which build serves which version: the agent's cue to pass `project`
+    for (const alternative of alternatives) alternative.projects = await deps.projectsOf(alternative.coordinates);
+    return { winner, alternatives, projects: await deps.projectsOf(winner.artifact.coordinates), degraded };
+  }
   return { winner, alternatives, degraded };
 }
 

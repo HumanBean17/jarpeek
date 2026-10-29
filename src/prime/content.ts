@@ -99,8 +99,17 @@ miss (step 2 below).
 Add \`--json\` to any of the nine commands above for the machine-readable
 result object — the exact payload the matching MCP tool returns (MCP names
 are the underscore forms: find_class, outline, read_member, read_source,
-read_resource, search_symbols, resolve, status, where). \`--project <dir>\`
-picks the project root; the default is the current directory.
+read_resource, search_symbols, resolve, status, where).
+
+## Workspaces: monorepos, multi-repo folders, worktrees
+
+No setup per project. jarpeek finds the builds itself: inside a Gradle or
+Maven build it uses that build; at a monorepo or multi-repo root it uses
+every build below. With several builds, queries span all of them and each
+hit lists its \`projects\` — when two builds pin different versions of a
+library, pass \`--project <path>\` (MCP: the \`project\` argument; a
+path inside the build, or its path as \`status\` lists it) to read the one
+your code uses. Worktrees with the same build files share one resolve.
 
 ## Provenance
 
